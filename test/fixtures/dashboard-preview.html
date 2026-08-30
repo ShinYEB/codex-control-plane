@@ -1,0 +1,62 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Codex Agent Dashboard Preview</title>
+</head>
+<body style="margin:0">
+  <iframe id="dashboard" src="../../ui/dashboard.html" style="width:100vw;height:100vh;border:0"></iframe>
+  <script>
+    const snapshot = {
+      generatedAt: new Date().toISOString(),
+      cwd: "/workspace/control-plane",
+      runId: "run_preview_01",
+      run: { id: "run_preview_01", name: "데몬 단독 실행·재사용 기반 Control Plane 재구축", status: "running", metadata: { dispatchPath: "orchestrated" }, createdAt: new Date(Date.now() - 600000).toISOString(), updatedAt: new Date().toISOString() },
+      runs: [{ id: "run_preview_01", name: "데몬 단독 실행·재사용 기반 Control Plane 재구축", status: "running", metadata: { dispatchPath: "orchestrated" }, createdAt: new Date(Date.now() - 600000).toISOString(), updatedAt: new Date().toISOString() }],
+      graph: {
+        run: { id: "run_preview_01", name: "데몬 단독 실행·재사용 기반 Control Plane 재구축", status: "running", dispatchPath: "orchestrated" },
+        orchestrator: { id: "orchestrator_preview", name: "실행 조정 및 결과 통합", status: "idle" },
+        summary: { active: 1, waiting: 4, completed: 0, failed: 0, total: 5 },
+        nodes: [
+          { id: "task_01", title: "단일 writer와 상태 모델 재구축", role: "architect", status: "running", agentId: "agent_primary_01", agent: { id: "agent_primary_01", name: "Architecture Agent" }, dependencies: [] },
+          { id: "task_02", title: "데몬 에이전트 풀·재사용·복구", role: "backend", status: "blocked", dependencies: ["task_01"] },
+          { id: "task_03", title: "실제 세션 중심 단일 대시보드", role: "frontend", status: "blocked", dependencies: ["task_01"] }
+        ],
+        edges: [{ from: "task_01", to: "task_02" }, { from: "task_01", to: "task_03" }]
+      },
+      agents: [
+        { id: "agent_primary_01", name: "Control Plane Planner", role: "orchestrator", capabilities: ["planning", "routing"], status: "running", cwd: "/workspace/control-plane", source: "appServer", updatedAt: Date.now() },
+        { id: "agent_review_02", name: "Security Reviewer", role: "reviewer", capabilities: ["security"], status: "idle", cwd: "/workspace/control-plane", source: "subAgent", updatedAt: Date.now() - 120000 },
+        { id: "agent_explore_03", name: "Repository Explorer", role: "explorer", capabilities: ["codebase"], status: "available", cwd: "/workspace/control-plane", source: "vscode", updatedAt: Date.now() - 900000 }
+      ],
+      tasks: [
+        { id: "task_01", prompt: "MCP UI 렌더링 검증", status: "running", agentId: "agent_primary_01", mode: "spawned", startedAt: new Date().toISOString() },
+        { id: "task_02", prompt: "권한 정책 검토", status: "completed", agentId: "agent_review_02", mode: "forked", completedAt: new Date(Date.now() - 300000).toISOString() }
+      ],
+      events: [
+        { id: 2, entityType: "task", entityId: "task_01", eventType: "task.running", payload: { agentId: "agent_primary_01" }, createdAt: new Date().toISOString() },
+        { id: 1, entityType: "agent", entityId: "agent_review_02", eventType: "agent.profile_updated", payload: { role: "reviewer" }, createdAt: new Date(Date.now() - 120000).toISOString() }
+      ]
+    };
+    const frame = document.getElementById("dashboard");
+    frame.addEventListener("load", () => frame.contentWindow.postMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/tool-result",
+      params: { structuredContent: snapshot }
+    }, "*"));
+    window.addEventListener("message", (event) => {
+      const message = event.data;
+      if (!message || message.jsonrpc !== "2.0" || message.method !== "tools/call") return;
+      const name = message.params?.name;
+      const result = name === "list_agents"
+        ? { agents: snapshot.agents }
+        : name === "list_tasks"
+          ? { tasks: snapshot.tasks }
+          : name === "list_events"
+            ? { events: snapshot.events }
+          : { thread: snapshot.agents.find((agent) => agent.id === message.params?.arguments?.threadId) };
+      frame.contentWindow.postMessage({ jsonrpc: "2.0", id: message.id, result: { structuredContent: result } }, "*");
+    });
+  </script>
+</body>
+</html>

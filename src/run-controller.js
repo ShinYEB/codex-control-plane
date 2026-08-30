@@ -1,0 +1,188 @@
+const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
+const TERMINAL_TASK_STATUSES = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "canceled", "interrupted"]);
+
+function dependencyId(entry) {
+  return typeof entry === "string" ? entry : entry?.taskId ?? entry?.dependsOnTaskId;
+}
+
+function nodeProgress(status) {
+  if (["completed", "completed_with_warnings"].includes(status)) return 100;
+  if (["rejected", "validation_failed", "failed", "canceled", "interrupted"].includes(status)) return 100;
+  if (["running", "approval_waiting", "agent_done", "validating"].includes(status)) return null;
+  return 0;
+}
+
+function compactFailure(failure) {
+  if (!failure) return null;
+  return {
+    type: failure.type ?? null, cause: failure.cause ?? failure.message ?? null,
+    retryable: Boolean(failure.retryable), nextAction: failure.nextAction ?? failure.requestedAction ?? null,
+    attemptBudget: failure.attemptBudget ?? null, exhausted: Boolean(failure.exhausted),
+  };
+}
+
+function compactRouting(routing) {
+  if (!routing) return null;
+  return {
+    decision: routing.decision ?? routing.mode ?? null, reasons: routing.reasons ?? [], blockers: routing.blockers ?? [],
+    requirementMatrix: routing.selectedRequirementMatrix ?? routing.assignmentRequirementMatrix ?? routing.requirementMatrix ?? null,
+    provenance: routing.provenance ?? null, schedulerIdentity: routing.schedulerIdentity ?? null,
+    orchestratorSessionIdentity: routing.orchestratorSessionIdentity ?? null,
+  };
+}
+
+export function buildRunGraph(registry, runId, options = {}) {
+  const run = registry.getRun(runId);
+  if (!run) throw new Error(`Run not found: ${runId}`);
+  const tasks = registry.listTasks({ runId, limit: 1000 });
+  const approvals = registry.listApprovals?.({ limit: 1000 }) ?? [];
+  const worktrees = registry.listManagedWorktrees?.({ limit: 1000 }) ?? [];
+  const plan = run.planId ? registry.getPlan?.(run.planId) : null;
+  const orchestratorSessionIdentity = run.metadata?.orchestratorSessionIdentity
+    ?? (run.metadata?.orchestratorAgentId ? { type: "codex_session", agentId: run.metadata.orchestratorAgentId } : null);
+  const orchestratorAgent = orchestratorSessionIdentity?.agentId ? registry.getAgent(orchestratorSessionIdentity.agentId) : null;
+  const nodes = tasks.map((task) => {
+    const execution = task.metadata?.execution ?? {};
+    const agent = task.agentId ? registry.getAgent(task.agentId) : null;
+    const approval = approvals.find((item) => item.taskId === task.id && item.status === "pending") ?? null;
+    const worktreeId = task.metadata?.managedWorktreeId;
+    const worktree = worktreeId ? worktrees.find((item) => item.id === worktreeId) : null;
+    const routing = execution.preparedRouting ?? task.routing ?? null;
+    return {
+      id: task.id,
+      key: task.metadata?.key ?? task.id,
+      title: task.metadata?.title ?? task.prompt.slice(0, 80),
+      ...(options.detail === false ? {} : { prompt: task.prompt }),
+      role: task.role ?? "agent",
+      status: task.status,
+      progress: nodeProgress(task.status),
+      attempt: task.attempt,
+      maxAttempts: task.maxAttempts,
+      dependsOn: (task.dependencies ?? []).map(dependencyId).filter(Boolean),
+      agent: agent ? { id: agent.id, name: agent.name, role: agent.role, status: agent.status } : null,
+      workspace: {
+        mode: execution.workspaceMode ?? "shared",
+        path: worktree?.path ?? task.metadata?.effectiveCwd ?? task.cwd,
+        branch: worktree?.branch ?? execution.branch ?? null,
+        status: worktree?.status ?? null,
+      },
+      approval: approval ? { id: approval.id, method: approval.method, status: approval.status, createdAt: approval.createdAt } : null,
+      failureSummary: compactFailure(task.metadata?.failure),
+      routingSummary: compactRouting(routing),
+      ...(options.detail === false ? {} : {
+        acceptanceCriteria: task.metadata?.acceptanceCriteria ?? [],
+        validation: task.metadata?.validation ?? null,
+        failure: task.metadata?.failure ?? null,
+        routing,
+        output: task.output,
+        error: task.error,
+      }),
+      startedAt: task.startedAt,
+      completedAt: task.completedAt,
+      updatedAt: task.updatedAt,
+    };
+  });
+  const edges = nodes.flatMap((node) => node.dependsOn.map((source) => ({ id: `${source}:${node.id}`, source, target: node.id, type: "dependency" })));
+  const counts = Object.fromEntries([...new Set(nodes.map((node) => node.status))].map((status) => [status, nodes.filter((node) => node.status === status).length]));
+  const finished = nodes.filter((node) => TERMINAL_TASK_STATUSES.has(node.status)).length;
+  const completed = nodes.filter((node) => ["completed", "completed_with_warnings"].includes(node.status)).length;
+  return {
+    run: {
+      id: run.id,
+      name: run.name,
+      status: run.status,
+      cwd: run.cwd,
+      planId: run.planId,
+      objective: plan?.objective ?? run.name,
+      planVersion: plan?.version ?? null,
+      dispatchPath: run.metadata?.dispatchPath ?? (tasks.length === 1 ? "direct" : "orchestrated"),
+      complexity: run.metadata?.complexity ?? null,
+      scheduler: run.metadata?.schedulerIdentity ?? null,
+      orchestratorSession: orchestratorSessionIdentity,
+      orchestrator: orchestratorSessionIdentity ? {
+        id: orchestratorSessionIdentity.agentId,
+        name: orchestratorAgent?.name ?? null,
+        role: orchestratorAgent?.role ?? "orchestrator",
+        status: orchestratorAgent?.status ?? "unknown",
+      } : null,
+      createdAt: run.createdAt,
+      startedAt: run.startedAt,
+      completedAt: run.completedAt,
+    },
+    nodes,
+    edges,
+    summary: {
+      total: nodes.length,
+      completed,
+      finished,
+      active: nodes.filter((node) => ["running", "approval_waiting", "agent_done", "validating"].includes(node.status)).length,
+      waiting: nodes.filter((node) => ["staged", "queued", "blocked", "retry_waiting", "waiting_for_lease"].includes(node.status)).length,
+      progress: nodes.length ? Math.round((finished / nodes.length) * 100) : 0,
+      counts,
+    },
+    generatedAt: new Date().toISOString(),
+  };
+}
+
+export class RunController {
+  constructor(options) {
+    this.registry = options.registry;
+    this.getControl = options.getControl;
+    this.onReleased = options.onReleased ?? (() => {});
+  }
+
+  graph(runId, options = {}) {
+    return buildRunGraph(this.registry, runId, options);
+  }
+
+  start(runId, details = {}) {
+    const run = this.registry.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (run.status === "running") return { runId, status: "running", releasedTasks: 0, tasks: this.registry.listTasks({ runId, limit: 1000 }) };
+    if (run.status !== "awaiting_user_start") throw new Error(`Run ${runId} cannot start from ${run.status}`);
+    const tasks = this.registry.listTasks({ runId, limit: 1000 });
+    if (!tasks.length) throw new Error(`Run has no tasks: ${runId}`);
+    const result = this.registry.releaseStagedRun(runId, details);
+    this.onReleased(runId);
+    return result;
+  }
+
+  async cancel(runId) {
+    const run = this.registry.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (TERMINAL_RUN_STATUSES.has(run.status)) return run;
+    const tasks = this.registry.listTasks({ runId, limit: 1000 });
+    const control = tasks.some((task) => ["running", "approval_waiting", "validating"].includes(task.status)) ? await this.getControl() : null;
+    for (const task of tasks) {
+      if (!["running", "approval_waiting", "validating"].includes(task.status)) continue;
+      const threadId = task.status === "validating" ? task.metadata?.validationInProgress?.agentId : task.agentId;
+      const turnId = task.status === "validating" ? task.metadata?.validationInProgress?.turnId : task.turnId;
+      if (!threadId || !turnId) continue;
+      try {
+        await control.interruptTask(threadId, turnId);
+      } catch (error) {
+        this.registry.recordEvent("task", task.id, "task.interrupt_failed", { error: error.message });
+      }
+    }
+    return this.registry.cancelRun(runId);
+  }
+
+  refresh(runId) {
+    return this.registry.refreshRun(runId);
+  }
+
+  nextTasks(limit) {
+    this.registry.refreshBlockedTasks();
+    return this.registry.listRunnableTasks({ limit });
+  }
+
+  claimTask(taskId, workerId) {
+    return this.registry.claimTask(taskId, workerId);
+  }
+
+  afterTask(taskId) {
+    const task = this.registry.getTask(taskId);
+    const runId = task?.metadata?.runId;
+    return runId ? { runId, run: this.refresh(runId) } : { runId: null, run: null };
+  }
+}

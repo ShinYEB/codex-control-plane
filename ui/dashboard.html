@@ -1,0 +1,903 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f5f6f8;
+      --surface: rgba(255, 255, 255, 0.88);
+      --surface-2: #eef0f4;
+      --line: rgba(15, 23, 42, 0.10);
+      --text: #172033;
+      --muted: #697386;
+      --accent: #5b5bd6;
+      --accent-soft: rgba(91, 91, 214, 0.11);
+      --green: #0e9f6e;
+      --amber: #d97706;
+      --red: #dc2626;
+      --shadow: 0 16px 38px rgba(23, 32, 51, 0.08);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #111318;
+        --surface: rgba(30, 33, 41, 0.92);
+        --surface-2: #252933;
+        --line: rgba(255, 255, 255, 0.09);
+        --text: #f1f3f7;
+        --muted: #a1a8b5;
+        --accent: #9b9bf5;
+        --accent-soft: rgba(155, 155, 245, 0.13);
+        --green: #35c994;
+        --amber: #f0a436;
+        --red: #f76e6e;
+        --shadow: 0 18px 45px rgba(0, 0, 0, 0.22);
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 10% -20%, var(--accent-soft), transparent 38%),
+        var(--bg);
+      color: var(--text);
+      font: 15px/1.5 ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    button, input, select, textarea { font: inherit; }
+    .app { width: min(1400px, 100%); margin: 0 auto; padding: 20px clamp(14px, 2.5vw, 34px); }
+    .header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+    .eyebrow { color: var(--accent); font-size: 11px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { margin: 2px 0; font-size: 23px; letter-spacing: -.035em; word-break:keep-all; overflow-wrap:break-word; }
+    .subtitle { color: var(--muted); }
+    .toolbar { display: flex; align-items: center; flex-wrap:wrap; gap: 8px; }
+    .scope-filter { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:11px; }
+    .scope-filter select { border:1px solid var(--line); border-radius:9px; background:var(--surface); color:var(--text); padding:7px 9px; }
+    .live { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); white-space: nowrap; }
+    .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 14%, transparent); }
+    .button { border: 1px solid var(--line); background: var(--surface); color: var(--text); border-radius: 9px; padding: 7px 11px; cursor: pointer; }
+    .button:hover { border-color: var(--accent); }
+    .button:disabled { opacity: .55; cursor: wait; }
+    .button.primary { border-color: var(--accent); background: var(--accent); color: white; font-weight: 700; }
+    .button.danger { color: var(--red); }
+    .dispatch-board { margin-bottom:10px; padding:12px 14px; border:1px solid var(--line); border-radius:13px; background:var(--surface); box-shadow:var(--shadow); }
+    .dispatch-board-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:9px; }
+    .dispatch-board-title { font-weight:760; }
+    .dispatch-board-help { color:var(--muted); font-size:11px; }
+    .control-ready { display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:11px; font-weight:700; white-space:nowrap; }
+    .control-ready::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--green); }
+    .run-lanes { display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; }
+    .run-card { flex:0 0 min(280px, 78vw); display:grid; gap:6px; padding:10px 11px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
+    .run-card:hover, .run-card.selected { border-color:var(--accent); background:var(--accent-soft); }
+    .run-card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .run-card-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700; }
+    .run-card-path { color:var(--muted); font-size:10px; }
+    .dispatch-track { display:grid; grid-template-columns:repeat(4,1fr); gap:3px; }
+    .dispatch-track span { height:3px; border-radius:99px; background:var(--surface-2); }
+    .dispatch-track span.done { background:var(--green); }
+    .dispatch-track span.current { background:var(--accent); animation:graph-pulse 1.4s ease-in-out infinite alternate; }
+    .runbar { display: none; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); border-radius: 13px; box-shadow: var(--shadow); }
+    .runbar.visible { display: flex; }
+    .run-main { min-width: 0; flex: 1; }
+    .run-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .run-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
+    .run-title-line .name { font-size: 16px; }
+    .run-status-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 9px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
+    .run-guidance { margin-top: 3px; color: var(--muted); font-size:12px; }
+    .run-select-wrap { flex: 0 1 250px; color: var(--muted); font-size: 11px; }
+    .run-select { display: block; width: 100%; margin-top: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 9px; padding: 8px 10px; }
+    .run-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .metric { display:grid; grid-template-columns:1fr auto; align-items:center; gap:8px; padding: 9px 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 11px; }
+    .metric-label { color: var(--muted); font-size: 12px; }
+    .metric-value { grid-column:2; grid-row:1 / span 2; font-size: 22px; font-weight: 720; letter-spacing: -.04em; }
+    .metric-help { color: var(--muted); font-size: 10px; }
+    .panel { border: 1px solid var(--line); background: var(--surface); border-radius: 15px; overflow: hidden; box-shadow: var(--shadow); }
+    .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .tabs { display: flex; gap: 4px; padding: 3px; border-radius: 9px; background: var(--surface-2); overflow-x: auto; }
+    .tab { flex: 0 0 auto; border: 0; color: var(--muted); background: transparent; padding: 8px 12px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
+    .tab.active { color: var(--text); background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    .search { width: min(260px, 42vw); border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 9px; padding: 7px 10px; outline: none; }
+    .search:focus { border-color: var(--accent); }
+    .list { min-height: 0; overflow: visible; }
+    .graph-view { min-height: 0; overflow: auto; overflow-x:hidden; padding: 16px; background: color-mix(in srgb, var(--bg) 72%, transparent); }
+    .graph-summary { display: grid; grid-template-columns:minmax(180px, 1fr) auto minmax(180px, 1fr) auto; align-items: center; gap: 14px; padding: 0 2px 16px; color: var(--muted); }
+    .graph-summary strong { color: var(--text); font-size: 17px; }
+    .graph-summary-title { min-width: 0; }
+    .graph-summary-title strong { display:block; word-break:keep-all; overflow-wrap:break-word; }
+    .graph-summary-title small { display:block; margin-top:2px; color:var(--muted); font-size:11px; font-weight:400; }
+    .stage-line { display:flex; align-items:center; gap:5px; color:var(--muted); font-size:11px; }
+    .stage-line span { white-space:nowrap; }
+    .stage-line .current { color:var(--accent); font-weight:700; }
+    .graph-progress { flex: 1; max-width: 260px; height: 6px; overflow: hidden; border-radius: 99px; background: var(--surface-2); }
+    .graph-progress > span { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
+    .plane-map-wrap { margin-bottom:12px; padding:13px; border:1px solid var(--line); border-radius:13px; background:var(--surface); }
+    .plane-map-head { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px 12px; margin-bottom:10px; }
+    .plane-map-title { font-weight:760; }
+    .plane-map-caption { color:var(--muted); font-size:11px; }
+    .plane-map { display:grid; grid-template-columns:minmax(0,1fr) 42px minmax(0,1fr) 42px minmax(0,1fr) 42px minmax(0,1fr); align-items:stretch; }
+    .plane-step { position:relative; display:grid; grid-template-columns:36px minmax(0,1fr); align-content:start; align-items:center; gap:8px 10px; min-width:0; padding:12px; border:1px solid var(--line); border-left-width:4px; border-radius:11px; background:var(--bg); }
+    .plane-step > div:nth-child(2) { min-width:0; }
+    .plane-step.control { border-left-color:var(--accent); }
+    .plane-step.scheduler { border-left-color:#64748b; }
+    .plane-step.orchestrator { border-left-color:var(--amber); }
+    .plane-step.data { border-left-color:var(--green); }
+    .plane-number { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; color:white; background:var(--muted); font-weight:800; }
+    .plane-step.control .plane-number { background:var(--accent); }
+    .plane-step.scheduler .plane-number { background:#64748b; }
+    .plane-step.orchestrator .plane-number { background:var(--amber); }
+    .plane-step.data .plane-number { background:var(--green); }
+    .plane-kicker { color:var(--muted); font-size:9px; font-weight:800; letter-spacing:.08em; word-break:keep-all; overflow-wrap:break-word; }
+    .plane-name { margin-top:1px; font-weight:760; word-break:keep-all; overflow-wrap:break-word; }
+    .plane-help { margin-top:2px; color:var(--muted); font-size:10px; line-height:1.45; word-break:keep-all; overflow-wrap:break-word; }
+    .plane-state, .plane-step > .button-link { grid-column:2; justify-self:start; max-width:100%; padding:3px 7px; border-radius:999px; color:var(--muted); background:var(--surface-2); font-size:9px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .plane-connector { display:grid; place-items:center; align-content:center; gap:2px; color:var(--muted); }
+    .plane-connector strong { color:var(--text); font-size:18px; line-height:1; }
+    .plane-connector span { font-size:9px; text-align:center; }
+    .attention-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; padding:8px 11px; border-radius:9px; color:var(--muted); background:var(--surface-2); font-size:11px; }
+    .attention-bar.needs-action { color:var(--amber); background:color-mix(in srgb, var(--amber) 11%, var(--surface)); }
+    .graph-board { position: relative; min-width: 560px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; }
+    .graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .graph-edge { fill: none; stroke: color-mix(in srgb, var(--muted) 38%, transparent); stroke-width: 1.5; }
+    .graph-node { position: absolute; width: 252px; min-height: 128px; padding: 14px 15px; border: 1px solid var(--line); border-top: 4px solid var(--muted); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; box-shadow: 0 7px 20px rgba(0,0,0,.08); }
+    .graph-node:hover { border-color: var(--accent); transform: translateY(-1px); }
+    .graph-node.running, .graph-node.agent_done, .graph-node.validating { border-top-color: var(--green); }
+    .graph-node.approval_waiting, .graph-node.queued, .graph-node.blocked, .graph-node.staged { border-top-color: var(--amber); }
+    .graph-node.completed { border-top-color: var(--accent); }
+    .graph-node.completed_with_warnings { border-top-color: var(--amber); }
+    .graph-node.rejected, .graph-node.validation_failed, .graph-node.failed, .graph-node.interrupted, .graph-node.canceled { border-top-color: var(--red); }
+    .graph-node-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+    .graph-node-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .graph-node-status { padding:3px 7px; border-radius:999px; color: var(--muted); background:var(--surface-2); font-size: 11px; white-space: nowrap; }
+    .graph-node-agent { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .graph-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 13px; color: var(--muted); font-size: 11px; }
+    .advanced-nav { position:relative; }
+    .advanced-nav summary { list-style:none; cursor:pointer; color:var(--muted); padding:8px 10px; white-space:nowrap; }
+    .advanced-nav summary::-webkit-details-marker { display:none; }
+    .advanced-tabs { position:absolute; z-index:5; right:0; top:calc(100% + 7px); display:grid; grid-template-columns:repeat(2, minmax(100px, 1fr)); gap:4px; min-width:230px; padding:7px; border:1px solid var(--line); border-radius:11px; background:var(--surface); box-shadow:var(--shadow); }
+    .graph-node-pulse { width: 100%; height: 3px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: var(--surface-2); }
+    .graph-node-pulse::after { content: ""; display: block; width: 38%; height: 100%; background: var(--green); animation: graph-pulse 1.4s ease-in-out infinite alternate; }
+    @keyframes graph-pulse { from { transform: translateX(-10%); } to { transform: translateX(190%); } }
+    .row { display: grid; grid-template-columns: minmax(180px, 1.5fr) minmax(105px, .65fr) minmax(150px, 1fr) 105px; gap: 12px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .row.agent-row { grid-template-columns: minmax(190px, 1.35fr) minmax(100px, .55fr) minmax(160px, 1fr) minmax(210px, auto); }
+    .row-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:7px; min-width:0; }
+    .button-link { display:inline-flex; align-items:center; justify-content:center; text-decoration:none; white-space:nowrap; }
+    .row:last-child { border-bottom: 0; }
+    .row:hover { background: var(--accent-soft); }
+    .name { font-weight: 680; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .meta { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .status { display: inline-flex; align-items: center; gap: 7px; text-transform: capitalize; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+    .dot.active, .dot.running, .dot.inprogress, .dot.agentdone, .dot.validating { background: var(--green); box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 12%, transparent); }
+    .dot.staged, .dot.queued, .dot.blocked, .dot.approvalwaiting, .dot.retrywaiting, .dot.waitingforlease { background: var(--amber); }
+    .dot.rejected, .dot.validationfailed, .dot.failed, .dot.interrupted, .dot.canceled { background: var(--red); }
+    .dot.completed, .dot.idle, .dot.available { background: var(--accent); }
+    .pill { display: inline-block; width: fit-content; padding: 3px 7px; border-radius: 999px; color: var(--muted); background: var(--surface-2); font-size: 11px; }
+    .empty { display: grid; place-items: center; min-height: 220px; color: var(--muted); text-align: center; padding: 30px; }
+    .footer { display: flex; justify-content: space-between; padding: 9px 13px; color: var(--muted); border-top: 1px solid var(--line); font-size: 11px; }
+    dialog { width: min(680px, calc(100vw - 32px)); max-height: 78vh; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); color: var(--text); box-shadow: 0 28px 80px rgba(0,0,0,.28); padding: 0; }
+    dialog::backdrop { background: rgba(0,0,0,.38); backdrop-filter: blur(3px); }
+    .detail-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .detail-body { padding: 18px; overflow: auto; max-height: 66vh; }
+    .detail-section + .detail-section { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
+    .detail-section h3 { margin:0 0 8px; font-size:13px; }
+    .detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
+    .detail-item { padding:10px 12px; border-radius:10px; background:var(--surface-2); }
+    .detail-item span { display:block; color:var(--muted); font-size:11px; }
+    .detail-list { margin:0; padding-left:20px; }
+    .requirement-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    .requirement-card { min-width:0; padding:9px 10px; border-radius:9px; background:var(--surface-2); word-break:keep-all; overflow-wrap:break-word; }
+    .requirement-card strong { display:block; font-size:11px; }
+    .requirement-card small { color:var(--muted); }
+    .detail-output { margin:0; white-space:pre-wrap; word-break:break-word; color:var(--text); font:12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .form-grid { display:grid; gap:14px; }
+    .field { display:grid; gap:6px; }
+    .field span { color:var(--muted); font-size:12px; }
+    .field input, .field textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--text); padding:9px 10px; outline:none; }
+    .field input:focus, .field textarea:focus { border-color:var(--accent); }
+    .field textarea { min-height:92px; resize:vertical; }
+    .form-help { color:var(--muted); font-size:12px; }
+    .dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
+    .text-destructive { color: var(--red); }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+    @media (max-width: 1040px) {
+      .plane-map { grid-template-columns:1fr; }
+      .plane-step { min-height:0; }
+      .plane-connector { min-height:28px; grid-template-columns:auto auto; align-content:center; }
+      .plane-connector strong { transform:rotate(90deg); }
+      .header { align-items:flex-start; flex-direction: column; }
+      .row, .row.agent-row { grid-template-columns:1fr; align-items:start; }
+      .row > *, .row.agent-row > * { min-width:0; }
+      .row .name, .row .meta { white-space:normal; word-break:keep-all; overflow-wrap:break-word; }
+      .row-actions { grid-column:1; justify-content:flex-start; }
+      .panel-head { align-items: stretch; flex-direction: column; }
+      .runbar { align-items:stretch; flex-direction:column; }
+      .run-select-wrap { flex-basis:auto; }
+      .graph-summary { grid-template-columns:1fr auto; }
+      .graph-summary .graph-progress { grid-column:1 / -1; max-width:none; width:100%; }
+      .stage-line { display:none; }
+      .plane-step { grid-template-columns:32px minmax(0,1fr); padding:11px; text-align:left; }
+      .plane-number { width:30px; height:30px; }
+      .plane-name { font-size:13px; }
+      .graph-board { display:grid; gap:8px; width:100% !important; min-width:0; height:auto !important; padding:8px; }
+      .graph-edges { display:none; }
+      .graph-node { position:relative; inset:auto !important; width:100%; min-height:0; }
+      .detail-grid { grid-template-columns:1fr; }
+      .search { width: 100%; }
+    }
+    @media (max-width: 720px) {
+      .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+      .metric { display:block; padding:9px; text-align:center; }
+      .metric-value { margin-top:2px; font-size:19px; }
+      .metric-help { display:none; }
+      .requirement-grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app" data-visual-regression-widths="600 800 1000">
+    <header class="header">
+      <div>
+        <div class="eyebrow">Control plane</div>
+        <h1>멀티 에이전트 작업 현황</h1>
+        <div class="subtitle" id="scope">요청별 실행 상태와 담당 에이전트를 확인합니다.</div>
+      </div>
+      <div class="toolbar">
+        <label class="scope-filter">표시 범위<select id="archive-scope"><option value="active">활성</option><option value="archived">보관됨</option><option value="all">전체</option></select></label>
+        <span class="live">자동 갱신</span>
+        <button class="button" id="refresh">새로고침</button>
+      </div>
+    </header>
+
+    <section class="dispatch-board" id="dispatch-board">
+      <div class="dispatch-board-head"><div><div class="dispatch-board-title">컨트롤 플레인 작업함</div><div class="dispatch-board-help">요청을 접수하면 각 실행이 백그라운드에서 독립적으로 진행됩니다.</div></div><span class="control-ready">새 요청 접수 가능</span></div>
+      <div class="run-lanes" id="run-lanes"><div class="meta">접수된 실행이 없습니다.</div></div>
+    </section>
+
+    <section class="runbar" id="runbar">
+      <div class="run-main">
+        <div class="run-label">선택한 실행</div>
+        <div class="run-title-line"><div class="name" id="run-name">준비된 실행</div><span class="run-status-badge" id="run-status-badge">확인 중</span></div>
+        <div class="run-guidance" id="run-status">상태를 확인하고 있습니다.</div>
+      </div>
+      <label class="run-select-wrap" id="run-select-wrap">다른 실행 보기<select class="run-select" id="run-select"></select></label>
+      <div class="run-actions"><button class="button" id="archive-run">보관</button><button class="button danger" id="cancel-run">취소</button><button class="button primary" id="start-run">작업 시작</button></div>
+    </section>
+
+    <section class="metrics">
+      <article class="metric"><div class="metric-label">전체 작업</div><div class="metric-value" id="m-agents">—</div><div class="metric-help">이번 실행의 작업 수</div></article>
+      <article class="metric"><div class="metric-label">진행 중</div><div class="metric-value" id="m-active">—</div><div class="metric-help">작업 또는 검증 중</div></article>
+      <article class="metric"><div class="metric-label">확인 필요</div><div class="metric-value" id="m-running">—</div><div class="metric-help">승인·실패·검증 반려</div></article>
+      <article class="metric"><div class="metric-label">완료</div><div class="metric-value" id="m-completed">—</div><div class="metric-help">완료된 작업 수</div></article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <div class="tabs">
+          <button class="tab active" data-tab="graph">실행 현황</button>
+          <button class="tab" data-tab="agents">에이전트</button>
+          <button class="tab" data-tab="approvals">승인 요청</button>
+          <details class="advanced-nav"><summary>고급 관리 ▾</summary><div class="advanced-tabs">
+            <button class="tab" data-tab="tasks">전체 작업</button>
+            <button class="tab" data-tab="plans">계획 기록</button>
+            <button class="tab" data-tab="worktrees">Worktree</button>
+            <button class="tab" data-tab="roles">역할 정책</button>
+            <button class="tab" data-tab="memories">프로젝트 맥락</button>
+            <button class="tab" data-tab="events">이벤트 로그</button>
+          </div></details>
+        </div>
+        <input class="search" id="search" placeholder="이름, 상태, 작업 경로 검색" />
+      </div>
+      <div class="list" id="list"><div class="empty">상황판 데이터를 기다리는 중…</div></div>
+      <div class="footer"><span id="count">—</span><span id="updated">—</span></div>
+    </section>
+  </main>
+
+  <dialog id="detail">
+    <div class="detail-head"><strong id="detail-title">상세 정보</strong><button class="button" id="close">닫기</button></div>
+    <div class="detail-body" id="detail-content"></div>
+  </dialog>
+
+  <dialog id="register-agent">
+    <div class="detail-head"><strong>에이전트 프로필 편집</strong><button class="button" id="register-close" type="button">닫기</button></div>
+    <form class="detail-body" id="register-form">
+      <div class="form-grid">
+        <div><div class="name" id="register-name">선택한 세션</div><div class="meta" id="register-id"></div></div>
+        <label class="field"><span>역할 *</span><input id="register-role" required placeholder="예: backend, reviewer, qa" /></label>
+        <label class="field"><span>전문 역량</span><input id="register-capabilities" placeholder="예: api, database, testing (쉼표로 구분)" /></label>
+        <label class="field"><span>맥락 요약</span><textarea id="register-summary" placeholder="이 세션이 알고 있는 프로젝트 맥락과 잘하는 일을 적으세요."></textarea></label>
+        <div class="form-help">모든 세션은 플러그인을 실행할 때 자동으로 등록됩니다. 여기서는 자동 배정에 사용할 역할과 맥락을 설정합니다.</div>
+      </div>
+      <div class="dialog-actions"><button class="button" id="register-cancel" type="button">취소</button><button class="button primary" id="register-submit" type="submit">프로필 저장</button></div>
+    </form>
+  </dialog>
+
+  <script>
+    const pageParams = new URLSearchParams(location.search);
+    const standalone = window.parent === window && pageParams.has("token");
+    const state = { agents: [], tasks: [], plans: [], approvals: [], worktrees: [], roles: [], memories: [], events: [], runs: [], run: null, graph: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "graph", query: "", updatedAt: null };
+    const pending = new Map();
+    let nextId = 1;
+    let refreshFlight = null;
+    let pollTimer = null;
+    let eventStream = null;
+    let unchangedPolls = 0;
+
+    const el = (id) => document.getElementById(id);
+    const normalize = (value) => String(value ?? "unknown").replace(/[^a-z]/gi, "").toLowerCase();
+    const shortId = (value) => value ? value.slice(0, 8) : "—";
+    const date = (value) => {
+      if (!value) return "—";
+      const raw = typeof value === "number" && value < 1e12 ? value * 1000 : value;
+      const parsed = new Date(raw);
+      return Number.isNaN(parsed.valueOf()) ? "—" : new Intl.DateTimeFormat(document.documentElement.lang || "ko", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(parsed);
+    };
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
+    const statusLabels = {
+      draft: "초안", accepted: "접수 완료", planning: "계획 수립 중", preparing: "에이전트 구성 중", agents_prepared: "에이전트 준비 완료", awaiting_user_start: "시작 대기", staged: "시작 대기",
+      blocked: "선행 작업 대기", queued: "실행 대기", running: "작업 중", approval_waiting: "승인 필요",
+      agent_done: "결과 제출됨", validating: "완료 기준 검증 중", retry_waiting: "재시도 대기",
+      waiting_for_lease: "작업 공간 대기", completed: "완료", rejected: "검증 반려",
+      completed_with_warnings: "경고와 함께 완료", validation_failed: "검증 오류", failed: "실패", interrupted: "중단", canceled: "취소", cancelled: "취소",
+      leased: "작업 배정됨", idle: "대기", available: "사용 가능", pending: "대기"
+    };
+    const statusLabel = (value) => statusLabels[value] ?? value ?? "알 수 없음";
+    const failureActionLabel = (value) => ({ retry: "자동 재시도", rework: "피드백 기반 재작업", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
+    const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted", "canceled", "cancelled"]);
+    const isTerminalStatus = (status) => terminalStatuses.has(status);
+    const threadLink = (threadId, label = "완료된 채팅 열기") => `<a class="button button-link open-agent" target="_top" rel="noopener" href="codex://threads/${encodeURIComponent(threadId)}" title="Codex Desktop에서 이 세션 열기">${label}</a>`;
+    const runGuidance = (status) => ({
+      accepted: "요청을 접수했습니다. 컨트롤 플레인은 다음 요청을 바로 받을 수 있습니다.",
+      planning: "플래너가 작업 규모를 분석하고 실행 경로를 정하고 있습니다.",
+      preparing: "오케스트레이터와 작업 에이전트를 구성하고 있습니다.",
+      awaiting_user_start: "담당 에이전트와 작업 순서를 검토한 뒤 ‘작업 시작’을 누르세요.",
+      running: "에이전트가 계획에 따라 작업하고 있습니다. 확인이 필요할 때만 알려드립니다.",
+      completed: "모든 작업이 완료되었습니다. 작업 카드를 눌러 결과와 검증 근거를 확인할 수 있습니다.",
+      failed: "완료하지 못한 작업이 있습니다. 빨간 작업 카드를 눌러 원인과 미충족 기준을 확인하세요.",
+      cancelled: "사용자가 실행을 취소했습니다.", canceled: "사용자가 실행을 취소했습니다."
+    })[status] ?? "현재 실행 상태를 확인하세요.";
+    const dispatchStage = (status) => ({ accepted: 0, draft: 0, planning: 1, preparing: 2, agents_prepared: 2, awaiting_user_start: 2, running: 3, completed: 4, failed: 4, cancelled: 4, canceled: 4 })[status] ?? 0;
+    const runStage = (status) => ["accepted", "draft", "planning", "preparing", "agents_prepared", "awaiting_user_start"].includes(status) ? 0 : ["running"].includes(status) ? 1 : ["completed"].includes(status) ? 3 : 2;
+
+    function request(method, params) {
+      const id = nextId++;
+      window.parent.postMessage({ jsonrpc: "2.0", id, method, params }, "*");
+      return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+    }
+
+    async function callTool(name, args = {}) {
+      const result = await request("tools/call", { name, arguments: args });
+      if (result?.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
+      return result?.structuredContent ?? {};
+    }
+
+    function applySnapshot(snapshot) {
+      if (Array.isArray(snapshot.agents)) state.agents = snapshot.agents;
+      if (Array.isArray(snapshot.tasks)) state.tasks = snapshot.tasks;
+      if (Array.isArray(snapshot.plans)) state.plans = snapshot.plans;
+      if (Array.isArray(snapshot.approvals)) state.approvals = snapshot.approvals;
+      if (Array.isArray(snapshot.worktrees)) state.worktrees = snapshot.worktrees;
+      if (Array.isArray(snapshot.roles)) state.roles = snapshot.roles;
+      if (Array.isArray(snapshot.memories)) state.memories = snapshot.memories;
+      if (Array.isArray(snapshot.events)) state.events = snapshot.events;
+      if (Array.isArray(snapshot.runs)) state.runs = snapshot.runs;
+      if (snapshot.graph !== undefined) state.graph = snapshot.graph;
+      if (snapshot.run !== undefined) state.run = snapshot.run;
+      if (snapshot.cwd !== undefined) state.cwd = snapshot.cwd;
+      if (snapshot.scope !== undefined) state.scope = snapshot.scope;
+      if (snapshot.runId !== undefined) state.runId = snapshot.runId;
+      if (snapshot.revision !== undefined) state.revision = snapshot.revision;
+      if (snapshot.dashboardLeaseToken) state.dashboardLeaseToken = snapshot.dashboardLeaseToken;
+      state.updatedAt = snapshot.generatedAt ?? new Date().toISOString();
+      render();
+    }
+
+    function isTerminalView() {
+      if (["completed", "failed", "cancelled", "canceled"].includes(state.run?.status)) return true;
+      const terminal = new Set(["completed", "completed_with_warnings", "rejected", "failed", "interrupted", "canceled", "cancelled"]);
+      return state.tasks.length > 0 && state.tasks.every((task) => terminal.has(task.status));
+    }
+
+    async function refresh() {
+      if (refreshFlight) return refreshFlight;
+      const button = el("refresh");
+      const previousRevision = state.revision;
+      button.disabled = true;
+      refreshFlight = (async () => {
+        try {
+          if (standalone) {
+            const response = await fetch(`/api/snapshot?${pageParams.toString()}`, { cache: "no-store" });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            applySnapshot(await response.json());
+          } else {
+            if (!state.dashboardLeaseToken) throw new Error("대시보드 소유권이 없습니다. Control Plane에서 다시 여세요.");
+            const snapshot = await callTool("get_dashboard_state", {
+              dashboardLeaseToken: state.dashboardLeaseToken,
+              ...(state.cwd ? { cwd: state.cwd } : {}),
+              ...(state.runId ? { runId: state.runId } : {}),
+              scope: state.scope,
+              ...(state.revision > 0 ? { sinceRevision: state.revision } : {}),
+            });
+            applySnapshot(snapshot);
+          }
+          return state.revision !== previousRevision;
+        } catch (error) {
+          el("updated").textContent = `갱신 실패: ${error.message}`;
+          return false;
+        } finally {
+          button.disabled = false;
+        }
+      })().finally(() => { refreshFlight = null; });
+      return refreshFlight;
+    }
+
+    function scheduleEmbeddedPoll() {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+      if (standalone || document.hidden || isTerminalView()) return;
+      const delay = unchangedPolls === 0 ? 5_000 : unchangedPolls === 1 ? 10_000 : 30_000;
+      pollTimer = setTimeout(async () => {
+        const changed = await refresh();
+        unchangedPolls = changed ? 0 : Math.min(2, unchangedPolls + 1);
+        scheduleEmbeddedPoll();
+      }, delay);
+    }
+
+    function connectEventStream() {
+      eventStream?.close();
+      eventStream = new EventSource(`/api/events?${pageParams.toString()}`);
+      eventStream.addEventListener("update", (event) => {
+        const payload = JSON.parse(event.data);
+        const incoming = payload.delta ?? payload.snapshot ?? {};
+        if (incoming.scope && incoming.scope !== state.scope) return;
+        applySnapshot(incoming);
+      });
+      eventStream.onerror = () => { el("updated").textContent = "실시간 연결을 다시 시도하는 중…"; };
+    }
+
+    function filteredRows() {
+      const rows = state[state.tab] ?? [];
+      const query = state.query.trim().toLowerCase();
+      if (!query) return rows;
+      return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(query));
+    }
+
+    function renderRunInbox() {
+      const runs = state.runs.slice(0, 12);
+      if (!runs.length) {
+        el("run-lanes").innerHTML = '<div class="meta">아직 접수된 실행이 없습니다. 컨트롤 플레인 채팅에 작업을 입력하면 여기에 바로 추가됩니다.</div>';
+        return;
+      }
+      el("run-lanes").innerHTML = runs.map((run) => {
+        const stage = dispatchStage(run.status);
+        const terminal = ["completed", "failed", "cancelled", "canceled"].includes(run.status);
+        const path = run.dispatchPath === "orchestrated" ? "오케스트레이터 경유" : run.dispatchPath === "direct" ? "작업 에이전트에 바로 전달" : ["accepted", "planning", "preparing"].includes(run.status) ? "실행 경로 결정 중" : "기존 실행";
+        const track = [0, 1, 2, 3].map((index) => `<span class="${terminal || index < stage ? "done" : index === stage ? "current" : ""}"></span>`).join("");
+        return `<button class="run-card ${run.id === state.runId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}"><div class="run-card-top"><span class="run-card-name">${escapeHtml(run.name || `실행 ${shortId(run.id)}`)}</span><span class="run-status-badge">${escapeHtml(statusLabel(run.status))}</span></div><div class="dispatch-track" aria-label="접수, 계획, 준비, 실행">${track}</div><div class="run-card-path">${escapeHtml(path)} · ${date(run.updatedAt || run.createdAt)}</div></button>`;
+      }).join("");
+      [...document.querySelectorAll(".run-card")].forEach((card) => card.addEventListener("click", async () => {
+        state.runId = card.dataset.runId;
+        pageParams.set("runId", state.runId);
+        if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
+        await refresh();
+        if (standalone) connectEventStream();
+      }));
+    }
+
+    function renderRunGraph() {
+      const graph = state.graph;
+      el("search").style.display = "none";
+      if (!graph?.nodes?.length) {
+        if (graph?.run) {
+          const phase = statusLabel(graph.run.status);
+          el("count").textContent = `백그라운드 실행 준비 · ${phase}`;
+          el("list").innerHTML = `<div class="graph-view"><div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "접수된 요청")}</strong><small>${escapeHtml(runGuidance(graph.run.status))}</small></div><div class="stage-line"><span class="current">접수</span>→<span>계획</span>→<span>구성</span>→<span>실행</span></div><div class="graph-progress"><span style="width:${Math.min(92, dispatchStage(graph.run.status) * 28 + 8)}%"></span></div><strong>${escapeHtml(phase)}</strong></div><section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">백그라운드 실행 준비</div><div class="plane-map-caption">데몬은 준비만 수행하며 사용자 Start 전에는 작업을 해제하지 않습니다.</div></div><span class="pill">${escapeHtml(phase)}</span></div><div class="plane-map"><div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 접수 완료</div><div class="plane-help">실행 ID 발급 · 경로 결정 · 중앙 계획</div></div><span class="plane-state">접수 가능</span></div><div class="plane-connector"><strong>→</strong><span>계획 전달</span></div><div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">영속 큐와 실행 잠금 관리</div><div class="plane-help">작업 순서 · claim · fencing · 재시도 상태를 관리하는 데몬입니다.</div></div><span class="plane-state">Codex 채팅 아님</span></div><div class="plane-connector"><strong>→</strong><span>세션 준비</span></div><div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX SESSION</div><div class="plane-name">실제 조정 세션 준비 중</div><div class="plane-help">복합 실행에서 작업 분해와 결과 종합을 수행하는 별도 Codex 세션입니다.</div></div><span class="plane-state">준비 중</span></div><div class="plane-connector"><strong>→</strong><span>Start 후 해제</span></div><div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">에이전트 배정 대기</div><div class="plane-help">명시적 작업 시작을 누른 뒤에만 전문 Codex 세션이 실행됩니다.</div></div><span class="plane-state">사용자 시작 대기</span></div></div></section></div>`;
+        } else {
+          el("count").textContent = "작업 흐름 없음";
+          el("list").innerHTML = '<div class="empty">아직 표시할 실행이 없습니다.<br>컨트롤 플레인 채팅에 작업을 입력하면 바로 접수됩니다.</div>';
+        }
+        return;
+      }
+      const nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
+      const memo = new Map();
+      const levelOf = (node, visiting = new Set()) => {
+        if (memo.has(node.id)) return memo.get(node.id);
+        if (visiting.has(node.id)) return 0;
+        const next = new Set(visiting).add(node.id);
+        const dependencies = (node.dependsOn || []).map((id) => nodesById.get(id)).filter(Boolean);
+        const level = dependencies.length ? Math.max(...dependencies.map((parent) => levelOf(parent, next))) + 1 : 0;
+        memo.set(node.id, level);
+        return level;
+      };
+      const columns = [];
+      for (const node of graph.nodes) {
+        const level = levelOf(node);
+        (columns[level] ||= []).push(node);
+      }
+      const naturalWidth = columns.length * 310 - 10;
+      const width = Math.max(560, naturalWidth);
+      const horizontalOffset = Math.max(0, (width - naturalWidth) / 2);
+      const maxRows = Math.max(...columns.map((column) => column?.length || 0), 1);
+      const height = Math.max(360, maxRows * 166 + 44);
+      const positions = new Map();
+      columns.forEach((column, level) => {
+        const blockHeight = column.length * 166;
+        const offset = Math.max(22, (height - blockHeight) / 2);
+        column.forEach((node, index) => positions.set(node.id, { x: 24 + horizontalOffset + level * 310, y: offset + index * 166 }));
+      });
+      const edges = (graph.edges || []).map((edge) => {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        if (!source || !target) return "";
+        const x1 = source.x + 252;
+        const y1 = source.y + 64;
+        const x2 = target.x;
+        const y2 = target.y + 64;
+        const bend = Math.max(34, (x2 - x1) / 2);
+        return `<path class="graph-edge" d="M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}" />`;
+      }).join("");
+      const nodes = graph.nodes.map((node) => {
+        const position = positions.get(node.id);
+        const active = ["running", "approval_waiting", "agent_done", "validating"].includes(node.status);
+        const workspace = node.workspace?.mode === "worktree" ? `Worktree · ${node.workspace.branch || "격리됨"}` : "공유 작업 공간";
+        const verdict = node.validation?.decision === "accept" ? "검증 통과" : node.validation?.decision === "reject" ? `기준 미충족 ${node.validation.unmetCriteria?.length || 0}` : node.failureSummary?.nextAction ? failureActionLabel(node.failureSummary.nextAction) : null;
+        return `<button class="graph-node ${escapeHtml(node.status)}" data-node-id="${escapeHtml(node.id)}" style="left:${position.x}px;top:${position.y}px" aria-label="${escapeHtml(node.title)} · ${escapeHtml(statusLabel(node.status))}">
+          <div class="graph-node-head"><span class="graph-node-title">${escapeHtml(node.title)}</span><span class="graph-node-status">${escapeHtml(statusLabel(node.status))}</span></div>
+          <div class="graph-node-agent">담당 · ${escapeHtml(node.agent?.name || "에이전트 준비 중")} · ${escapeHtml(node.role || "일반")}</div>
+          ${active ? '<div class="graph-node-pulse"></div>' : ''}
+          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${escapeHtml(verdict || (node.approval ? "승인 필요" : `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`))}</strong></div>
+        </button>`;
+      }).join("");
+      const stage = runStage(graph.run.status);
+      const stages = ["준비", "실행", "검증", "완료"].map((label, index) => `<span class="${index === stage ? "current" : ""}">${index < stage ? "✓ " : ""}${label}</span>${index < 3 ? "→" : ""}`).join("");
+      const orchestrated = graph.run.dispatchPath === "orchestrated";
+      const orchestrator = graph.run.orchestrator;
+      const scheduler = graph.run.scheduler;
+      const orchestratorSession = graph.run.orchestratorSession;
+      const complexity = graph.run.complexity;
+      const attention = graph.nodes.filter((node) => ["approval_waiting", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
+      const planeFlow = `<section class="plane-map-wrap" aria-label="Control Plane, Daemon Scheduler, Orchestrator Codex session, Data Plane execution structure">
+        <div class="plane-map-head"><div><div class="plane-map-title">실행 구조와 실제 identity</div><div class="plane-map-caption">Daemon Scheduler는 영속 큐를 관리하는 프로세스이고, Orchestrator는 필요할 때 생성되는 실제 Codex 세션입니다.</div></div><span class="pill">${orchestrated ? "오케스트레이터 경유" : "작업 에이전트에 바로 전달"}</span></div>
+        <div class="plane-map">
+          <div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 판단과 위임</div><div class="plane-help">작업 규모 산정 · 실행 경로 선택 · 전역 맥락 관리</div></div><span class="plane-state">위임 완료</span></div>
+          <div class="plane-connector"><strong>→</strong><span>영속 큐 전달</span></div>
+          <div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">큐 · claim · fencing 관리</div><div class="plane-help">Codex 채팅이 아니라 재시작 복구와 bounded retry/rework를 관리하는 데몬 실행자입니다.</div></div><span class="plane-state">${escapeHtml(scheduler?.instanceId ? `daemon ${shortId(scheduler.instanceId)}` : "identity 미기록")}</span></div>
+          <div class="plane-connector"><strong>→</strong><span>${orchestrated ? "조정 세션 배정" : "직접 배정"}</span></div>
+          <div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX SESSION</div><div class="plane-name">${orchestrated ? escapeHtml(orchestrator?.name || "실행 조정 세션") : "단순 실행: 별도 세션 없음"}</div><div class="plane-help">${orchestrated ? "실제 Codex session이 작업 분해 · 병렬 배치 · 결과 종합을 담당합니다." : "Daemon Scheduler가 Data Plane 작업을 직접 배정합니다."}</div></div>${orchestratorSession?.agentId && isTerminalStatus(graph.run.status) ? threadLink(orchestratorSession.agentId) : `<span class="plane-state">${orchestratorSession?.agentId ? `session ${shortId(orchestratorSession.agentId)}` : "생성되지 않음"}</span>`}</div>
+          <div class="plane-connector"><strong>→</strong><span>작업 배정</span></div>
+          <div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">작업 에이전트 ${escapeHtml(graph.nodes.length)}개</div><div class="plane-help">전문화된 Codex 채팅 세션이 실제 작업과 검증을 수행합니다.</div></div><span class="plane-state">${escapeHtml(graph.summary.active || 0)}개 진행 · ${escapeHtml(graph.summary.waiting || 0)}개 대기</span></div>
+        </div>
+      </section><div class="attention-bar ${attention ? "needs-action" : ""}"><span>${attention ? `확인이 필요한 작업이 ${attention}개 있습니다.` : graph.run.status === "awaiting_user_start" ? "실행 전 검토 단계입니다. 작업 흐름을 확인한 뒤 ‘작업 시작’을 누르세요." : graph.run.status === "completed" ? "모든 작업이 완료되었습니다." : "현재는 사용자 확인 없이 계획대로 진행할 수 있습니다."}</span>${complexity ? `<span>복잡도 ${escapeHtml(complexity.level)} · ${escapeHtml(complexity.score)}/100</span>` : `<span>${orchestrated ? "오케스트레이터 경유" : "바로 전달"}</span>`}</div>`;
+      el("count").textContent = `전체 ${graph.summary.total}개 중 ${graph.summary.finished ?? graph.summary.completed}개 종료 · ${graph.summary.completed}개 완료`;
+      el("list").innerHTML = `<div class="graph-view">
+        <div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.objective || graph.run.name || "실행 계획")}</strong><small>${escapeHtml(statusLabel(graph.run.status))}</small></div><div class="stage-line">${stages}</div><div class="graph-progress"><span style="width:${graph.summary.progress}%"></span></div><strong>${graph.summary.progress}%</strong></div>
+        ${planeFlow}
+        <div class="graph-board" style="width:${width}px;height:${height}px"><svg class="graph-edges" viewBox="0 0 ${width} ${height}" aria-hidden="true">${edges}</svg>${nodes}</div>
+      </div>`;
+      [...document.querySelectorAll(".graph-node")].forEach((button) => button.addEventListener("click", () => showDetail(nodesById.get(button.dataset.nodeId))));
+      [...document.querySelectorAll(".open-agent")].forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
+    }
+
+    function render() {
+      renderRunInbox();
+      const graphNodes = state.graph?.nodes ?? [];
+      const active = graphNodes.filter((node) => ["running", "approval_waiting", "agent_done", "validating"].includes(node.status)).length;
+      const approvals = graphNodes.filter((node) => ["approval_waiting", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
+      const completed = graphNodes.filter((node) => node.status === "completed").length;
+      el("m-agents").textContent = graphNodes.length;
+      el("m-active").textContent = active;
+      el("m-running").textContent = approvals;
+      el("m-completed").textContent = completed;
+      el("scope").textContent = state.cwd ? state.cwd : "모든 프로젝트의 실행 상태와 담당 에이전트";
+      el("archive-scope").value = state.scope;
+      const run = state.run ?? state.runs.find((item) => item.id === state.runId) ?? null;
+      el("runbar").classList.toggle("visible", Boolean(run));
+      if (run) {
+        el("run-name").textContent = run.name || `실행 ${shortId(run.id)}`;
+        el("run-status-badge").textContent = statusLabel(run.status);
+        el("run-status").textContent = runGuidance(run.status);
+        el("start-run").disabled = run.status !== "awaiting_user_start";
+        el("start-run").textContent = run.status === "awaiting_user_start" ? "작업 시작" : run.status === "running" ? "실행 중" : "시작됨";
+        el("cancel-run").disabled = ["completed", "failed", "cancelled"].includes(run.status);
+        el("start-run").style.display = run.status === "awaiting_user_start" ? "inline-block" : "none";
+        el("cancel-run").style.display = ["accepted", "planning", "preparing", "awaiting_user_start", "running"].includes(run.status) ? "inline-block" : "none";
+        el("archive-run").style.display = run.archiveAllowed || run.unarchiveAllowed ? "inline-block" : "none";
+        el("archive-run").textContent = run.unarchiveAllowed ? "보관 해제" : "실행 보관";
+        el("archive-run").dataset.action = run.unarchiveAllowed ? "unarchive" : "archive";
+        el("run-select").innerHTML = state.runs.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === run.id ? "selected" : ""}>${escapeHtml(item.name || `Run ${shortId(item.id)}`)} · ${escapeHtml(statusLabel(item.status))}</option>`).join("");
+        el("run-select-wrap").style.display = state.runs.length > 1 ? "block" : "none";
+      } else el("archive-run").style.display = "none";
+
+      el("updated").textContent = `마지막 갱신 ${date(state.updatedAt)}`;
+      if (state.tab === "graph") {
+        renderRunGraph();
+        return;
+      }
+      el("search").style.display = "block";
+
+      const rows = filteredRows();
+      const labels = { agents: "에이전트", tasks: "작업", plans: "계획", approvals: "승인", worktrees: "Worktree", roles: "역할", memories: "맥락", events: "이벤트" };
+      const unit = labels[state.tab] || state.tab;
+      el("count").textContent = `${unit} ${rows.length}개`;
+      if (!rows.length) {
+        el("list").innerHTML = `<div class="empty">표시할 ${unit}가 없습니다.</div>`;
+        return;
+      }
+
+      el("list").innerHTML = rows.map((row, index) => state.tab === "agents" ? `
+        <div class="row agent-row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.name || `Agent ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.role || row.id)}</div></div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
+          <div><div class="meta">${escapeHtml(row.cwd || "경로 없음")}</div><span class="pill">${escapeHtml((row.capabilities || []).join(", ") || row.source || "codex")}</span></div>
+          <div class="row-actions">${["idle", "available"].includes(row.status) && !row.currentTaskId ? threadLink(row.id) : '<span class="pill">active/leased 상태</span>'}<button class="button register-agent" data-index="${index}">프로필 편집</button>${row.archiveAllowed || row.unarchiveAllowed ? `<button class="button archive-agent" data-id="${escapeHtml(row.id)}" data-action="${row.unarchiveAllowed ? "unarchive" : "archive"}">${row.unarchiveAllowed ? "보관 해제" : "보관"}</button>` : ""}</div>
+        </div>` : state.tab === "tasks" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.title || row.prompt || `Task ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.failure?.cause || row.id)}</div></div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
+          <div><div class="meta">Agent ${escapeHtml(shortId(row.agentId))} · ${escapeHtml(`${row.attempt || 0}/${row.maxAttempts || 1}`)}</div><span class="pill">${escapeHtml(row.failure?.nextAction ? failureActionLabel(row.failure.nextAction) : row.role || row.mode || "pending")}</span></div>
+          <div class="meta">${date(row.completedAt || row.startedAt || row.createdAt)}</div>
+        </div>` : state.tab === "plans" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.objective)}</div><div class="meta">${escapeHtml(row.id)} · v${escapeHtml(row.version)}</div></div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
+          <div class="meta">${escapeHtml(row.plan?.summary || "계획 생성 중")}</div><div class="meta">${date(row.updatedAt)}</div>
+        </div>` : state.tab === "approvals" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.method)}</div><div class="meta">${escapeHtml(row.taskId || row.threadId || row.id)}</div></div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
+          <div>${row.status === "pending" ? `<button class="button approval" data-id="${escapeHtml(row.id)}" data-decision="decline">거절</button> <button class="button primary approval" data-id="${escapeHtml(row.id)}" data-decision="accept">승인</button>` : `<span class="pill">${escapeHtml(row.decision || row.status)}</span>`}</div>
+          <div class="meta">${date(row.createdAt)}</div>
+        </div>` : state.tab === "worktrees" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.branch || row.id)}</div><div class="meta">${escapeHtml(row.path)}</div></div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(row.status)}</div>
+          <div>${!["removed", "creating"].includes(row.status) ? `<button class="button cleanup" data-id="${escapeHtml(row.id)}">안전하게 정리</button>` : ""}</div><div class="meta">${date(row.updatedAt)}</div>
+        </div>` : state.tab === "roles" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.name)}</div><div class="meta">${escapeHtml(row.description)}</div></div>
+          <div><span class="pill">${escapeHtml(row.sandbox)}</span></div>
+          <div class="meta">${escapeHtml((row.capabilities || []).join(", "))}</div><div class="meta">${escapeHtml(row.model || row.approvalPolicy)}</div>
+        </div>` : state.tab === "memories" ? `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.title || row.id)}</div><div class="meta">${escapeHtml(row.content)}</div></div>
+          <div><span class="pill">${escapeHtml(row.kind)}</span></div>
+          <div><div class="meta">${escapeHtml(row.cwd || "경로 없음")}</div><span class="pill">${escapeHtml((row.tags || []).join(", ") || row.source)}</span></div>
+          <div class="meta">${date(row.updatedAt)}</div>
+        </div>` : `
+        <div class="row" data-index="${index}">
+          <div><div class="name">${escapeHtml(row.eventType)}</div><div class="meta">${escapeHtml(row.entityId || "system")}</div></div>
+          <div><span class="pill">${escapeHtml(row.entityType)}</span></div>
+          <div class="meta">${escapeHtml(JSON.stringify(row.payload || {}))}</div>
+          <div class="meta">${date(row.createdAt)}</div>
+        </div>`).join("");
+
+      [...document.querySelectorAll(".row")].forEach((row) => row.addEventListener("click", () => showDetail(rows[Number(row.dataset.index)])));
+      [...document.querySelectorAll(".open-agent")].forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
+      [...document.querySelectorAll(".register-agent")].forEach((button) => button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openRegisterAgent(rows[Number(button.dataset.index)]);
+      }));
+      [...document.querySelectorAll(".archive-agent")].forEach((button) => button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        button.disabled = true;
+        try {
+          const action = button.dataset.action;
+          if (standalone) await fetch(`/api/agents/${encodeURIComponent(button.dataset.id)}/${action}?${pageParams.toString()}`, { method: "POST" }).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); });
+          else await callTool(action === "archive" ? "archive_agent" : "unarchive_agent", { threadId: button.dataset.id });
+          state.revision = 0;
+          await refresh();
+        } catch (error) { el("updated").textContent = `에이전트 보관 실패: ${error.message}`; }
+        finally { button.disabled = false; }
+      }));
+      [...document.querySelectorAll(".approval")].forEach((button) => button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        button.disabled = true;
+        try {
+          if (standalone) await fetch(`/api/approvals/${encodeURIComponent(button.dataset.id)}/${button.dataset.decision}?${pageParams.toString()}`, { method: "POST" }).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); });
+          else await callTool("resolve_approval", { approvalId: button.dataset.id, decision: button.dataset.decision });
+          await refresh();
+        } catch (error) { el("updated").textContent = `승인 처리 실패: ${error.message}`; }
+      }));
+      [...document.querySelectorAll(".cleanup")].forEach((button) => button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try {
+          if (standalone) await fetch(`/api/worktrees/${encodeURIComponent(button.dataset.id)}/cleanup?${pageParams.toString()}`, { method: "POST" }).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); });
+          else await callTool("cleanup_worktree", { worktreeId: button.dataset.id });
+          await refresh();
+        } catch (error) { el("updated").textContent = `정리 실패: ${error.message}`; }
+      }));
+    }
+
+    function requirementMatrixDetail(matrix) {
+      if (!matrix) return '<div class="meta">요구 조건 행렬이 기록되지 않았습니다.</div>';
+      const groups = [["capabilities", "Capability"], ["tools", "Tool"]];
+      return `<div class="requirement-grid">${groups.flatMap(([key, label]) => (matrix[key]?.cells ?? []).map((cell) => `<div class="requirement-card"><strong>${escapeHtml(label)} · ${escapeHtml(cell.requirement)}</strong><small>${cell.satisfied ? "충족" : "누락"}</small></div>`)).join("") || '<div class="meta">요구된 capability/tool이 없습니다.</div>'}</div>`;
+    }
+
+    function taskDetail(row) {
+      const criteria = row.acceptanceCriteria ?? [];
+      const validation = row.validation ?? null;
+      const evidence = validation?.evidence ?? [];
+      const unmet = validation?.unmetCriteria ?? [];
+      const failure = row.failure ?? row.failureSummary ?? row.metadata?.failure ?? null;
+      const routing = row.routing ?? row.routingSummary ?? null;
+      const matrix = routing?.selectedRequirementMatrix ?? routing?.assignmentRequirementMatrix ?? routing?.requirementMatrix ?? null;
+      const reasons = [...(routing?.reasons ?? []), ...(routing?.blockers ?? [])];
+      const budget = failure?.attemptBudget;
+      return `<section class="detail-section"><div class="detail-grid">
+        <div class="detail-item"><span>상태</span><strong>${escapeHtml(statusLabel(row.status))}</strong></div>
+        <div class="detail-item"><span>담당 에이전트</span><strong>${escapeHtml(row.agent?.name || shortId(row.agentId))}</strong></div>
+        <div class="detail-item"><span>역할</span><strong>${escapeHtml(row.role || "일반")}</strong></div>
+        <div class="detail-item"><span>작업 공간</span><strong>${escapeHtml(row.workspace?.mode || row.metadata?.execution?.workspaceMode || "shared")}</strong></div>
+      </div>${row.agent?.id && isTerminalStatus(row.status) ? `<div class="dialog-actions">${threadLink(row.agent.id)}</div>` : row.agent?.id ? '<div class="form-help">작업 중에는 데몬의 세션 소유권을 보호하기 위해 채팅 열기가 잠깁니다.</div>' : ""}</section>
+      <section class="detail-section"><h3>요청한 작업</h3><div>${escapeHtml(row.prompt || "—")}</div></section>
+      <section class="detail-section"><h3>완료 기준</h3>${criteria.length ? `<ol class="detail-list">${criteria.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>` : '<div class="meta">완료 기준이 지정되지 않았습니다.</div>'}</section>
+      ${failure ? `<section class="detail-section"><h3>실패 판정과 다음 조치</h3><div class="detail-grid"><div class="detail-item"><span>Failure type</span><strong>${escapeHtml(failure.type || "unknown")}</strong></div><div class="detail-item"><span>원인</span><strong>${escapeHtml(failure.cause || failure.message || "원인 미기록")}</strong></div><div class="detail-item"><span>다음 조치</span><strong>${escapeHtml(failureActionLabel(failure.nextAction || failure.requestedAction))}</strong></div><div class="detail-item"><span>Attempt budget</span><strong>${budget ? `${escapeHtml(budget.used ?? 0)}/${escapeHtml(budget.max ?? "—")} · 잔여 ${escapeHtml(budget.remaining ?? "—")}` : "—"}</strong></div><div class="detail-item"><span>Retryable</span><strong>${failure.retryable ? "예" : "아니요"}</strong></div><div class="detail-item"><span>Exhausted</span><strong>${failure.exhausted ? "예 · 수동 확인 필요" : "아니요"}</strong></div></div></section>` : ""}
+      ${routing ? `<section class="detail-section"><h3>Routing provenance와 충족 행렬</h3><div class="detail-grid"><div class="detail-item"><span>결정</span><strong>${escapeHtml(routing.decision || "기록됨")}</strong></div><div class="detail-item"><span>결정 출처</span><strong>${escapeHtml(routing.provenance?.decisionSource || "unknown")}</strong></div><div class="detail-item"><span>Daemon Scheduler</span><strong>${escapeHtml(routing.schedulerIdentity?.instanceId || "run identity 참조")}</strong></div><div class="detail-item"><span>Orchestrator Codex session</span><strong>${escapeHtml(routing.orchestratorSessionIdentity?.agentId || "별도 세션 없음")}</strong></div></div>${reasons.length ? `<h3>선택 이유</h3><ul class="detail-list">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}${requirementMatrixDetail(matrix)}</section>` : ""}
+      ${validation ? `<section class="detail-section"><h3>검증 결과 · ${escapeHtml(statusLabel(row.status))}</h3><div>${escapeHtml(validation.summary || "검증 요약이 없습니다.")}</div>${evidence.length ? `<h3>검증 근거</h3><ul class="detail-list">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}${unmet.length ? `<h3>미충족 기준</h3><ul class="detail-list">${unmet.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}</section>` : ""}
+      ${row.output ? `<section class="detail-section"><h3>에이전트 결과</h3><pre class="detail-output">${escapeHtml(row.output)}</pre></section>` : ""}
+      ${row.error ? `<section class="detail-section"><h3>확인할 문제</h3><div class="text-destructive">${escapeHtml(row.error)}</div></section>` : ""}`;
+    }
+
+    function genericDetail(row) {
+      const hidden = new Set(["metadata", "routing", "contextPack", "output", "validation"]);
+      const entries = Object.entries(row).filter(([key, value]) => !hidden.has(key) && value !== null && value !== undefined && typeof value !== "object").slice(0, 12);
+      return `<section class="detail-section"><div class="detail-grid">${entries.map(([key, value]) => `<div class="detail-item"><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("")}</div></section>`;
+    }
+
+    async function showDetail(row) {
+      el("detail-title").textContent = row.title || row.name || row.prompt || row.id || "상세 정보";
+      el("detail-content").innerHTML = row.acceptanceCriteria || row.validation || row.workspace ? taskDetail(row) : genericDetail(row);
+      el("detail").showModal();
+      if (!row.id) return;
+      const types = { agents: "agent", tasks: "task", plans: "plan", approvals: "approval", worktrees: "worktree", memories: "memory", graph: "task" };
+      const entityType = types[state.tab];
+      if (!entityType) return;
+      try {
+        const payload = standalone
+          ? await fetch(`/api/details/${entityType}/${encodeURIComponent(row.id)}?${pageParams.toString()}`).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); return response.json(); })
+          : await callTool("get_dashboard_detail", { dashboardLeaseToken: state.dashboardLeaseToken, entityType, entityId: row.id });
+        const detail = payload.detail;
+        el("detail-content").innerHTML = entityType === "task" ? taskDetail(detail) : genericDetail(detail);
+      } catch (error) { el("detail-content").innerHTML = `<div class="text-destructive">${escapeHtml(error.message)}</div>`; }
+    }
+
+    let registeringAgent = null;
+    function openRegisterAgent(agent) {
+      registeringAgent = agent;
+      el("register-name").textContent = agent.name || `Agent ${shortId(agent.id)}`;
+      el("register-id").textContent = agent.id;
+      el("register-role").value = agent.role || "";
+      el("register-capabilities").value = (agent.capabilities || []).join(", ");
+      el("register-summary").value = agent.summary || "";
+      el("register-agent").showModal();
+      setTimeout(() => el("register-role").focus(), 0);
+    }
+
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      const message = event.data;
+      if (!message || message.jsonrpc !== "2.0") return;
+      if (message.id !== undefined && pending.has(message.id)) {
+        const handler = pending.get(message.id);
+        pending.delete(message.id);
+        if (message.error) handler.reject(new Error(message.error.message || "Bridge request failed"));
+        else handler.resolve(message.result);
+        return;
+      }
+      if (message.method === "ui/notifications/tool-result") applySnapshot(message.params?.structuredContent ?? {});
+    }, { passive: true });
+
+    document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
+      state.tab = tab.dataset.tab;
+      document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === tab));
+      document.querySelector(".advanced-nav").open = false;
+      render();
+    }));
+    el("run-select").addEventListener("change", async (event) => {
+      state.runId = event.target.value;
+      pageParams.set("runId", state.runId);
+      if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
+      await refresh();
+      if (standalone) connectEventStream();
+    });
+    el("search").addEventListener("input", (event) => { state.query = event.target.value; render(); });
+    el("archive-scope").addEventListener("change", async (event) => {
+      state.scope = event.target.value;
+      state.runId = null;
+      state.revision = 0;
+      pageParams.set("scope", state.scope);
+      pageParams.delete("runId");
+      if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
+      await refresh();
+      if (standalone) connectEventStream();
+    });
+    el("refresh").addEventListener("click", async () => {
+      unchangedPolls = 0;
+      await refresh();
+      scheduleEmbeddedPoll();
+    });
+    el("start-run").addEventListener("click", async () => {
+      if (!state.runId) return;
+      el("start-run").disabled = true;
+      try {
+        if (standalone) {
+          const response = await fetch(`/api/runs/${encodeURIComponent(state.runId)}/start?${pageParams.toString()}`, { method: "POST" });
+          if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+        } else await callTool("start_agent_run", { runId: state.runId });
+        await refresh();
+      } catch (error) { el("updated").textContent = `시작 실패: ${error.message}`; }
+    });
+    el("cancel-run").addEventListener("click", async () => {
+      if (!state.runId || !confirm("이 실행과 남은 작업을 취소할까요?")) return;
+      try {
+        if (standalone) {
+          const response = await fetch(`/api/runs/${encodeURIComponent(state.runId)}/cancel?${pageParams.toString()}`, { method: "POST" });
+          if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+        } else await callTool("cancel_run", { runId: state.runId });
+        await refresh();
+      } catch (error) { el("updated").textContent = `취소 실패: ${error.message}`; }
+    });
+    el("archive-run").addEventListener("click", async () => {
+      if (!state.runId) return;
+      const action = el("archive-run").dataset.action;
+      el("archive-run").disabled = true;
+      try {
+        if (standalone) {
+          const response = await fetch(`/api/runs/${encodeURIComponent(state.runId)}/${action}?${pageParams.toString()}`, { method: "POST" });
+          if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+        } else await callTool(action === "archive" ? "archive_run" : "unarchive_run", { runId: state.runId });
+        state.runId = null;
+        state.revision = 0;
+        pageParams.delete("runId");
+        if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
+        await refresh();
+        if (standalone) connectEventStream();
+      } catch (error) { el("updated").textContent = `실행 보관 실패: ${error.message}`; }
+      finally { el("archive-run").disabled = false; }
+    });
+    el("close").addEventListener("click", () => el("detail").close());
+    el("register-close").addEventListener("click", () => el("register-agent").close());
+    el("register-cancel").addEventListener("click", () => el("register-agent").close());
+    el("register-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!registeringAgent) return;
+      const submit = el("register-submit");
+      const profile = {
+        role: el("register-role").value.trim(),
+        capabilities: el("register-capabilities").value.split(",").map((value) => value.trim()).filter(Boolean),
+        summary: el("register-summary").value.trim(),
+      };
+      submit.disabled = true;
+      try {
+        if (standalone) {
+          const response = await fetch(`/api/agents/${encodeURIComponent(registeringAgent.id)}/profile?${pageParams.toString()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(profile) });
+          if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+        } else await callTool("register_agent_profile", { threadId: registeringAgent.id, ...profile });
+        el("register-agent").close();
+        await refresh();
+      } catch (error) { el("updated").textContent = `에이전트 등록 실패: ${error.message}`; }
+      finally { submit.disabled = false; }
+    });
+    if (standalone) {
+      refresh().catch((error) => { el("updated").textContent = error.message; });
+      connectEventStream();
+    } else {
+      refresh().then(scheduleEmbeddedPoll).catch((error) => { el("updated").textContent = error.message; });
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
+        } else {
+          unchangedPolls = 0;
+          void refresh().then(scheduleEmbeddedPoll);
+        }
+      });
+      window.addEventListener("pagehide", () => {
+        clearTimeout(pollTimer);
+        pollTimer = null;
+      }, { once: true });
+    }
+  </script>
+</body>
+</html>
