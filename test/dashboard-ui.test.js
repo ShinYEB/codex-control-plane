@@ -38,16 +38,19 @@ test("embedded dashboard script remains syntactically valid", async () => {
 test("embedded dashboard polling is single-flight, adaptive, and visibility-aware", async () => {
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /if \(refreshFlight\) return refreshFlight;/);
-  assert.match(html, /unchangedPolls === 0 \? 5_000 : unchangedPolls === 1 \? 10_000 : 30_000/);
+  assert.match(html, /unchangedPolls === 0 \? 10_000 : unchangedPolls === 1 \? 30_000 : 60_000/);
   assert.match(html, /if \(standalone \|\| document\.hidden \|\| isTerminalView\(\)\) return;/);
   assert.match(html, /document\.addEventListener\("visibilitychange"/);
   assert.match(html, /window\.addEventListener\("pagehide"/);
 });
 
-test("chat links are terminal-only and escape the embedded frame", async () => {
+test("chat navigation uses the MCP Apps message bridge and supports active sessions", async () => {
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /const terminalStatuses = new Set/);
-  assert.match(html, /target="_top" rel="noopener" href="codex:\/\/threads\//);
+  assert.match(html, /request\("ui\/message"/);
+  assert.match(html, /openaiBridge\?\.sendFollowUpMessage/);
+  assert.match(html, /data-thread-id=/);
+  assert.doesNotMatch(html, /codex:\/\/threads\//);
   assert.match(html, /row\.agent\?\.id && isTerminalStatus\(row\.status\)/);
   assert.match(html, /세션 소유권을 보호하기 위해 채팅 열기가 잠깁니다/);
 });

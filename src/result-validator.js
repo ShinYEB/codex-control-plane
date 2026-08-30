@@ -16,7 +16,46 @@ const VALIDATION_SCHEMA = {
 function parseOutput(output) {
   const value = String(output ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   if (!value) throw new Error("Validator returned no structured output");
-  return JSON.parse(value);
+  try {
+    return JSON.parse(value);
+  } catch (originalError) {
+    const candidates = [];
+    let start = -1;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < value.length; index += 1) {
+      const character = value[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (character === "\\") escaped = true;
+        else if (character === '"') quoted = false;
+        continue;
+      }
+      if (character === '"') {
+        quoted = true;
+        continue;
+      }
+      if (character === "{") {
+        if (depth === 0) start = index;
+        depth += 1;
+      } else if (character === "}" && depth > 0) {
+        depth -= 1;
+        if (depth === 0 && start >= 0) {
+          try { candidates.push(JSON.parse(value.slice(start, index + 1))); } catch {}
+          start = -1;
+        }
+      }
+    }
+    const structured = candidates.findLast((candidate) =>
+      candidate && typeof candidate === "object"
+      && ["accept", "accept_with_warnings", "reject"].includes(candidate.decision)
+      && typeof candidate.summary === "string"
+      && Array.isArray(candidate.evidence)
+      && Array.isArray(candidate.unmetCriteria));
+    if (structured) return structured;
+    throw new Error(`Validator returned invalid structured output: ${originalError.message}`);
+  }
 }
 
 export class ResultValidator {

@@ -22,7 +22,9 @@ import { buildDashboardDelta, buildDashboardSnapshot, getDashboardDetail } from 
 import { dataPlaneRuntime, runtimePrompt } from "./runtime-environment.js";
 import { assessTaskResult, classifyFailure } from "./failure-classifier.js";
 
-const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v1.html";
+// MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
+// document contract changes so Desktop cannot mount an obsolete dashboard.
+const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v2.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const ACTIVE_TASK_STATUSES = new Set(["running", "approval_waiting", "agent_done", "validating"]);
 
@@ -318,7 +320,7 @@ const TOOLS = [
   {
     name: "prepare_agent_run",
     title: "Prepare a dashboard-gated agent run",
-    description: "Persist only the dependency graph and keep all work staged. The daemon creates one durable Codex session per task only after the user explicitly starts the run.",
+    description: "Persist only the dependency graph and keep all work staged. After explicit Start, each task leases the best eligible durable session or creates one when no safe reusable session exists.",
     inputSchema: {
       type: "object",
       properties: {
@@ -356,9 +358,9 @@ const TOOLS = [
               baseRef: { type: "string" },
               approvalPolicy: { type: "string", enum: ["never", "on-request", "on-failure", "untrusted"] },
               dependsOn: { type: "array", items: { type: "string" }, maxItems: 20 },
-              threadId: { type: "string", description: "Deprecated compatibility input; ignored for Run tasks." },
-              reuseExisting: { type: "boolean", default: false, description: "Deprecated compatibility input; ignored for Run tasks." },
-              routingMode: { type: "string", enum: ["auto", "new"], default: "new", description: "Run tasks always use a new daemon-owned session." },
+              threadId: { type: "string", description: "Optional preferred existing Codex session." },
+              reuseExisting: { type: "boolean", default: true, description: "Lease and append to an eligible existing session; fork when it is busy or unsafe." },
+              routingMode: { type: "string", enum: ["auto", "new"], default: "auto", description: "Automatically reuse the best eligible session, or force a new one." },
               maxAttempts: { type: "integer", minimum: 1, maximum: 10, default: 3, description: "Total bounded attempts, including validator-driven rework." },
               retryDelayMs: { type: "integer", minimum: 0, maximum: 3600000, default: 5000 },
             },
@@ -400,7 +402,7 @@ const TOOLS = [
   {
     name: "start_agent_run",
     title: "Start a prepared agent run",
-    description: "Atomically release a prepared task graph; the daemon then creates and binds one durable session per runnable task.",
+    description: "Atomically release a prepared task graph; the daemon creates an Orchestrator session for complex runs and leases or creates durable Data Plane sessions for runnable tasks.",
     inputSchema: {
       type: "object",
       properties: { runId: { type: "string" } },
@@ -709,6 +711,7 @@ const TOOLS = [
       type: "object",
       properties: {
         cwd: { type: "string", description: "Optional absolute working-directory filter." },
+        runId: { type: "string", description: "Optional exact Run to select." },
         scope: { type: "string", enum: ["active", "archived", "all"], default: "active" },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
         presentation: { type: "string", enum: ["embedded", "web"], default: "embedded", description: "Prefer embedded Codex UI. Select web only as an explicit fallback." },
@@ -773,7 +776,9 @@ export class McpControlServer {
       decorateAgent: (...args) => this.#decorateAgent(...args),
     });
     this.instanceId = options.instanceId ?? `worker_${randomUUID()}`;
-    this.schedulerIntervalMs = options.schedulerIntervalMs ?? 2_000;
+    // Normal work wakes the scheduler through queueMicrotask callbacks. This is
+    // only a recovery/safety tick, so keep it slow while the daemon is idle.
+    this.schedulerIntervalMs = options.schedulerIntervalMs ?? 30_000;
     this.schedulerConcurrency = options.schedulerConcurrency ?? 4;
     this.staleTaskMs = options.staleTaskMs ?? 60_000;
     this.shutdownDrainMs = options.shutdownDrainMs ?? 30_000;
@@ -867,7 +872,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex session writer. The Control Plane accepts, estimates, plans, tracks project context, and owns the dashboard. Preparation persists only the task graph: it never creates READY or Desktop placeholder sessions. Every prepared run waits for an explicit user Start action; opening or refreshing the dashboard never starts work. After Start, the daemon creates exactly one durable session for each Run task and binds that session to the task before starting its turn.",
+        instructions: "Use this daemon as the single Codex session writer. The Control Plane accepts, estimates, plans, tracks project context, and owns the dashboard. Preparation persists only the task graph: it never creates READY or Desktop placeholder sessions. Every prepared run waits for an explicit user Start action; opening or refreshing the dashboard never starts work. After Start, complex Runs receive one durable Orchestrator session, and each task leases a compatible reusable Data Plane session or creates a new one when no safe match exists.",
       };
     }
     if (message.method === "ping") return {};
@@ -992,7 +997,7 @@ export class McpControlServer {
       } else if (name === "dispatch_control_request") {
         result = await this.#enqueueControlRequest(args);
       } else if (name === "start_agent_run" || name === "mark_dashboard_ready") {
-        result = this.#releaseRun(args.runId, { source: name === "start_agent_run" ? "mcp_tool" : "legacy_mcp_tool" });
+        result = await this.#startRun(args.runId, { source: name === "start_agent_run" ? "mcp_tool" : "legacy_mcp_tool" });
       } else if (name === "get_run_graph") {
         result = this.runController.graph(args.runId);
       } else if (name === "list_runs") {
@@ -1085,18 +1090,18 @@ export class McpControlServer {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
       } else if (name === "show_agent_dashboard") {
-        this.#assertDashboardRequester(args.requesterThreadId);
+        this.#assertDashboardRequester(args.requesterThreadId, args.cwd);
         if (args.cwd) await this.#reconcileProject(await getControl(), args.cwd);
         const dashboard = await this.#ensureDashboardServer();
         const dashboardLeaseToken = this.#issueDashboardViewLease(args.cwd, args.requesterThreadId);
         result = { ...buildDashboardSnapshot(this.registry, {
-          cwd: args.cwd, limit: args.limit ?? 50,
+          cwd: args.cwd, runId: args.runId, limit: args.limit ?? 50,
           scope: args.scope,
           getGraph: (runId, options) => this.runController.graph(runId, options),
         }),
           dashboardPresentation: args.presentation ?? "embedded",
           dashboardLeaseToken,
-          dashboardUrl: dashboard.url({ cwd: args.cwd, scope: args.scope }),
+          dashboardUrl: dashboard.url({ cwd: args.cwd, runId: args.runId, scope: args.scope }),
         };
       } else if (name === "get_dashboard_state") {
         this.#assertDashboardViewLease(args.dashboardLeaseToken, args.cwd);
@@ -1686,7 +1691,7 @@ export class McpControlServer {
       const roleTemplate = task.role ? this.roleTemplates.resolve(task.role) : { sandbox: "read-only", approvalPolicy: "never", model: null };
       const execution = {
         threadId: task.threadId ?? null,
-        reuseExisting: Boolean(task.reuseExisting),
+        reuseExisting: task.reuseExisting ?? true,
         sandbox: task.sandbox ?? args.sandbox ?? roleTemplate.sandbox,
         approvalPolicy: task.approvalPolicy ?? args.approvalPolicy ?? roleTemplate.approvalPolicy,
         model: task.model ?? args.model ?? roleTemplate.model,
@@ -1710,7 +1715,7 @@ export class McpControlServer {
         status: "staged",
         prompt: task.prompt,
         cwd: args.cwd,
-        sourceThreadId: null,
+        sourceThreadId: task.threadId ?? null,
         agentId: null,
         role: task.role ?? null,
         requiredCapabilities: task.capabilities ?? [],
@@ -1776,7 +1781,46 @@ export class McpControlServer {
     };
   }
 
-  #releaseRun(runId, details = {}) {
+  async #ensureRunOrchestrator(run) {
+    if (run.metadata?.dispatchPath !== "orchestrated") return null;
+    const existingId = run.metadata?.orchestratorSessionIdentity?.agentId ?? run.metadata?.orchestratorAgentId;
+    if (existingId) return this.registry.getAgent(existingId);
+    const control = await this.#getControl();
+    const template = this.roleTemplates.resolve("orchestrator");
+    const agent = await control.spawnAgent({
+      cwd: run.cwd,
+      sandbox: "read-only",
+      approvalPolicy: "never",
+      model: template.model,
+      developerInstructions: `${template.developerInstructions}\n\nYou own orchestration context and final synthesis for Run ${run.id}. The daemon scheduler owns queue mechanics, claims, fencing, retries, and approvals. Do not edit files or open the Control Plane dashboard.`,
+      ephemeral: false,
+    });
+    const name = agentDisplayName("orchestrator", run.name ?? run.id);
+    await this.#decorateAgent(control, agent, name, true);
+    const stored = this.#storeAgent({ ...agent, name }, {
+      role: "orchestrator",
+      capabilities: template.capabilities,
+      metadata: {
+        tools: template.tools ?? [],
+        executionPlane: "orchestrator",
+        orchestrationPlane: true,
+        controlPlaneManaged: true,
+        runId: run.id,
+      },
+    });
+    this.registry.updateRun(run.id, { metadata: {
+      orchestratorAgentId: stored.id,
+      orchestratorSessionIdentity: { type: "codex_session", agentId: stored.id },
+      orchestratorProvisionedAt: new Date().toISOString(),
+    } });
+    this.registry.recordEvent("agent", stored.id, "orchestrator.provisioned", { runId: run.id });
+    return stored;
+  }
+
+  async #startRun(runId, details = {}) {
+    const run = this.registry.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    await this.#ensureRunOrchestrator(run);
     const result = this.runController.start(runId, details);
     this.registry.updateRun(runId, { metadata: { schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId } } });
     return { ...result, run: this.registry.getRun(runId) };
@@ -1804,7 +1848,7 @@ export class McpControlServer {
         registry: this.registry,
         html: DASHBOARD_HTML,
         ownerId: this.instanceId,
-        onStart: (runId, details) => this.#releaseRun(runId, details),
+        onStart: (runId, details) => this.#startRun(runId, details),
         onCancel: async (runId) => this.runController.cancel(runId),
         onArchiveRun: (runId) => this.#setRunArchived(runId, true),
         onUnarchiveRun: (runId) => this.#setRunArchived(runId, false),
@@ -2183,12 +2227,27 @@ export class McpControlServer {
     });
   }
 
-  #assertDashboardRequester(threadId) {
-    if (!threadId) return;
+  #assertDashboardRequester(threadId, cwd) {
+    const ownerKey = `control_plane_owner:${cwd ?? "*"}`;
+    const ownerThreadId = this.registry.getSetting(ownerKey);
+    if (!threadId) {
+      if (ownerThreadId) {
+        throw Object.assign(new Error("The Control Plane dashboard requires its registered owner thread id"), { code: -32003 });
+      }
+      return;
+    }
     const requester = this.registry.getAgent(threadId);
     const plane = requester?.metadata?.executionPlane;
     if (plane === "data" || plane === "orchestrator" || requester?.metadata?.orchestrationPlane) {
       throw Object.assign(new Error("Worker and Orchestrator sessions cannot open or query the Control Plane dashboard"), { code: -32003 });
+    }
+    if (ownerThreadId && ownerThreadId !== threadId) {
+      throw Object.assign(new Error(`The Control Plane dashboard is owned by another thread: ${ownerThreadId}`), { code: -32003 });
+    }
+    if (!ownerThreadId) {
+      this.registry.setSetting(ownerKey, threadId);
+      if (requester) this.registry.updateAgent(threadId, { role: "control-plane", metadata: { executionPlane: "control" } });
+      this.registry.recordEvent("agent", threadId, "control_plane.owner_claimed", { cwd: cwd ?? null });
     }
   }
 

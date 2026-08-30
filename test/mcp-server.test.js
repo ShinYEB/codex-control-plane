@@ -29,7 +29,8 @@ test("MCP initialize advertises tools and safety instructions", async () => {
   const listed = await server.handleRequest({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "codex-control-plane");
   assert.match(initialized.instructions, /single Codex session writer/);
-  assert.match(initialized.instructions, /exactly one durable session for each Run task/);
+  assert.match(initialized.instructions, /compatible reusable Data Plane session/);
+  assert.match(initialized.instructions, /durable Orchestrator session/);
   assert.deepEqual(listed.tools.map((tool) => tool.name), [
     "list_agents",
     "archive_agent",
@@ -358,7 +359,7 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
   assert.match(result.contents[0].text, /멀티 에이전트 작업 현황/);
   assert.match(result.contents[0].text, /data-tab="graph"/);
   assert.match(result.contents[0].text, /모든 세션은 플러그인을 실행할 때 자동으로 등록/);
-  assert.match(result.contents[0].text, /codex:\/\/threads\//);
+  assert.match(result.contents[0].text, /request\("ui\/message"/);
   assert.match(result.contents[0].text, /graph-board/);
   assert.match(result.contents[0].text, /실행 구조/);
   assert.match(result.contents[0].text, /CONTROL PLANE/);
@@ -396,8 +397,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.cwd, "/repo");
   assert.equal(result.structuredContent.dashboardPresentation, "embedded");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/agent-dashboard-v1.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/agent-dashboard-v1.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/agent-dashboard-v2.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/agent-dashboard-v2.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -486,7 +487,7 @@ test("project reconciliation is five-minute TTL single-flight", async () => {
   await server.close();
 });
 
-test("prepare_agent_run creates no session until Start and then binds one durable session per task", async () => {
+test("prepare_agent_run creates no session until Start and then binds a leased session per task", async () => {
   const calls = [];
   const dashboardServer = {
     start: async () => {},
@@ -535,13 +536,14 @@ test("prepare_agent_run creates no session until Start and then binds one durabl
   await server.close();
 });
 
-test("complex runs stage only the graph and do not create READY or orchestrator sessions", async () => {
+test("complex runs create no session during preparation and provision an Orchestrator at Start", async () => {
   let sequence = 0;
   const control = {
     connect: async () => {},
     spawnAgent: async () => ({ id: `agent_${++sequence}`, cwd: "/repo", status: "idle", ephemeral: false }),
     nameAgent: async () => {},
     pinAgent: async () => {},
+    resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async () => ({ output: "READY", turn: { status: "completed" } }),
   };
   const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
@@ -564,6 +566,11 @@ test("complex runs stage only the graph and do not create READY or orchestrator 
   const graph = server.runController.graph(prepared.structuredContent.runId);
   assert.equal(graph.run.orchestrator, null);
   assert.equal(graph.run.complexity.taskCount, 2);
+  await server.handleRequest({ method: "tools/call", params: { name: "start_agent_run", arguments: { runId: prepared.structuredContent.runId } } });
+  const started = server.runController.graph(prepared.structuredContent.runId);
+  assert.equal(started.run.orchestrator.id, "agent_1");
+  assert.deepEqual(started.run.orchestratorSession, { type: "codex_session", agentId: "agent_1" });
+  assert.equal(sequence, 1, "Start creates only the Orchestrator before workers are scheduled");
   await server.close();
 });
 
@@ -704,6 +711,7 @@ test("validator feedback drives bounded rework only after explicit Start", async
     forkAgent: async (id) => ({ id: `${id}_fork`, cwd: "/repo", status: "idle", provider: "codex", forkedFromId: id }),
     nameAgent: async () => {},
     pinAgent: async () => {},
+    resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async (_id, prompt, options = {}) => {
       prompts.push(prompt);
       options.onStarted?.({ turnId: `turn_rework_${prompts.length}` });

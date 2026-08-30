@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import readline from "node:readline";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { ControlPlaneDaemonClient } from "./daemon-client.js";
 
@@ -9,6 +11,7 @@ export class McpDaemonProxy {
     this.input = options.input ?? process.stdin;
     this.output = options.output ?? process.stdout;
     this.client = options.client ?? new ControlPlaneDaemonClient(options);
+    this.requesterThreadId = options.requesterThreadId ?? process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID ?? null;
     this.lines = null;
   }
 
@@ -32,7 +35,12 @@ export class McpDaemonProxy {
     }
     if (message.id === undefined) return;
     try {
-      const result = await this.client.call(message.method, message.params ?? {});
+      const params = structuredClone(message.params ?? {});
+      if (message.method === "tools/call" && params.name === "show_agent_dashboard" && this.requesterThreadId) {
+        params.arguments ??= {};
+        params.arguments.requesterThreadId ??= this.requesterThreadId;
+      }
+      const result = await this.client.call(message.method, params);
       this.#write({ jsonrpc: "2.0", id: message.id, result });
     } catch (error) {
       this.#write({ jsonrpc: "2.0", id: message.id, error: { code: error.code ?? -32603, message: error.message } });
@@ -44,7 +52,9 @@ export class McpDaemonProxy {
   }
 }
 
-const proxy = new McpDaemonProxy();
-proxy.start();
-process.once("SIGINT", () => process.exit(0));
-process.once("SIGTERM", () => process.exit(0));
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const proxy = new McpDaemonProxy();
+  proxy.start();
+  process.once("SIGINT", () => process.exit(0));
+  process.once("SIGTERM", () => process.exit(0));
+}

@@ -1,4 +1,9 @@
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
+const DEFAULT_MANAGED_THREAD_CONFIG = {
+  plugins: {
+    [process.env.CODEX_CONTROL_PLUGIN_ID ?? "codex-agent-control-plane@personal"]: { enabled: false },
+  },
+};
 
 function terminalTurnFromRead(result, turnId) {
   const thread = result?.thread ?? result;
@@ -24,6 +29,7 @@ export class CodexControlPlane {
     this.resumeFlights = new Map();
     this.resumeRetryDelaysMs = options.resumeRetryDelaysMs ?? [100, 300, 750];
     this.delay = options.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.managedThreadConfig = options.managedThreadConfig ?? DEFAULT_MANAGED_THREAD_CONFIG;
   }
 
   async connect() {
@@ -82,6 +88,7 @@ export class CodexControlPlane {
       approvalPolicy: options.approvalPolicy ?? "never",
       sandbox: options.sandbox ?? "read-only",
       serviceName: "codex_control_plane",
+      config: options.config ?? this.managedThreadConfig,
       ...(options.model ? { model: options.model } : {}),
       ...(options.developerInstructions ? { developerInstructions: options.developerInstructions } : {}),
       ...(options.ephemeral !== undefined ? { ephemeral: options.ephemeral } : {}),
@@ -106,6 +113,7 @@ export class CodexControlPlane {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.sandbox ? { sandbox: options.sandbox } : {}),
       ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+      config: options.config ?? this.managedThreadConfig,
     };
     let ownershipError;
     for (let attempt = 0; attempt <= this.resumeRetryDelaysMs.length; attempt += 1) {
@@ -138,6 +146,7 @@ export class CodexControlPlane {
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.sandbox ? { sandbox: options.sandbox } : {}),
       ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+      config: options.config ?? this.managedThreadConfig,
     });
     return this.#toAgent(result.thread, result.instructionSources);
   }

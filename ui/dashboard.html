@@ -315,6 +315,7 @@
   <script>
     const pageParams = new URLSearchParams(location.search);
     const standalone = window.parent === window && pageParams.has("token");
+    const openaiBridge = typeof window !== "undefined" ? window.openai : undefined;
     const state = { agents: [], tasks: [], plans: [], approvals: [], worktrees: [], roles: [], memories: [], events: [], runs: [], run: null, graph: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "graph", query: "", updatedAt: null };
     const pending = new Map();
     let nextId = 1;
@@ -345,7 +346,7 @@
     const failureActionLabel = (value) => ({ retry: "자동 재시도", rework: "피드백 기반 재작업", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
     const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted", "canceled", "cancelled"]);
     const isTerminalStatus = (status) => terminalStatuses.has(status);
-    const threadLink = (threadId, label = "완료된 채팅 열기") => `<a class="button button-link open-agent" target="_top" rel="noopener" href="codex://threads/${encodeURIComponent(threadId)}" title="Codex Desktop에서 이 세션 열기">${label}</a>`;
+    const threadLink = (threadId, label = "Codex에서 세션 찾기") => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}" title="현재 대화에 세션 이동 요청 보내기">${label}</button>`;
     const runGuidance = (status) => ({
       accepted: "요청을 접수했습니다. 컨트롤 플레인은 다음 요청을 바로 받을 수 있습니다.",
       planning: "플래너가 작업 규모를 분석하고 실행 경로를 정하고 있습니다.",
@@ -366,9 +367,42 @@
     }
 
     async function callTool(name, args = {}) {
+      if (openaiBridge?.callTool) {
+        const result = await openaiBridge.callTool(name, args);
+        if (result?.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
+        return result?.structuredContent ?? result ?? {};
+      }
       const result = await request("tools/call", { name, arguments: args });
       if (result?.isError) throw new Error(result.content?.[0]?.text || `${name} failed`);
       return result?.structuredContent ?? {};
+    }
+
+    async function openAgentThread(threadId) {
+      const prompt = `Codex Desktop에서 작업 세션 ${threadId}을 열어줘.`;
+      try {
+        if (openaiBridge?.sendFollowUpMessage) {
+          await openaiBridge.sendFollowUpMessage({ prompt });
+        } else {
+          await request("ui/message", { role: "user", content: [{ type: "text", text: prompt }] });
+        }
+        el("updated").textContent = `세션 이동 요청을 보냈습니다 · ${shortId(threadId)}`;
+      } catch (error) {
+        try {
+          await navigator.clipboard.writeText(threadId);
+          el("updated").textContent = `직접 이동을 지원하지 않는 호스트입니다. 세션 ID를 복사했습니다 · ${shortId(threadId)}`;
+        } catch {
+          el("updated").textContent = `세션 ID: ${threadId}`;
+        }
+      }
+    }
+
+    function bindAgentLinks() {
+      [...document.querySelectorAll(".open-agent")].forEach((button) => button.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        button.disabled = true;
+        try { await openAgentThread(button.dataset.threadId); }
+        finally { button.disabled = false; }
+      }));
     }
 
     function applySnapshot(snapshot) {
@@ -435,7 +469,7 @@
       clearTimeout(pollTimer);
       pollTimer = null;
       if (standalone || document.hidden || isTerminalView()) return;
-      const delay = unchangedPolls === 0 ? 5_000 : unchangedPolls === 1 ? 10_000 : 30_000;
+      const delay = unchangedPolls === 0 ? 10_000 : unchangedPolls === 1 ? 30_000 : 60_000;
       pollTimer = setTimeout(async () => {
         const changed = await refresh();
         unchangedPolls = changed ? 0 : Math.min(2, unchangedPolls + 1);
@@ -575,7 +609,7 @@
         <div class="graph-board" style="width:${width}px;height:${height}px"><svg class="graph-edges" viewBox="0 0 ${width} ${height}" aria-hidden="true">${edges}</svg>${nodes}</div>
       </div>`;
       [...document.querySelectorAll(".graph-node")].forEach((button) => button.addEventListener("click", () => showDetail(nodesById.get(button.dataset.nodeId))));
-      [...document.querySelectorAll(".open-agent")].forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
+      bindAgentLinks();
     }
 
     function render() {
@@ -629,7 +663,7 @@
           <div><div class="name">${escapeHtml(row.name || `Agent ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.role || row.id)}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
           <div><div class="meta">${escapeHtml(row.cwd || "경로 없음")}</div><span class="pill">${escapeHtml((row.capabilities || []).join(", ") || row.source || "codex")}</span></div>
-          <div class="row-actions">${["idle", "available"].includes(row.status) && !row.currentTaskId ? threadLink(row.id) : '<span class="pill">active/leased 상태</span>'}<button class="button register-agent" data-index="${index}">프로필 편집</button>${row.archiveAllowed || row.unarchiveAllowed ? `<button class="button archive-agent" data-id="${escapeHtml(row.id)}" data-action="${row.unarchiveAllowed ? "unarchive" : "archive"}">${row.unarchiveAllowed ? "보관 해제" : "보관"}</button>` : ""}</div>
+          <div class="row-actions">${threadLink(row.id)}${row.currentTaskId ? '<span class="pill">작업 중 · 읽기 전용으로 확인</span>' : ''}<button class="button register-agent" data-index="${index}">프로필 편집</button>${row.archiveAllowed || row.unarchiveAllowed ? `<button class="button archive-agent" data-id="${escapeHtml(row.id)}" data-action="${row.unarchiveAllowed ? "unarchive" : "archive"}">${row.unarchiveAllowed ? "보관 해제" : "보관"}</button>` : ""}</div>
         </div>` : state.tab === "tasks" ? `
         <div class="row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.title || row.prompt || `Task ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.failure?.cause || row.id)}</div></div>
@@ -643,7 +677,7 @@
           <div class="meta">${escapeHtml(row.plan?.summary || "계획 생성 중")}</div><div class="meta">${date(row.updatedAt)}</div>
         </div>` : state.tab === "approvals" ? `
         <div class="row" data-index="${index}">
-          <div><div class="name">${escapeHtml(row.method)}</div><div class="meta">${escapeHtml(row.taskId || row.threadId || row.id)}</div></div>
+          <div><div class="name">${escapeHtml(row.reason || row.method || "승인 요청")}</div><div class="meta">${escapeHtml(row.command || row.method || "명령 정보 없음")}</div>${row.cwd ? `<div class="meta">${escapeHtml(row.cwd)}</div>` : ""}</div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
           <div>${row.status === "pending" ? `<button class="button approval" data-id="${escapeHtml(row.id)}" data-decision="decline">거절</button> <button class="button primary approval" data-id="${escapeHtml(row.id)}" data-decision="accept">승인</button>` : `<span class="pill">${escapeHtml(row.decision || row.status)}</span>`}</div>
           <div class="meta">${date(row.createdAt)}</div>
@@ -672,7 +706,7 @@
         </div>`).join("");
 
       [...document.querySelectorAll(".row")].forEach((row) => row.addEventListener("click", () => showDetail(rows[Number(row.dataset.index)])));
-      [...document.querySelectorAll(".open-agent")].forEach((link) => link.addEventListener("click", (event) => event.stopPropagation()));
+      bindAgentLinks();
       [...document.querySelectorAll(".register-agent")].forEach((button) => button.addEventListener("click", (event) => {
         event.stopPropagation();
         openRegisterAgent(rows[Number(button.dataset.index)]);
@@ -785,6 +819,12 @@
         else handler.resolve(message.result);
         return;
       }
+      if (message.method === "ui/notifications/tool-input") {
+        const input = message.params?.arguments ?? message.params ?? {};
+        if (input.cwd && !state.cwd) state.cwd = input.cwd;
+        if (input.runId && !state.runId) state.runId = input.runId;
+        if (input.scope) state.scope = input.scope;
+      }
       if (message.method === "ui/notifications/tool-result") applySnapshot(message.params?.structuredContent ?? {});
     }, { passive: true });
 
@@ -879,11 +919,24 @@
       } catch (error) { el("updated").textContent = `에이전트 등록 실패: ${error.message}`; }
       finally { submit.disabled = false; }
     });
+    const compatibilityOutput = openaiBridge?.toolOutput?.structuredContent ?? openaiBridge?.toolOutput ?? null;
+    if (!standalone && compatibilityOutput && typeof compatibilityOutput === "object") applySnapshot(compatibilityOutput);
+
     if (standalone) {
       refresh().catch((error) => { el("updated").textContent = error.message; });
       connectEventStream();
     } else {
-      refresh().then(scheduleEmbeddedPoll).catch((error) => { el("updated").textContent = error.message; });
+      if (state.dashboardLeaseToken) {
+        refresh().then(scheduleEmbeddedPoll).catch((error) => { el("updated").textContent = error.message; });
+      } else {
+        el("updated").textContent = "Codex에서 대시보드 상태를 연결하는 중…";
+        setTimeout(() => {
+          const delayed = openaiBridge?.toolOutput?.structuredContent ?? openaiBridge?.toolOutput ?? null;
+          if (delayed && typeof delayed === "object") applySnapshot(delayed);
+          if (state.dashboardLeaseToken) void refresh().then(scheduleEmbeddedPoll);
+          else el("updated").textContent = "내장 UI 연결을 받지 못했습니다. Control Plane에서 대시보드를 다시 여세요.";
+        }, 1_500);
+      }
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
           clearTimeout(pollTimer);

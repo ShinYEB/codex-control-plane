@@ -133,7 +133,7 @@ Codex 에이전트 상황판을 UI로 보여줘.
 
 이 경우 `dispatch_agent_task`가 즉시 작업 ID를 반환하고 실제 작업은 백그라운드에서 계속됩니다.
 
-핵심 MCP 도구는 `plan_agent_run`, `revise_agent_plan`, `prepare_agent_run`, `start_agent_run`, `synthesize_run`, `list_approvals`, `resolve_approval`, `list_managed_worktrees`, `cleanup_worktree`, `list_role_templates`, `upsert_role_template`, `get_desktop_handoff`, 기존 agent/task/run/memory 도구와 `show_agent_dashboard`입니다. `mark_dashboard_ready`는 이전 버전 호환용 `start_agent_run` 별칭입니다. 기존 thread ID로 작업할 때 명시적으로 `reuseExisting=true`를 전달하지 않는 한 원본 세션 대신 포크에서 실행합니다. 이미 임대된 세션의 직접 재사용을 요청하면 동일 세션에 두 writer를 붙이지 않고 안전한 포크로 전환합니다. 대시보드의 채팅 링크도 작업이 종료된 뒤에만 활성화됩니다.
+핵심 MCP 도구는 `plan_agent_run`, `revise_agent_plan`, `prepare_agent_run`, `start_agent_run`, `synthesize_run`, `list_approvals`, `resolve_approval`, `list_managed_worktrees`, `cleanup_worktree`, `list_role_templates`, `upsert_role_template`, `get_desktop_handoff`, 기존 agent/task/run/memory 도구와 `show_agent_dashboard`입니다. `mark_dashboard_ready`는 이전 버전 호환용 `start_agent_run` 별칭입니다. 작업은 기본적으로 프로젝트·역할·capability가 맞는 기존 세션을 임대해 재사용하고, 안전한 후보가 없을 때만 새 세션을 만듭니다. 이미 임대된 세션에는 두 writer를 붙이지 않고 안전한 포크로 전환합니다. 대시보드의 `Codex에서 세션 찾기`는 MCP Apps 메시지 브리지를 통해 현재 Control Plane 대화에 이동 요청을 보내므로 실행 중 세션도 읽기용으로 찾을 수 있습니다.
 
 ### 중앙 Planner와 원자적 실행 그래프
 

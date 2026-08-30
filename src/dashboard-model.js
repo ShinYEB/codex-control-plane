@@ -71,6 +71,9 @@ function approvalSummary(approval) {
   return {
     id: approval.id, taskId: approval.taskId, threadId: approval.threadId,
     method: approval.method, status: approval.status, decision: approval.decision,
+    reason: approval.request?.reason ?? null,
+    command: approval.request?.command ?? null,
+    cwd: approval.request?.cwd ?? null,
     createdAt: approval.createdAt,
   };
 }

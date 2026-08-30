@@ -286,3 +286,19 @@ test("resumeAgent surfaces an active-writer ownership error without stealing or 
   await assert.rejects(control.resumeAgent("native_locked"), (error) => error.code === "THREAD_ACTIVE_WRITER" && error.retryable === true);
   assert.equal(attempts, 3);
 });
+
+test("managed Data Plane threads disable the Control Plane plugin on start, resume, and fork", async () => {
+  const requests = [];
+  const client = { request: async (method, params) => {
+    requests.push({ method, params });
+    return { thread: { id: params.threadId ?? `thread_${requests.length}`, cwd: params.cwd ?? "/repo", status: { type: "idle" } } };
+  } };
+  const control = new CodexControlPlane(client);
+  await control.spawnAgent({ cwd: "/repo" });
+  await control.resumeAgent("thread_resume", { cwd: "/repo" });
+  await control.forkAgent("thread_source", { cwd: "/repo" });
+  for (const request of requests) {
+    assert.deepEqual(request.params.config.plugins["codex-agent-control-plane@personal"], { enabled: false });
+  }
+  assert.deepEqual(requests.map((entry) => entry.method), ["thread/start", "thread/resume", "thread/fork"]);
+});

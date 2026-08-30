@@ -201,7 +201,9 @@ export class DashboardServer {
         }
       };
       push();
-      const timer = setInterval(push, 500);
+      // The web fallback has at most one dashboard. A two-second safety read is
+      // responsive enough without continuously waking SQLite while idle.
+      const timer = setInterval(push, 2_000);
       timer.unref?.();
       request.on("close", () => {
         clearInterval(timer);
