@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Agent Control Plane architecture</title>
+  <desc id="desc">A user objective flows through context resolution, planning, execution contracts, task orchestration, Codex worker threads, validation, integration, and durable result delivery.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef2ff"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="5" stdDeviation="7" flood-color="#0f172a" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "Apple SD Gothic Neo", sans-serif; }
+      .title { font-size: 28px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 15px; font-weight: 400; fill: #64748b; }
+      .section { font-size: 14px; font-weight: 700; fill: #475569; letter-spacing: 1.4px; }
+      .label { font-size: 17px; font-weight: 700; fill: #0f172a; }
+      .body { font-size: 13px; font-weight: 400; fill: #475569; }
+      .white { fill: #fff; }
+      .whiteBody { font-size: 13px; font-weight: 400; fill: #dbeafe; }
+      .line { stroke: #64748b; stroke-width: 2; fill: none; marker-end: url(#arrow); }
+      .dash { stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 5 5; fill: none; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="690" rx="24" fill="url(#background)"/>
+  <text x="56" y="58" class="title">Codex Agent Control Plane</text>
+  <text x="56" y="84" class="subtitle">맥락을 고정하고, 계약을 검증한 뒤, 여러 프로젝트의 Codex 작업을 하나의 결과로 조정합니다.</text>
+
+  <text x="56" y="129" class="section">CONTROL SURFACE</text>
+  <rect x="56" y="147" width="230" height="94" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <circle cx="88" cy="179" r="14" fill="#dbeafe"/>
+  <path d="M81 179h14M88 172v14" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
+  <text x="112" y="177" class="label">User Objective</text>
+  <text x="112" y="201" class="body">Codex 대화 · CLI</text>
+  <text x="112" y="220" class="body">단일 또는 다중 프로젝트 목표</text>
+
+  <rect x="56" y="267" width="230" height="82" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <text x="82" y="300" class="label">Thin MCP Proxy</text>
+  <text x="82" y="325" class="body">host identity · transport only</text>
+  <path d="M171 241v24" class="line"/>
+
+  <rect x="330" y="116" width="535" height="446" rx="24" fill="#fff" stroke="#a5b4fc" stroke-width="2" filter="url(#shadow)"/>
+  <rect x="330" y="116" width="535" height="66" rx="24" fill="url(#primary)"/>
+  <path d="M330 158h535v24H330z" fill="url(#primary)"/>
+  <text x="362" y="148" class="label white">Single Control Plane Daemon</text>
+  <text x="362" y="169" class="whiteBody">single writer · durable scheduler · recovery owner</text>
+
+  <rect x="362" y="207" width="214" height="79" rx="14" fill="#eff6ff" stroke="#93c5fd"/>
+  <text x="382" y="237" class="label">Context Resolver</text>
+  <text x="382" y="261" class="body">Claims → immutable Snapshot</text>
+
+  <rect x="618" y="207" width="214" height="79" rx="14" fill="#eef2ff" stroke="#a5b4fc"/>
+  <text x="638" y="237" class="label">Planner</text>
+  <text x="638" y="261" class="body">Global · Project · Task DAG</text>
+  <path d="M577 246h39" class="line"/>
+
+  <rect x="362" y="316" width="214" height="96" rx="14" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="382" y="346" class="label">Contract Gate</text>
+  <text x="382" y="370" class="body">schema · policy · workspace</text>
+  <text x="382" y="391" class="body">fingerprint before claim</text>
+  <path d="M725 286v28H469v0" class="line"/>
+
+  <rect x="618" y="316" width="214" height="96" rx="14" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="638" y="346" class="label">RunController</text>
+  <text x="638" y="370" class="body">state · DAG · claim · lease</text>
+  <text x="638" y="391" class="body">retry · recovery · routing</text>
+  <path d="M577 364h39" class="line"/>
+
+  <rect x="362" y="442" width="470" height="86" rx="14" fill="#0f172a"/>
+  <text x="386" y="475" class="label white">SQLite Registry · schema v7</text>
+  <text x="386" y="500" class="whiteBody">Context · Global Run · Project Run · Task · Agent · Lease · Artifact · Delivery</text>
+  <path d="M469 413v27" class="dash"/>
+  <path d="M725 413v27" class="dash"/>
+
+  <path d="M286 308h42" class="line"/>
+
+  <text x="913" y="129" class="section">EXECUTION</text>
+  <rect x="913" y="147" width="231" height="77" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <text x="936" y="178" class="label">Codex App Server</text>
+  <text x="936" y="201" class="body">managed thread writer</text>
+  <path d="M865 364h27v-178h19" class="line"/>
+
+  <rect x="913" y="253" width="231" height="92" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <text x="936" y="285" class="label">Agent Threads</text>
+  <text x="936" y="309" class="body">Orchestrator · Implementer</text>
+  <text x="936" y="330" class="body">Reviewer · QA · Ephemeral</text>
+  <path d="M1028 224v27" class="line"/>
+
+  <rect x="913" y="374" width="231" height="92" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
+  <text x="936" y="406" class="label">Project Workspaces</text>
+  <text x="936" y="430" class="body">shared · managed worktree</text>
+  <text x="936" y="451" class="body">artifact · durable handoff</text>
+  <path d="M1028 345v27" class="line"/>
+
+  <rect x="913" y="495" width="231" height="92" rx="16" fill="#ecfdf5" stroke="#6ee7b7" filter="url(#shadow)"/>
+  <text x="936" y="527" class="label">Validate &amp; Integrate</text>
+  <text x="936" y="551" class="body">acceptance · journal · result</text>
+  <text x="936" y="572" class="body">origin delivery / inbox fallback</text>
+  <path d="M1028 466v27" class="line"/>
+
+  <path d="M913 541H885v75H171v-265" class="line"/>
+  <rect x="330" y="600" width="535" height="48" rx="24" fill="#fff" stroke="#cbd5e1"/>
+  <circle cx="362" cy="624" r="8" fill="#22c55e"/>
+  <text x="381" y="630" class="body">Optional dashboard observes the Registry. It never starts or completes work.</text>
+</svg>

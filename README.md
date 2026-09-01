@@ -19,42 +19,60 @@ Codex를 오래 사용할수록 스레드는 늘어나지만, 중요한 결정�
 | 계약 오류와 재시도로 실행이 반복 실패한다 | strict execution contract, pre-claim gate, fingerprint 기반 retry·repair 정책으로 실행 전에 차단합니다. |
 | 데몬 종료나 통합 충돌로 상태가 유실된다 | SQLite Registry, fenced claim, lease, integration journal, durable delivery로 복구합니다. |
 
+## 사용 방법
+
+### Codex Desktop에서 요청하기
+
+이 저장소의 runtime을 Codex Agent Control Plane 플러그인으로 배포한 경우, **도구 이름을 직접 지정하지 않고 자연어로 요청하는 방식**이 기본입니다.
+
+1. 플러그인을 처음 설치하거나 runtime을 갱신했다면 Codex Desktop에서 새 대화를 엽니다.
+2. 대상 프로젝트에서 `/mcp`를 열어 `codex_control_plane` 연결을 확인합니다.
+3. 원하는 목표, 대상 범위, 완료 조건을 자연어로 전달합니다.
+4. 접수된 Run은 대시보드와 관계없이 백그라운드에서 실행되며, 최종 결과는 요청한 대화로 돌아옵니다.
+
+다음 예시를 그대로 시작점으로 사용할 수 있습니다.
+
+| 목적 | 요청 예시 | 내부 실행 |
+|---|---|---|
+| 읽기 전용 분석 | `이 프로젝트의 인증 흐름을 분석하고 위험을 우선순위로 정리해줘.` | 단일 Project Run, `read-only` 계약 |
+| 코드 수정 | `실패하는 테스트의 원인을 고치고 전체 테스트로 검증해줘.` | write 계약, Validator, 필요 시 managed worktree |
+| 기존 맥락 활용 | `API 설계를 검토했던 스레드의 결정을 반영해서 구현 계획을 만들어줘.` | 요청 스레드 색인, Context Snapshot 생성 |
+| 다중 프로젝트 | `backend의 응답 계약을 바꾸고 frontend 타입과 화면도 함께 맞춰줘.` | Global Run, 프로젝트별 DAG, validated handoff |
+| 진행 상황 확인 | `현재 실행 중인 작업을 대시보드로 보여줘.` | embedded dashboard 조회; 실행 상태에는 영향 없음 |
+
+복합 작업은 목표와 완료 조건을 함께 주면 더 명확하게 계획됩니다.
+
+```text
+backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해줘.
+
+완료 조건:
+- backend API와 schema가 일치한다.
+- frontend 타입과 화면이 새 응답을 사용한다.
+- 각 프로젝트 테스트가 통과한다.
+- 프로젝트 간 전달 근거와 최종 변경 목록을 보고한다.
+```
+
+요청을 받으면 `dispatch_control_request`가 Run을 먼저 기록하고 즉시 ID를 반환합니다. 단일 작업은 직접 실행될 수 있고, 복합 작업은 Planner가 Task DAG로 분해합니다. 사용자는 내부 도구 이름을 알 필요가 없으며 필요할 때만 진행 상황이나 특정 Run을 질문하면 됩니다.
+
+### 대시보드 보기
+
+```text
+현재 프로젝트의 에이전트 대시보드를 보여줘.
+```
+
+기본값은 현재 Codex 대화 안의 embedded dashboard입니다. 별도 페이지가 필요할 때만 `웹 대시보드로 열어줘`라고 요청합니다. 대시보드는 다음 정보를 제공합니다.
+
+- Global Run과 Project Run 진행률
+- Task dependency와 현재 runnable 상태
+- 배정된 Agent 스레드와 routing 근거
+- Validator, retry, integration과 failure의 next action
+- Context Snapshot과 실행 계약의 고급 진단
+
+대시보드는 Registry를 관찰하는 선택형 화면입니다. 열기·새로고침·닫기는 작업을 시작하거나 완료하지 않습니다.
+
 ## 아키텍처
 
-```mermaid
-flowchart TB
-    U[User Objective] --> CP[Control Plane thread]
-    CP --> PX[Thin MCP proxy]
-
-    subgraph D[Single Control Plane daemon]
-        CR[Context Resolver<br/>Claims → Snapshot]
-        PL[Planner<br/>Global / Project / Task graph]
-        RC[RunController<br/>state · claim · lease · retry]
-        RG[(SQLite Registry<br/>schema v7)]
-        RT[Router & Thread Lifecycle]
-        VM[Validator & Integration Manager]
-        SY[Synthesizer & Durable Delivery]
-
-        CR --> PL --> RC
-        RC <--> RG
-        CR <--> RG
-        RT <--> RG
-        VM <--> RG
-        SY <--> RG
-    end
-
-    PX --> CR
-    RC --> AS[Codex App Server]
-    AS --> O[Orchestrator thread]
-    AS --> W1[Data Plane thread A]
-    AS --> W2[Data Plane thread B]
-    W1 --> P1[Project / managed worktree]
-    W2 --> P2[Project / managed worktree]
-    W1 --> VM
-    W2 --> VM
-    VM --> SY --> CP
-    RG --> UI[Optional dashboard<br/>HTTP / SSE / MCP Apps]
-```
+![Codex Agent Control Plane 전체 아키텍처. 사용자 목표가 MCP 프록시, 단일 데몬, Codex Agent 스레드와 프로젝트 작업공간을 거쳐 검증된 결과로 돌아오는 구조](./docs/assets/architecture-overview.svg)
 
 ### 세 Plane의 책임
 
@@ -68,6 +86,8 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 
 ## 요청이 실행되는 과정
 
+![사용자 요청이 맥락 고정, 계획과 계약 검증, 분산 실행, 결과 전달로 이어지는 다섯 단계](./docs/assets/request-flow.svg)
+
 1. 사용자 목표와 origin thread를 durable Run으로 기록합니다.
 2. 관련 Context Claim을 해석하고 immutable Context Snapshot을 확정합니다. 해결되지 않은 동급 충돌은 여기서 차단합니다.
 3. Planner가 Global Run → Project Run → Task DAG를 만들고 전체 그래프를 원자적으로 저장합니다.
@@ -75,17 +95,6 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 5. 검증된 Task만 claim하며 Router가 기존 스레드 재사용, fork, 새 스레드, ephemeral 실행 또는 대기를 결정합니다.
 6. Worker 결과를 Validator가 검사하고, 필요한 artifact를 managed worktree에서 프로젝트로 통합합니다.
 7. 하나의 Result projection을 만들어 origin thread로 직접 전달하거나 durable inbox에서 한 번만 회수합니다.
-
-```text
-Objective
-  → Context Snapshot
-  → Global Run
-      → Project Run A → Task DAG → Agent threads
-      → Project Run B → Task DAG → Agent threads
-      → validated cross-project handoff
-  → validation / integration
-  → one durable result
-```
 
 ## 핵심 도메인 모델
 
@@ -148,7 +157,7 @@ Objective
 - Run DAG, 현재 작업, 결과, 스레드, 고급 계약 진단
 - 대시보드 없이도 계속되는 background execution
 
-## 빠른 시작
+## 로컬 소스에서 실행
 
 요구 사항은 Node.js 20 이상과 로그인된 Codex CLI입니다. 외부 npm runtime dependency는 없습니다.
 
@@ -158,7 +167,7 @@ cd codex-control-plane
 node --test
 ```
 
-CLI로 현재 프로젝트의 스레드를 조회하거나 새 작업을 시작할 수 있습니다.
+테스트 후 CLI로 현재 프로젝트의 스레드를 조회하거나 새 작업을 시작할 수 있습니다. 모든 명령은 단일 로컬 daemon으로 전달되고 결과는 JSON으로 출력됩니다.
 
 ```bash
 PROJECT_ROOT=/absolute/path/to/project
@@ -186,7 +195,15 @@ node src/cli.js run THREAD_ID --prompt "앞선 분석을 이어서 테스트 전
 node src/cli.js fork THREAD_ID
 ```
 
-Codex Desktop 플러그인으로 배포할 때는 실행 중인 작업과 runtime generation을 먼저 확인해야 합니다. 절차는 [Runtime lifecycle](./docs/operations/RUNTIME_LIFECYCLE.md)을 따르며, 재설치 후에는 새 대화를 열어야 새 MCP generation이 적용됩니다.
+일회성 스레드와 명시적 Agent 생성:
+
+```bash
+node src/cli.js start --cwd "$PROJECT_ROOT"
+node src/cli.js start --cwd "$PROJECT_ROOT" --ephemeral
+node src/cli.js fork THREAD_ID --ephemeral
+```
+
+이 공개 저장소는 Control Plane runtime 소스입니다. Codex Desktop 플러그인 패키징·배포 시에는 실행 중인 작업과 runtime generation을 먼저 확인해야 합니다. 절차는 [Runtime lifecycle](./docs/operations/RUNTIME_LIFECYCLE.md)을 따르며, 재설치 후에는 새 대화를 열어야 새 MCP generation이 적용됩니다.
 
 ## 현재 구현 상태
 
@@ -218,6 +235,7 @@ src/      daemon, registry, state machine, contracts, routing, MCP/CLI
 ui/       embedded dashboard
 test/     unit, contract, recovery, integration, E2E tests
 docs/     architecture, ADR, contracts, operations, verification gates
+  assets/ README architecture and request-flow visuals
 scripts/  runtime parity, deployment, reinstall preflight
 ```
 

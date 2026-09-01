@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Agent Control Plane request flow</title>
+  <desc id="desc">Five stages show a user request becoming a context snapshot, validated task graph, agent execution, and one durable result.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="9" flood-color="#000" flood-opacity="0.25"/>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10z" fill="#818cf8"/>
+    </marker>
+    <style>
+      text { font-family: Arial, "Apple SD Gothic Neo", sans-serif; }
+      .title { font-size: 28px; font-weight: 700; fill: #fff; }
+      .sub { font-size: 15px; font-weight: 400; fill: #cbd5e1; }
+      .num { font-size: 15px; font-weight: 700; fill: #fff; }
+      .label { font-size: 18px; font-weight: 700; fill: #0f172a; }
+      .body { font-size: 12px; font-weight: 400; fill: #475569; }
+      .code { font-family: SFMono-Regular, Menlo, monospace; font-size: 12px; font-weight: 500; fill: #3730a3; }
+      .arrow { stroke: #818cf8; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1200" height="430" rx="24" fill="url(#bg)"/>
+  <text x="52" y="58" class="title">요청 한 건이 실행되는 흐름</text>
+  <text x="52" y="84" class="sub">잘못된 맥락과 계약은 worker가 만들어지기 전에 멈추고, 검증된 실행만 결과까지 이어집니다.</text>
+
+  <g filter="url(#shadow)">
+    <rect x="52" y="130" width="196" height="214" rx="18" fill="#fff"/>
+    <circle cx="82" cy="160" r="17" fill="#2563eb"/><text x="77" y="165" class="num">1</text>
+    <text x="108" y="166" class="label">목표 요청</text>
+    <rect x="70" y="193" width="160" height="65" rx="10" fill="#eff6ff"/>
+    <text x="83" y="216" class="code">"API 수정하고</text>
+    <text x="83" y="237" class="code">UI도 맞춰줘"</text>
+    <text x="70" y="293" class="body">origin · authority 기록</text>
+    <text x="70" y="314" class="body">durable Run 접수</text>
+
+    <rect x="278" y="130" width="196" height="214" rx="18" fill="#fff"/>
+    <circle cx="308" cy="160" r="17" fill="#4f46e5"/><text x="303" y="165" class="num">2</text>
+    <text x="334" y="166" class="label">맥락 고정</text>
+    <rect x="296" y="193" width="160" height="65" rx="10" fill="#eef2ff"/>
+    <text x="309" y="216" class="code">Claims + provenance</text>
+    <text x="309" y="237" class="code">→ Snapshot</text>
+    <text x="296" y="293" class="body">충돌 · 누락 검사</text>
+    <text x="296" y="314" class="body">immutable 입력 확정</text>
+
+    <rect x="504" y="130" width="196" height="214" rx="18" fill="#fff"/>
+    <circle cx="534" cy="160" r="17" fill="#7c3aed"/><text x="529" y="165" class="num">3</text>
+    <text x="560" y="166" class="label">계획·계약</text>
+    <rect x="522" y="193" width="160" height="65" rx="10" fill="#f5f3ff"/>
+    <text x="535" y="216" class="code">Global → Project</text>
+    <text x="535" y="237" class="code">→ Task DAG + gate</text>
+    <text x="522" y="293" class="body">graph · fingerprint 검증</text>
+    <text x="522" y="314" class="body">invalid면 attempt 0에서 종료</text>
+
+    <rect x="730" y="130" width="196" height="214" rx="18" fill="#fff"/>
+    <circle cx="760" cy="160" r="17" fill="#0891b2"/><text x="755" y="165" class="num">4</text>
+    <text x="786" y="166" class="label">분산 실행</text>
+    <rect x="748" y="193" width="160" height="65" rx="10" fill="#ecfeff"/>
+    <text x="761" y="216" class="code">route → claim → run</text>
+    <text x="761" y="237" class="code">validate → integrate</text>
+    <text x="748" y="293" class="body">thread · worktree lease</text>
+    <text x="748" y="314" class="body">fenced token으로 결과 수락</text>
+
+    <rect x="956" y="130" width="196" height="214" rx="18" fill="#fff"/>
+    <circle cx="986" cy="160" r="17" fill="#16a34a"/><text x="981" y="165" class="num">5</text>
+    <text x="1012" y="166" class="label">결과 전달</text>
+    <rect x="974" y="193" width="160" height="65" rx="10" fill="#ecfdf5"/>
+    <text x="987" y="216" class="code">one Result projection</text>
+    <text x="987" y="237" class="code">→ origin / inbox</text>
+    <text x="974" y="293" class="body">project evidence 종합</text>
+    <text x="974" y="314" class="body">origin에 한 번만 전달</text>
+  </g>
+
+  <path d="M250 237h25" class="arrow"/>
+  <path d="M476 237h25" class="arrow"/>
+  <path d="M702 237h25" class="arrow"/>
+  <path d="M928 237h25" class="arrow"/>
+  <text x="52" y="389" class="sub">관찰: 대시보드는 Registry의 상태를 읽을 뿐 실행을 시작하거나 성공으로 바꾸지 않습니다.</text>
+</svg>
