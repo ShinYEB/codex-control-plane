@@ -725,8 +725,8 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
   assert.match(result.contents[0].text, /ORCHESTRATOR CODEX THREAD/);
   assert.match(result.contents[0].text, /DATA PLANE/);
   assert.match(result.contents[0].text, /plane-map/);
-  assert.match(result.contents[0].text, /컨트롤 플레인 작업함/);
-  assert.match(result.contents[0].text, /필요할 때만 백그라운드 작업의 상세 내용을 확인/);
+  assert.match(result.contents[0].text, />작업함</);
+  assert.doesNotMatch(result.contents[0].text, /필요할 때만/);
 });
 
 test("authorized dashboards can open an existing Codex Desktop task without sending a prompt", async () => {

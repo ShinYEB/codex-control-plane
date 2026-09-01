@@ -52,7 +52,7 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 - 프로젝트 간 전달 근거와 최종 변경 목록을 보고한다.
 ```
 
-요청을 받으면 `dispatch_control_request`가 Run을 먼저 기록하고 즉시 ID를 반환합니다. 단일 작업은 직접 실행될 수 있고, 복합 작업은 Planner가 Task DAG로 분해합니다. 사용자는 내부 도구 이름을 알 필요가 없으며 필요할 때만 진행 상황이나 특정 Run을 질문하면 됩니다.
+요청을 받으면 `dispatch_control_request`가 Run을 먼저 기록하고 즉시 ID를 반환합니다. 단일 작업은 직접 실행될 수 있고, 복합 작업은 Planner가 Task DAG로 분해합니다. 진행 상황이나 특정 Run은 자연어로 조회할 수 있습니다.
 
 ### 대시보드 보기
 
@@ -60,7 +60,7 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 현재 프로젝트의 에이전트 대시보드를 보여줘.
 ```
 
-기본값은 현재 Codex 대화 안의 embedded dashboard입니다. 별도 페이지가 필요할 때만 `웹 대시보드로 열어줘`라고 요청합니다. 대시보드는 다음 정보를 제공합니다.
+기본값은 현재 Codex 대화 안의 embedded dashboard입니다. 별도 페이지는 `웹 대시보드로 열어줘`라고 요청합니다. 대시보드는 다음 정보를 제공합니다.
 
 - Global Run과 Project Run 진행률
 - Task dependency와 현재 runnable 상태

@@ -58,6 +58,15 @@ test("chat-first dashboard keeps history and internals collapsed by default", as
   assert.doesNotMatch(html, /<div class="run-label">선택한 실행<\/div>/);
 });
 
+test("dashboard copy omits redundant helper text", async () => {
+  const html = await readFile(dashboardPath, "utf8");
+  assert.doesNotMatch(html, /필요할 때만/);
+  assert.doesNotMatch(html, /자동 갱신/);
+  assert.doesNotMatch(html, /확인이 필요할 때만 알려드립니다/);
+  assert.doesNotMatch(html, /class="metric-help"/);
+  assert.doesNotMatch(html, /진행 흐름 · 스레드 · 진단/);
+});
+
 test("dashboard separates results, progress, threads, graph, and advanced diagnostics", async () => {
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /data-tab="results">결과/);
