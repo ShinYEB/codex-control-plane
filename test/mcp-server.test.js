@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { McpControlServer } from "../src/mcp-server.js";
 import { ControlRegistry } from "../src/registry.js";
+import { ContextResolver } from "../src/context-resolver.js";
+import { compileExecutionContract, contractFingerprint } from "../src/execution-contracts.js";
 
 function fakeServer(control, options = {}) {
   return new McpControlServer({
@@ -28,13 +33,16 @@ test("MCP initialize advertises tools and safety instructions", async () => {
   const initialized = await server.handleRequest({ method: "initialize", params: { protocolVersion: "2025-06-18" } });
   const listed = await server.handleRequest({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "codex-control-plane");
-  assert.match(initialized.instructions, /single Codex session writer/);
-  assert.match(initialized.instructions, /compatible reusable Data Plane session/);
-  assert.match(initialized.instructions, /durable Orchestrator session/);
+  assert.match(initialized.instructions, /single Codex thread writer/);
+  assert.match(initialized.instructions, /compatible reusable Data Plane thread/);
+  assert.match(initialized.instructions, /durable Orchestrator thread/);
   assert.deepEqual(listed.tools.map((tool) => tool.name), [
     "list_agents",
     "archive_agent",
     "unarchive_agent",
+    "list_thread_lifecycles",
+    "get_thread_budget",
+    "upsert_thread_budget",
     "inspect_agent",
     "register_agent_profile",
     "upsert_project_memory",
@@ -48,15 +56,20 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "dispatch_agent_task",
     "prepare_agent_run",
     "dispatch_control_request",
-    "start_agent_run",
-    "mark_dashboard_ready",
+    "drain_control_results",
     "get_run_graph",
     "list_runs",
+    "prepare_global_run",
+    "list_global_runs",
+    "get_global_run",
+    "refresh_global_run",
+    "cancel_global_run",
     "archive_run",
     "unarchive_run",
     "cancel_run",
     "list_tasks",
     "cancel_task",
+    "repair_task_contract",
     "list_worktree_leases",
     "acquire_worktree_lease",
     "release_worktree_lease",
@@ -66,18 +79,303 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "list_plans",
     "get_plan",
     "synthesize_run",
-    "list_approvals",
-    "resolve_approval",
     "list_managed_worktrees",
     "cleanup_worktree",
+    "recover_managed_worktree",
     "list_role_templates",
     "upsert_role_template",
     "get_desktop_handoff",
+    "open_desktop_thread",
     "get_task",
     "get_dashboard_state",
     "get_dashboard_detail",
     "show_agent_dashboard",
   ]);
+});
+
+test("thread budget tools expose immutable revisions and lifecycle counters", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mcp-thread-budget-"));
+  const cwd = join(directory, "project");
+  mkdirSync(cwd);
+  const server = fakeServer({ connect: async () => {} });
+  try {
+    server.registry.upsertAgent({ id: "budget_agent", cwd, status: "idle" }, { role: "reviewer" });
+    const revised = await server.handleRequest({ method: "tools/call", params: { name: "upsert_thread_budget", arguments: {
+      cwd, role: "reviewer", policy: { maxProjectThreads: 1, maxRoleThreads: 1, maxLineageForks: 0 },
+    } } });
+    assert.equal(revised.structuredContent.version, 1);
+    const state = await server.handleRequest({ method: "tools/call", params: { name: "get_thread_budget", arguments: { cwd, role: "reviewer", sourceThreadId: "budget_agent" } } });
+    assert.equal(state.structuredContent.projectCount, 1);
+    assert.equal(state.structuredContent.canCreateRole, false);
+    const lifecycle = await server.handleRequest({ method: "tools/call", params: { name: "list_thread_lifecycles", arguments: { role: "reviewer" } } });
+    assert.equal(lifecycle.structuredContent.threads[0].threadId, "budget_agent");
+  } finally {
+    await server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("automatic routing archives an ephemeral one-off worker after its terminal task", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mcp-ephemeral-worker-"));
+  const cwd = join(directory, "project");
+  mkdirSync(cwd);
+  const archiveCalls = [];
+  let spawnOptions;
+  const control = {
+    connect: async () => {},
+    listAgents: async () => ({ agents: [], nextCursor: null }),
+    spawnAgent: async (options) => { spawnOptions = options; return { id: "ephemeral_analysis", cwd, status: "idle", provider: "codex", ephemeral: true }; },
+    runTask: async (_id, _prompt, options) => {
+      options.onStarted?.({ turnId: "turn_ephemeral" });
+      return { output: "analysis complete", turnId: "turn_ephemeral", turn: { status: "completed" } };
+    },
+    archiveAgent: async (threadId) => { archiveCalls.push(threadId); },
+  };
+  const server = fakeServer(control);
+  try {
+    server.registry.upsertThreadBudget({ cwd, role: "analyst", policy: { maxProjectThreads: 0, maxRoleThreads: 0, maxLineageForks: 0 } });
+    const response = await server.handleRequest({ method: "tools/call", params: { name: "run_agent_task", arguments: {
+      prompt: "inspect the current contract failures", cwd, role: "analyst", taskKind: "analysis", mutatesWorkspace: false,
+    } } });
+    assert.notEqual(response.isError, true);
+    assert.equal(response.structuredContent.mode, "ephemeral_spawned");
+    assert.equal(spawnOptions.ephemeral, true);
+    assert.deepEqual(archiveCalls, ["ephemeral_analysis"]);
+    assert.ok(server.registry.getAgent("ephemeral_analysis").archivedAt);
+    assert.equal(server.registry.getThreadLifecycle("ephemeral_analysis").status, "archived");
+    assert.equal(response.structuredContent.record.status, "completed");
+  } finally {
+    await server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("prepare_global_run atomically exposes root and dependent Project Runs through MCP", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mcp-global-run-"));
+  const projectA = join(directory, "project-a");
+  const projectB = join(directory, "project-b");
+  mkdirSync(projectA);
+  mkdirSync(projectB);
+  const server = fakeServer({ connect: async () => {} }, { schedulerConcurrency: 0 });
+  try {
+    const context = new ContextResolver(server.registry).resolve({ objective: "Coordinate two projects" });
+    const response = await server.handleRequest({ method: "tools/call", params: { name: "prepare_global_run", arguments: {
+      globalRunId: "mcp_global", requestKey: "mcp-global-request", objective: "Coordinate two projects",
+      contextSnapshotId: context.id, contextSnapshotFingerprint: context.fingerprint,
+      projectRuns: [
+        { id: "mcp_run_a", cwd: projectA, tasks: [{ id: "mcp_task_a", prompt: "Analyze A" }] },
+        { id: "mcp_run_b", cwd: projectB, tasks: [{ id: "mcp_task_b", prompt: "Analyze B" }] },
+      ],
+      authorizationManifests: [projectA, projectB].map((root, index) => ({
+        runId: index === 0 ? "mcp_run_a" : "mcp_run_b", allowedRoots: [root], taskKinds: ["analysis"],
+        mutatesWorkspace: false, sideEffectPolicies: ["none"], sandboxCeiling: "read-only",
+        networkAccess: false, workspaceModes: ["shared"],
+      })),
+      dependencies: [{ id: "mcp_a_to_b", producerRunId: "mcp_run_a", consumerRunId: "mcp_run_b", condition: "all_success", requiredOutputs: ["report"] }],
+    } } });
+    assert.equal(response.isError, undefined);
+    assert.equal(response.structuredContent.globalRun.status, "running");
+    assert.equal(response.structuredContent.revision.status, "validated");
+    assert.equal(server.registry.getTask("mcp_task_a").status, "queued");
+    assert.equal(server.registry.getTask("mcp_task_b").status, "staged");
+    const detail = await server.handleRequest({ method: "tools/call", params: { name: "get_global_run", arguments: { globalRunId: "mcp_global" } } });
+    assert.equal(detail.structuredContent.dependencies[0].status, "pending");
+    assert.equal(detail.structuredContent.memberships.length, 2);
+  } finally {
+    await server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("Global Run consumers receive only validated durable cross-project handoff evidence", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mcp-global-handoff-"));
+  const projectA = join(directory, "project-a");
+  const projectB = join(directory, "project-b");
+  mkdirSync(projectA);
+  mkdirSync(projectB);
+  const prompts = [];
+  let nextAgent = 0;
+  const control = {
+    connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }),
+    spawnAgent: async () => ({ id: `global_agent_${++nextAgent}`, status: "idle", provider: "codex" }),
+    forkAgent: async (id) => ({ id: `${id}_fork`, status: "idle", provider: "codex", forkedFromId: id }),
+    resumeAgent: async (id) => ({ id, status: "idle", provider: "codex" }), nameAgent: async () => {}, pinAgent: async () => {},
+    runTask: async (_id, prompt, options = {}) => {
+      prompts.push(prompt);
+      options.onStarted?.({ turnId: `global_turn_${prompts.length}` });
+      return { output: prompt.includes("Produce global report") ? "GLOBAL_REPORT" : "consumed", turnId: `global_turn_${prompts.length}`, turn: { status: "completed" } };
+    },
+  };
+  const server = fakeServer(control, { schedulerConcurrency: 1, schedulerIntervalMs: 5 });
+  try {
+    const context = new ContextResolver(server.registry).resolve({ objective: "Pass a report between projects" });
+    server.startBackground();
+    await server.handleRequest({ method: "tools/call", params: { name: "prepare_global_run", arguments: {
+      globalRunId: "handoff_global", objective: "Pass a report between projects",
+      contextSnapshotId: context.id, contextSnapshotFingerprint: context.fingerprint,
+      projectRuns: [
+        { id: "handoff_run_a", cwd: projectA, tasks: [{ id: "handoff_task_a", prompt: "Produce global report", outputs: ["report"] }] },
+        { id: "handoff_run_b", cwd: projectB, tasks: [{ id: "handoff_task_b", prompt: "Consume global report" }] },
+      ],
+      authorizationManifests: [
+        { runId: "handoff_run_a", allowedRoots: [projectA], taskKinds: ["analysis"], mutatesWorkspace: false, sideEffectPolicies: ["none"], sandboxCeiling: "read-only", networkAccess: false, workspaceModes: ["shared"] },
+        { runId: "handoff_run_b", allowedRoots: [projectB], taskKinds: ["analysis"], mutatesWorkspace: false, sideEffectPolicies: ["none"], sandboxCeiling: "read-only", networkAccess: false, workspaceModes: ["shared"] },
+      ],
+      dependencies: [{ id: "durable_report", producerRunId: "handoff_run_a", consumerRunId: "handoff_run_b", requiredOutputs: ["report"], acceptanceCriteria: ["report evidence is attached"] }],
+    } } });
+    await waitUntil(() => server.registry.getGlobalRun("handoff_global")?.status === "completed");
+    const consumerPrompt = prompts.find((prompt) => prompt.includes("Consume global report"));
+    assert.match(consumerPrompt, /A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS/);
+    assert.match(consumerPrompt, /GLOBAL_REPORT/);
+    assert.match(consumerPrompt, /durable_report/);
+    const handoff = server.registry.getCrossProjectHandoff("durable_report");
+    assert.equal(handoff.status, "received");
+    assert.ok(handoff.receiptHash);
+    assert.equal(JSON.stringify(handoff.payload).includes(projectA), false);
+  } finally {
+    await server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("repair_task_contract preserves failure history and requeues with a new explicit contract", async () => {
+  const server = fakeServer({ connect: async () => {} }, { schedulerConcurrency: 0 });
+  const previous = compileExecutionContract({
+    key: "repairable",
+    taskKind: "implementation",
+    mutatesWorkspace: true,
+    sandbox: "workspace-write",
+    workspaceMode: "shared",
+    integrationStrategy: "none",
+  });
+  server.registry.createTask({
+    id: "repairable",
+    prompt: "update a file",
+    cwd: "/repo",
+    status: "failed",
+    attempt: 1,
+    maxAttempts: 1,
+    error: "shared workspace is unavailable",
+    metadata: {
+      executionContract: previous,
+      execution: { executionContract: previous },
+      failure: { type: "configuration", cause: "shared workspace is unavailable", nextAction: "repair_contract" },
+    },
+  });
+
+  const response = await server.handleRequest({ method: "tools/call", params: { name: "repair_task_contract", arguments: {
+    taskId: "repairable",
+    sandbox: "workspace-write",
+    workspaceMode: "worktree",
+    integrationStrategy: "patch",
+  } } });
+  const task = response.structuredContent.task;
+  assert.equal(response.isError, undefined);
+  assert.equal(task.status, "queued");
+  assert.equal(task.error, null);
+  assert.equal(task.maxAttempts, 2);
+  assert.equal(task.metadata.executionContract.workspaceMode, "worktree");
+  assert.equal(task.metadata.executionContract.integrationStrategy, "patch");
+  assert.notEqual(task.metadata.executionContract.fingerprint, previous.fingerprint);
+  assert.equal(task.metadata.contractRevision, 2);
+  assert.equal(task.metadata.contractHistory[0].fingerprint, previous.fingerprint);
+  assert.equal(task.metadata.priorFailures.length, 1);
+  assert.equal(task.metadata.failure, null);
+  await server.close();
+});
+
+test("invalid persisted contracts fail before claim without consuming an attempt", async () => {
+  let controlConnections = 0;
+  const server = fakeServer({ connect: async () => { controlConnections += 1; } }, { schedulerConcurrency: 1, schedulerIntervalMs: 5 });
+  const contract = compileExecutionContract({ key: "invalid_preclaim", taskKind: "analysis", mutatesWorkspace: false });
+  server.registry.createRun({ id: "invalid_run", cwd: "/repo", status: "running" });
+  server.registry.createTask({
+    id: "invalid_preclaim",
+    prompt: "inspect",
+    cwd: "/repo",
+    metadata: {
+      runId: "invalid_run",
+      executionContract: { ...contract, fingerprint: "00000000000000000000" },
+      execution: { executionContract: { ...contract, fingerprint: "00000000000000000000" } },
+    },
+  });
+
+  server.startBackground();
+  const task = await waitUntil(() => {
+    const current = server.registry.getTask("invalid_preclaim");
+    return current.status === "failed" ? current : null;
+  });
+  assert.equal(task.attempt, 0);
+  assert.equal(task.workerId, null);
+  assert.equal(task.claimToken, null);
+  assert.equal(task.metadata.failure.stage, "contract_preflight");
+  assert.equal(task.metadata.failure.category, "configuration");
+  assert.equal(task.metadata.failure.nextAction, "repair_contract");
+  assert.equal(task.metadata.failure.repairable, true);
+  assert.equal(task.metadata.failure.executionFingerprint, "00000000000000000000");
+  assert.equal(server.registry.getRun("invalid_run").status, "failed");
+  assert.equal(controlConnections, 0);
+  await server.close();
+});
+
+test("external persisted contracts are blocked as non-repairable policy before claim", async () => {
+  const server = fakeServer({ connect: async () => { throw new Error("control must not start"); } }, { schedulerConcurrency: 1, schedulerIntervalMs: 5 });
+  const valid = compileExecutionContract({ key: "external_preclaim", taskKind: "analysis", mutatesWorkspace: false });
+  const external = { ...valid, sideEffectPolicy: "external" };
+  external.fingerprint = contractFingerprint(external);
+  server.registry.createTask({
+    id: "external_preclaim",
+    prompt: "change a remote service",
+    cwd: "/repo",
+    metadata: { executionContract: external, execution: { executionContract: external } },
+  });
+
+  server.startBackground();
+  const task = await waitUntil(() => {
+    const current = server.registry.getTask("external_preclaim");
+    return current.status === "blocked_by_policy" ? current : null;
+  });
+  assert.equal(task.attempt, 0);
+  assert.equal(task.metadata.failure.category, "policy");
+  assert.equal(task.metadata.failure.nextAction, "manual_authorization");
+  assert.equal(task.metadata.failure.repairable, false);
+  await server.close();
+});
+
+test("post-claim contract validation failure safely terminalizes the claim", async () => {
+  let controlConnections = 0;
+  const server = fakeServer({ connect: async () => { controlConnections += 1; } }, { schedulerConcurrency: 1, schedulerIntervalMs: 5 });
+  const contract = compileExecutionContract({ key: "invalid_after_claim", taskKind: "analysis", mutatesWorkspace: false });
+  server.registry.createTask({
+    id: "invalid_after_claim",
+    prompt: "inspect",
+    cwd: "/repo",
+    metadata: { executionContract: contract, execution: { executionContract: contract } },
+  });
+  const claimTask = server.registry.claimTask.bind(server.registry);
+  server.registry.claimTask = (...args) => {
+    const claimed = claimTask(...args);
+    if (!claimed) return claimed;
+    return {
+      ...claimed,
+      metadata: {
+        ...claimed.metadata,
+        execution: { ...claimed.metadata.execution, executionContract: { ...contract, fingerprint: "00000000000000000000" } },
+      },
+    };
+  };
+
+  server.startBackground();
+  const task = await waitUntil(() => {
+    const current = server.registry.getTask("invalid_after_claim");
+    return current.status === "failed" ? current : null;
+  });
+  assert.equal(task.attempt, 1);
+  assert.equal(task.workerId, null);
+  assert.equal(task.claimToken, null);
+  assert.equal(task.metadata.failure.stage, "contract_validation");
+  assert.equal(controlConnections, 0);
+  await server.close();
 });
 
 test("agent profiles persist and influence automatic routing", async () => {
@@ -191,6 +489,12 @@ test("task routing provenance and capability/tool matrix persist with scheduler 
   assert.equal(task.routing.assignmentRequirementMatrix.tools.allSatisfied, true);
   assert.deepEqual(task.routing.schedulerIdentity, { type: "daemon_scheduler", instanceId: "daemon_scheduler_1" });
   assert.equal(task.routing.orchestratorSessionIdentity, null);
+  const routingDecision = server.registry.listRoutingDecisions({ taskId: task.id })[0];
+  assert.equal(task.routing.decisionId, routingDecision.id);
+  assert.equal(routingDecision.decision, "fork");
+  assert.equal(routingDecision.selectedAgentId, "route_worker");
+  assert.ok(routingDecision.evidence.length > 0);
+  assert.deepEqual(server.registry.listThreadLineage({ threadId: "route_worker" }).map((entry) => entry.parentThreadId), ["route_source"]);
   await server.close();
 });
 
@@ -205,7 +509,7 @@ test("plugin initialization performs no App Server synchronization", async () =>
   assert.deepEqual(server.registry.listAgents(), []);
 });
 
-test("a standalone MCP server refuses to become a second Codex session writer", async () => {
+test("a standalone MCP server refuses to become a second Codex thread writer", async () => {
   const server = new McpControlServer({
     registry: new ControlRegistry({ path: ":memory:" }),
     sessionWriter: false,
@@ -286,6 +590,60 @@ test("run_agent_task injects project context and records its result", async () =
   assert.match(server.registry.getAgent("agent_context").summary, /v2 구현 완료/);
 });
 
+test("explicit test execution contracts receive workspace-write with requested network access", async () => {
+  let spawnOptions;
+  let runOptions;
+  const control = {
+    connect: async () => {},
+    spawnAgent: async (options) => {
+      spawnOptions = options;
+      return { id: "agent_e2e_network", cwd: "/repo", status: "idle", provider: "codex" };
+    },
+    runTask: async (_id, _prompt, options) => {
+      runOptions = options;
+      options.onStarted?.({ turnId: "turn_e2e_network" });
+      return { output: "109 tests passed", turnId: "turn_e2e_network", turn: { status: "completed" } };
+    },
+  };
+  const server = fakeServer(control);
+  const response = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "run_agent_task", arguments: { prompt: "run all integration tests", taskKind: "test", mutatesWorkspace: true, networkAccess: true, cwd: "/repo", role: "e2e-regression-tester", routingMode: "new" } },
+  });
+
+  assert.notEqual(response.isError, true);
+  assert.equal(spawnOptions.sandbox, "workspace-write");
+  assert.deepEqual(runOptions.sandboxPolicy, {
+    type: "workspaceWrite",
+    writableRoots: ["/repo"],
+    networkAccess: true,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  });
+  await server.close();
+});
+
+test("an arbitrary unregistered implementation role executes with the explicit write contract", async () => {
+  let spawnOptions;
+  const control = {
+    connect: async () => {},
+    spawnAgent: async (options) => { spawnOptions = options; return { id: "agent_arbitrary_writer", cwd: "/repo", status: "idle", provider: "codex" }; },
+    runTask: async (_id, _prompt, options) => {
+      options.onStarted?.({ turnId: "turn_arbitrary_writer" });
+      return { output: "updated dashboard", turnId: "turn_arbitrary_writer", turn: { status: "completed" } };
+    },
+  };
+  const server = fakeServer(control);
+  const response = await server.handleRequest({ method: "tools/call", params: { name: "run_agent_task", arguments: {
+    prompt: "대시보드 파일 수정", cwd: "/repo", role: "dashboard-frontend-engineer", taskKind: "implementation",
+    mutatesWorkspace: true, sandbox: "workspace-write", workspaceMode: "shared", integrationStrategy: "none", routingMode: "new",
+  } } });
+  assert.notEqual(response.isError, true);
+  assert.equal(spawnOptions.sandbox, "workspace-write");
+  assert.equal(response.structuredContent.record.metadata.executionContract.taskKind, "implementation");
+  await server.close();
+});
+
 test("acceptance criteria keep a task validating until the validator accepts", async () => {
   const transitions = [];
   const control = {
@@ -356,19 +714,45 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
     params: { uri: resources.resources[0].uri },
   });
   assert.equal(result.contents[0].mimeType, "text/html;profile=mcp-app");
-  assert.match(result.contents[0].text, /멀티 에이전트 작업 현황/);
+  assert.match(result.contents[0].text, /작업 진행 상황/);
   assert.match(result.contents[0].text, /data-tab="graph"/);
-  assert.match(result.contents[0].text, /모든 세션은 플러그인을 실행할 때 자동으로 등록/);
-  assert.match(result.contents[0].text, /request\("ui\/message"/);
+  assert.match(result.contents[0].text, /Codex 스레드는 플러그인을 실행할 때 자동으로 등록/);
+  assert.match(result.contents[0].text, /callTool\("open_desktop_thread"/);
   assert.match(result.contents[0].text, /graph-board/);
   assert.match(result.contents[0].text, /실행 구조/);
   assert.match(result.contents[0].text, /CONTROL PLANE/);
   assert.match(result.contents[0].text, /DAEMON SCHEDULER/);
-  assert.match(result.contents[0].text, /ORCHESTRATOR CODEX SESSION/);
+  assert.match(result.contents[0].text, /ORCHESTRATOR CODEX THREAD/);
   assert.match(result.contents[0].text, /DATA PLANE/);
   assert.match(result.contents[0].text, /plane-map/);
   assert.match(result.contents[0].text, /컨트롤 플레인 작업함/);
-  assert.match(result.contents[0].text, /요청을 접수하면 각 실행이 백그라운드/);
+  assert.match(result.contents[0].text, /필요할 때만 백그라운드 작업의 상세 내용을 확인/);
+});
+
+test("authorized dashboards can open an existing Codex Desktop task without sending a prompt", async () => {
+  const opened = [];
+  const dashboardServer = { start: async () => {}, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
+  const server = fakeServer({ connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) }, {
+    dashboardServer,
+    openDesktopThread: async (threadId) => opened.push(threadId),
+  });
+  const shown = await server.handleRequest({ method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo" } } });
+  const threadId = "01a0534d-7717-7151-bfd7-2d9cb59e8662";
+  const result = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
+    dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken,
+    threadId,
+  } } });
+  assert.equal(result.structuredContent.opened, true);
+  assert.deepEqual(opened, [threadId]);
+  assert.equal(result.structuredContent.url, `codex://threads/${threadId}`);
+
+  const rejected = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
+    dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken,
+    threadId: "not-a-thread-id",
+  } } });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.structuredContent.error, /Invalid Codex thread ID/);
+  await server.close();
 });
 
 test("show_agent_dashboard returns agents and task state", async () => {
@@ -397,8 +781,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.cwd, "/repo");
   assert.equal(result.structuredContent.dashboardPresentation, "embedded");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/agent-dashboard-v2.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/agent-dashboard-v2.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/agent-dashboard-v4.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/agent-dashboard-v4.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -424,7 +808,7 @@ test("only show_agent_dashboard advertises or returns the output template", asyn
   assert.deepEqual(listed.tools.filter((tool) => tool._meta?.["openai/outputTemplate"]).map((tool) => tool.name), ["show_agent_dashboard"]);
   const prepared = await server.handleRequest({
     method: "tools/call",
-    params: { name: "dispatch_agent_task", arguments: { prompt: "later", cwd: "/repo", waitForDashboard: true, routingMode: "new" } },
+    params: { name: "dispatch_agent_task", arguments: { prompt: "later", cwd: "/repo", routingMode: "new" } },
   });
   assert.equal(prepared._meta, undefined);
   await server.close();
@@ -456,13 +840,27 @@ test("dashboard snapshots are lightweight and details load on demand behind a vi
   await server.close();
 });
 
-test("data-plane and orchestrator sessions cannot open the dashboard", async () => {
+test("Data Plane and Orchestrator threads cannot open the dashboard", async () => {
   const control = { connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) };
   const server = fakeServer(control);
   server.registry.upsertAgent({ id: "worker_1", cwd: "/repo", status: "idle", metadata: { executionPlane: "data" } });
   const result = await server.handleRequest({ method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo", requesterThreadId: "worker_1" } } });
   assert.equal(result.isError, true);
   assert.equal(result.structuredContent.code, -32003);
+  await server.close();
+});
+
+test("dashboard falls back to the registered Control Plane owner when the host omits requester identity", async () => {
+  const control = { connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) };
+  const dashboardServer = { start: async () => {}, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
+  const server = fakeServer(control, { dashboardServer });
+  server.registry.upsertAgent({ id: "control_owner", cwd: "/repo", status: "idle", role: "control-plane", metadata: { executionPlane: "control" } });
+  server.registry.setSetting("control_plane_owner:/repo", "control_owner");
+  const shown = await server.handleRequest({ method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo" } } });
+  assert.equal(shown.isError, undefined);
+  assert.equal(typeof shown.structuredContent.dashboardLeaseToken, "string");
+  const lease = server.dashboardViewLeases.get(shown.structuredContent.dashboardLeaseToken);
+  assert.equal(lease.requesterThreadId, "control_owner");
   await server.close();
 });
 
@@ -487,7 +885,7 @@ test("project reconciliation is five-minute TTL single-flight", async () => {
   await server.close();
 });
 
-test("prepare_agent_run creates no session until Start and then binds a leased session per task", async () => {
+test("prepare_agent_run atomically starts and binds a leased session per task", async () => {
   const calls = [];
   const dashboardServer = {
     start: async () => {},
@@ -516,27 +914,19 @@ test("prepare_agent_run creates no session until Start and then binds a leased s
       },
     },
   });
-  assert.equal(prepared.structuredContent.status, "awaiting_user_start");
-  assert.equal(prepared.structuredContent.tasks[0].status, "staged");
+  assert.equal(prepared.structuredContent.status, "running");
   assert.deepEqual(prepared.structuredContent.agents, []);
-  assert.equal(prepared.structuredContent.tasks[0].agentId, null);
-  assert.deepEqual(calls, []);
-
-  const ready = await server.handleRequest({
-    method: "tools/call",
-    params: { name: "start_agent_run", arguments: { runId: prepared.structuredContent.runId } },
-  });
-  assert.equal(ready.structuredContent.tasks[0].status, "queued");
   assert.equal(server.registry.getRun(prepared.structuredContent.runId).status, "running");
   const completed = await waitUntil(() => server.registry.listTasks({ runId: prepared.structuredContent.runId, limit: 10 })[0]?.status === "completed");
   assert.equal(completed, true);
   const task = server.registry.listTasks({ runId: prepared.structuredContent.runId, limit: 10 })[0];
   assert.equal(task.agentId, "agent_prepared");
+  assert.ok(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestrationLog.some((entry) => entry.type === "task_assigned" && entry.taskId === task.id));
   assert.deepEqual(calls.map((entry) => entry[0]), ["name", "pin", "initialize"]);
   await server.close();
 });
 
-test("complex runs create no session during preparation and provision an Orchestrator at Start", async () => {
+test("complex runs automatically provision an Orchestrator before workers", async () => {
   let sequence = 0;
   const control = {
     connect: async () => {},
@@ -560,21 +950,18 @@ test("complex runs create no session during preparation and provision an Orchest
     } },
   });
   assert.equal(prepared.structuredContent.dispatchPath, "orchestrated");
-  assert.equal(prepared.structuredContent.orchestrator, null);
+  assert.deepEqual(prepared.structuredContent.orchestrator, { id: "agent_1", type: "codex_session" });
   assert.deepEqual(prepared.structuredContent.agents, []);
-  assert.equal(sequence, 0);
+  assert.equal(sequence, 1);
   const graph = server.runController.graph(prepared.structuredContent.runId);
-  assert.equal(graph.run.orchestrator, null);
+  assert.equal(graph.run.orchestrator.id, "agent_1");
   assert.equal(graph.run.complexity.taskCount, 2);
-  await server.handleRequest({ method: "tools/call", params: { name: "start_agent_run", arguments: { runId: prepared.structuredContent.runId } } });
-  const started = server.runController.graph(prepared.structuredContent.runId);
-  assert.equal(started.run.orchestrator.id, "agent_1");
-  assert.deepEqual(started.run.orchestratorSession, { type: "codex_session", agentId: "agent_1" });
-  assert.equal(sequence, 1, "Start creates only the Orchestrator before workers are scheduled");
+  assert.deepEqual(graph.run.orchestratorSession, { type: "codex_session", agentId: "agent_1" });
+  assert.equal(sequence, 1, "automatic start creates only the Orchestrator before workers are scheduled");
   await server.close();
 });
 
-test("prepared run records an actual Orchestrator session separately from the Daemon Scheduler", async () => {
+test("prepared run records an actual Orchestrator thread separately from the Daemon Scheduler", async () => {
   const control = { connect: async () => {} };
   const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
   const server = fakeServer(control, { dashboardServer, schedulerConcurrency: 0, instanceId: "daemon_identity" });
@@ -591,7 +978,7 @@ test("prepared run records an actual Orchestrator session separately from the Da
   await server.close();
 });
 
-test("dispatch_control_request returns before planning and always waits for explicit Start", async () => {
+test("dispatch_control_request returns before planning and automatically starts after atomic preparation", async () => {
   let releasePlan;
   const planning = new Promise((resolve) => { releasePlan = resolve; });
   const planner = { plan: async () => planning };
@@ -616,8 +1003,9 @@ test("dispatch_control_request returns before planning and always waits for expl
   });
   assert.equal(accepted.structuredContent.status, "accepted");
   assert.equal(accepted.structuredContent.controlPlaneStatus, "available");
-  assert.equal(accepted.structuredContent.autoStart, false);
-  assert.equal(accepted.structuredContent.requiresExplicitStart, true);
+  assert.match(accepted.structuredContent.message, /continue automatically/);
+  assert.equal(accepted.structuredContent.detailsAvailable, true);
+  assert.equal(accepted.structuredContent.dashboardPresentation, undefined);
   assert.equal(server.registry.listTasks({ runId: accepted.structuredContent.runId, limit: 10 }).length, 0);
 
   releasePlan({
@@ -633,12 +1021,179 @@ test("dispatch_control_request returns before planning and always waits for expl
   });
   const running = await waitUntil(() => {
     const run = server.registry.getRun(accepted.structuredContent.runId);
-    return run?.status === "awaiting_user_start" ? run : null;
+    return run?.status === "running" ? run : null;
   });
   assert.equal(running.metadata.dispatchPath, "orchestrated");
   assert.equal(server.registry.listTasks({ runId: running.id, limit: 10 }).length, 2);
-  assert.equal(running.metadata.orchestratorAgentId, undefined);
-  assert.equal(nextAgent, 0, "planning may use its injected planner, but run preparation must not create worker sessions");
+  assert.equal(running.metadata.orchestratorAgentId, "agent_async_1");
+  assert.equal(nextAgent, 1, "automatic start creates only the Orchestrator before workers are scheduled");
+});
+
+test("dispatch_control_request has no advanced manual mode and starts automatically", async () => {
+  const planner = { plan: async () => ({ id: "manual_plan", version: 1, plan: { summary: "manual", tasks: [{ key: "work", prompt: "work", role: "qa", dependsOn: [] }] } }) };
+  const dashboardServer = { start: async () => {}, url: () => "http://dashboard", close: async () => {} };
+  const server = fakeServer({ connect: async () => {} }, { planner, dashboardServer, schedulerConcurrency: 0 });
+  const accepted = await server.handleRequest({ method: "tools/call", params: { name: "dispatch_control_request", arguments: { objective: "automatic", cwd: "/repo" } } });
+  const running = await waitUntil(() => server.registry.getRun(accepted.structuredContent.runId)?.status === "running");
+  assert.equal(running, true);
+  assert.equal("requiresExplicitStart" in accepted.structuredContent, false);
+  assert.notEqual(server.registry.listTasks({ runId: accepted.structuredContent.runId, limit: 10 })[0].status, "staged");
+  await server.close();
+});
+
+test("host origin identity overrides and audits untrusted caller origin input", async () => {
+  const planner = { plan: async () => ({ id: "origin_plan", version: 1, plan: { summary: "origin", tasks: [{ key: "work", prompt: "work", role: "qa", dependsOn: [] }] } }) };
+  const dashboardServer = { start: async () => {}, url: () => "http://dashboard", close: async () => {} };
+  const server = fakeServer({ connect: async () => {} }, { planner, dashboardServer, schedulerConcurrency: 0 });
+  const accepted = await server.handleRequest({
+    method: "tools/call",
+    params: {
+      name: "dispatch_control_request",
+      arguments: { objective: "origin", cwd: "/repo", originThreadId: "spoofed", originTurnId: "spoofed_turn" },
+      _meta: { "codex/origin": { threadId: "host_thread", turnId: "host_turn", source: "host_environment" } },
+    },
+  });
+  const run = server.registry.getRun(accepted.structuredContent.runId);
+  assert.deepEqual(run.metadata.origin, { threadId: "host_thread", turnId: "host_turn", deliveryPolicy: "origin_thread_then_inbox", source: "host" });
+  assert.deepEqual(run.metadata.controlRequest.callerOriginInput, { threadId: "spoofed", turnId: "spoofed_turn" });
+  await server.close();
+});
+
+test("terminal Control Plane runs deliver a durable final result back to their origin thread", async () => {
+  const calls = [];
+  const control = {
+    connect: async () => {},
+    resumeAgent: async (threadId) => { calls.push(["resume", threadId]); return { id: threadId, cwd: "/repo", status: "idle" }; },
+    runTask: async (threadId, prompt) => {
+      calls.push(["result", threadId, prompt]);
+      return { output: "user-facing result", turnId: "turn_delivered", turn: { status: "completed" } };
+    },
+  };
+  const server = fakeServer(control, { schedulerConcurrency: 0, schedulerIntervalMs: 60_000 });
+  server.registry.createRun({
+    id: "run_origin_delivery",
+    name: "background work",
+    cwd: "/repo",
+    status: "completed",
+    completedAt: new Date().toISOString(),
+    metadata: {
+      controlRequest: { objective: "work", cwd: "/repo", originThreadId: "control_origin" },
+      origin: { threadId: "control_origin", turnId: "turn_request", deliveryPolicy: "origin_thread_then_inbox" },
+    },
+  });
+  server.startBackground();
+  const delivery = await waitUntil(() => server.registry.listControlDeliveries({ runId: "run_origin_delivery" })[0]?.status === "direct_delivered"
+    ? server.registry.listControlDeliveries({ runId: "run_origin_delivery" })[0] : null);
+  assert.equal(delivery.originThreadId, "control_origin");
+  assert.equal(delivery.deliveredTurnId, "turn_delivered");
+  assert.equal(delivery.deliveryMethod, "direct_origin_append");
+  assert.equal(delivery.acknowledgedAt, null);
+  assert.equal(delivery.payload.notificationType, "completed");
+  assert.equal(server.registry.listNotifications({ runId: "run_origin_delivery" })[0].kind, "completed");
+  assert.deepEqual(calls.map((entry) => entry.slice(0, 2)), [["resume", "control_origin"], ["result", "control_origin"]]);
+  assert.match(calls[1][2], /BACKGROUND CONTROL PLANE RESULT/);
+  await server.close();
+});
+
+test("attention notifications return to the origin thread before the run is terminal", async () => {
+  const prompts = [];
+  const control = {
+    connect: async () => {},
+    resumeAgent: async (threadId) => ({ id: threadId, cwd: "/repo", status: "idle" }),
+    runTask: async (_threadId, prompt) => {
+      prompts.push(prompt);
+      return { output: "attention delivered", turnId: "turn_attention", turn: { status: "completed" } };
+    },
+  };
+  const server = fakeServer(control, { schedulerConcurrency: 0, schedulerIntervalMs: 60_000 });
+  server.registry.createRun({
+    id: "run_attention", cwd: "/repo", status: "running",
+    metadata: { origin: { threadId: "control_origin", turnId: "turn_request" } },
+  });
+  server.registry.createNotification({
+    projectKey: "/repo", runId: "run_attention", kind: "attention_required",
+    title: "판단 필요", body: "작업의 부작용 여부를 선택하세요.", dedupeKey: "run_attention:decision",
+  });
+  server.startBackground();
+  const delivered = await waitUntil(() => server.registry.listControlDeliveries({ runId: "run_attention" })[0]?.status === "direct_delivered");
+  assert.equal(delivered, true);
+  assert.match(prompts[0], /BACKGROUND CONTROL PLANE ATTENTION/);
+  assert.equal(server.registry.listNotifications({ runId: "run_attention" })[0].readAt !== null, true);
+  await server.close();
+});
+
+test("the next Control Plane turn can drain a result when Desktop kept the origin thread busy", async () => {
+  const server = fakeServer({ connect: async () => {} }, { schedulerConcurrency: 0 });
+  server.registry.createRun({ id: "run_pending_result", cwd: "/repo", status: "completed" });
+  server.registry.setSetting("control_plane_owner:/repo", "control_owner");
+  server.registry.enqueueControlDelivery({ runId: "run_pending_result", originThreadId: "control_owner", payload: { summary: "finished safely" } });
+  const drained = await server.handleRequest({ method: "tools/call", params: { name: "drain_control_results", arguments: { cwd: "/repo", originTurnId: "next_turn" } } });
+  assert.equal(drained.structuredContent.deliveries[0].payload.summary, "finished safely");
+  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].status, "delivered");
+  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].deliveredTurnId, "next_turn");
+  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].deliveryMethod, "drain_acknowledgement");
+  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].directDeliveredAt, null);
+  await server.close();
+});
+
+test("daemon restart finalizes an integration_pending task from a recorded journal", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const contract = compileExecutionContract({ key: "recover_integration", taskKind: "implementation", mutatesWorkspace: true, workspaceMode: "worktree", integrationStrategy: "patch" });
+  registry.createRun({ id: "run_integration_recovery", cwd: "/repo", status: "running" });
+  registry.createTask({
+    id: "recover_integration", prompt: "integrate", cwd: "/repo",
+    metadata: { runId: "run_integration_recovery", executionContract: contract, managedWorktreeId: "worktree_recover_integration" },
+  });
+  const claim = registry.claimTask("recover_integration", "old_daemon");
+  registry.markClaimIntegrationPending("recover_integration", "old_daemon", claim.claimToken, { strategy: "patch" });
+  registry.upsertManagedWorktree({ id: "worktree_recover_integration", repoRoot: "/repo", path: "/managed/recover", status: "integrated", ownerTaskId: "recover_integration" });
+  const journal = registry.prepareIntegrationJournal({ worktreeId: "worktree_recover_integration", taskId: "recover_integration", repoRoot: "/repo", strategy: "patch", artifact: { changed: true, patchPath: "/artifact.patch", commit: "abc" } });
+  registry.transitionIntegrationJournal(journal.id, "applying");
+  registry.transitionIntegrationJournal(journal.id, "applied");
+  registry.transitionIntegrationJournal(journal.id, "recorded");
+
+  const server = fakeServer({ connect: async () => {} }, { registry, recoverInterruptedTasks: true, schedulerConcurrency: 0 });
+  server.startBackground();
+  const completed = await waitUntil(() => registry.getTask("recover_integration").status === "completed");
+  assert.equal(completed, true);
+  assert.equal(registry.getTask("recover_integration").workerId, null);
+  assert.equal(registry.getRun("run_integration_recovery").status, "completed");
+  await server.close();
+});
+
+test("revising a plan never rewrites an already running Run", async () => {
+  const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
+  const server = fakeServer({ connect: async () => {} }, { dashboardServer, schedulerConcurrency: 0 });
+  server.registry.createPlan({ id: "plan_rematerialize", requestKey: "plan-rematerialize", objective: "verify", cwd: "/repo" });
+  server.registry.updatePlan("plan_rematerialize", {
+    status: "planned",
+    plan: { summary: "v1", risks: [], tasks: [{ key: "old", title: "Old", prompt: "old prompt", role: "reviewer", capabilities: [], tools: [], dependsOn: [], workspaceMode: "shared", acceptanceCriteria: [] }] },
+  });
+  const prepared = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "prepare_agent_run", arguments: { cwd: "/repo", requestKey: "run-rematerialize", planId: "plan_rematerialize", tasks: [{ key: "old", prompt: "old prompt", role: "reviewer" }] } },
+  });
+  const runId = prepared.structuredContent.runId;
+  const oldTaskId = server.registry.listTasks({ runId, limit: 10 })[0].id;
+  server.planner = {
+    revise: async () => server.registry.updatePlan("plan_rematerialize", {
+      status: "planned",
+      version: 2,
+      plan: { summary: "v2", risks: [], tasks: [
+        { key: "inspect", title: "Inspect", prompt: "inspect revised", role: "reviewer", capabilities: [], tools: [], dependsOn: [], workspaceMode: "shared", acceptanceCriteria: [] },
+        { key: "test", title: "Test", prompt: "test revised", role: "e2e-regression-tester", capabilities: [], tools: ["node"], dependsOn: ["inspect"], workspaceMode: "shared", acceptanceCriteria: [] },
+      ] },
+    }),
+  };
+
+  const revised = await server.handleRequest({ method: "tools/call", params: { name: "revise_agent_plan", arguments: { planId: "plan_rematerialize", feedback: "add tests" } } });
+  const tasks = server.registry.listTasks({ runId, limit: 10 });
+
+  assert.deepEqual(revised.structuredContent.rematerializedRuns, []);
+  assert.equal(server.registry.getRun(runId).status, "running");
+  assert.ok(server.registry.getTask(oldTaskId));
+  assert.deepEqual(tasks.map((task) => task.metadata.key), ["old"]);
+  await server.close();
 });
 
 test("registry task preserves failed and interrupted App Server turn status", async () => {
@@ -691,7 +1246,6 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
       { key: "second", title: "후속 작업", prompt: "첫 결과를 검토", role: "reviewer", dependsOn: ["first"] },
     ] } },
   });
-  await server.handleRequest({ method: "tools/call", params: { name: "start_agent_run", arguments: { runId: prepared.structuredContent.runId } } });
   await waitUntil(() => server.registry.getRun(prepared.structuredContent.runId)?.status === "completed");
   const downstream = prompts.find((entry) => entry.prompt.includes("[A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS]"));
   assert.ok(downstream);
@@ -700,7 +1254,7 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
   await server.close();
 });
 
-test("validator feedback drives bounded rework only after explicit Start", async () => {
+test("validator feedback drives bounded rework after automatic Start", async () => {
   const prompts = [];
   let nextAgent = 0;
   let validations = 0;
@@ -735,9 +1289,6 @@ test("validator feedback drives bounded rework only after explicit Start", async
       key: "implementation", prompt: "implement retry", acceptanceCriteria: ["retry test passes"], maxAttempts: 3, retryDelayMs: 0,
     }] } },
   });
-  await new Promise((resolve) => setTimeout(resolve, 20));
-  assert.equal(prompts.length, 0, "preparation and dashboard activity must not execute work");
-  await server.handleRequest({ method: "tools/call", params: { name: "start_agent_run", arguments: { runId: prepared.structuredContent.runId } } });
   await waitUntil(() => server.registry.getRun(prepared.structuredContent.runId)?.status === "completed");
   const task = server.registry.listTasks({ runId: prepared.structuredContent.runId, limit: 10 })[0];
   assert.equal(task.status, "completed");
@@ -745,6 +1296,10 @@ test("validator feedback drives bounded rework only after explicit Start", async
   assert.equal(task.metadata.failureHistory.length, 1);
   assert.match(prompts[1], /\[VALIDATOR REWORK FEEDBACK\]/);
   assert.match(prompts[1], /Add retry regression evidence/);
+  for (const prompt of prompts) {
+    assert.match(prompt, /\[RUN AUTHORIZATION\]/);
+    assert.match(prompt, /Do not request another Start confirmation/);
+  }
   await server.close();
 });
 
@@ -817,7 +1372,13 @@ test("close drains then interrupts an active Data Plane turn", async () => {
     interruptTask: async () => { interrupted += 1; releaseTurn(); },
   };
   const server = fakeServer(control, { schedulerConcurrency: 1, schedulerIntervalMs: 5, shutdownDrainMs: 5 });
-  server.registry.createTask({ id: "task_shutdown", prompt: "long work", cwd: "/repo" });
+  const executionContract = compileExecutionContract({ key: "task_shutdown", taskKind: "analysis", mutatesWorkspace: false });
+  server.registry.createTask({
+    id: "task_shutdown",
+    prompt: "long work",
+    cwd: "/repo",
+    metadata: { executionContract, execution: { executionContract } },
+  });
   server.startBackground();
   await waitUntil(() => server.registry.getTask("task_shutdown")?.turnId === "turn_shutdown");
   await server.close();

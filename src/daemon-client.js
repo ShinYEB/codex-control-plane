@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { request as httpRequest } from "node:http";
 import { fileURLToPath } from "node:url";
+import { DAEMON_PROTOCOL_VERSION, RUNTIME_BUILD_ID } from "./build-info.js";
 
 export const DEFAULT_DAEMON_SOCKET = join(homedir(), ".codex", "control-plane", "control-plane.sock");
 
@@ -16,13 +17,46 @@ export class ControlPlaneDaemonClient {
     this.daemonPath = options.daemonPath ?? fileURLToPath(new URL("./daemon.js", import.meta.url));
     this.spawnProcess = options.spawnProcess ?? spawn;
     this.startTimeoutMs = options.startTimeoutMs ?? 8_000;
+    this.upgradeTimeoutMs = options.upgradeTimeoutMs ?? 30 * 60_000;
+    this.expectedBuildId = options.expectedBuildId ?? RUNTIME_BUILD_ID;
+    this.expectedProtocolVersion = options.expectedProtocolVersion ?? DAEMON_PROTOCOL_VERSION;
+    this.expectedRuntimePath = resolve(options.expectedRuntimePath ?? this.daemonPath);
+    // Ordinary MCP proxies observe daemon identity but never replace it.
+    // Deployment and reinstall tooling must opt into build handover explicitly.
+    this.allowBuildHandover = options.allowBuildHandover ?? false;
   }
 
   async ensureStarted() {
     try {
-      await this.health();
-      return;
-    } catch {}
+      const health = await this.health();
+      const identityMatches = health.buildId === this.expectedBuildId
+        && health.protocolVersion === this.expectedProtocolVersion
+        && health.runtimePath
+        && resolve(health.runtimePath) === this.expectedRuntimePath;
+      if (identityMatches) return;
+      if (!this.allowBuildHandover) {
+        const error = new Error(`Control-plane client build ${this.expectedBuildId}/${this.expectedProtocolVersion} does not match active daemon ${health.buildId ?? "legacy"}/${health.protocolVersion ?? "legacy"}; reopen Codex with the installed plugin version`);
+        error.code = "CLIENT_UPGRADE_REQUIRED";
+        error.expectedIdentity = { buildId: this.expectedBuildId, protocolVersion: this.expectedProtocolVersion, runtimePath: this.expectedRuntimePath };
+        error.activeIdentity = health;
+        throw error;
+      }
+      await this.#request("POST", "/shutdown", { expectedBuildId: this.expectedBuildId, authority: "deployment" }, 2_000);
+      const deadline = Date.now() + this.upgradeTimeoutMs;
+      while (Date.now() < deadline) {
+        await delay(100);
+        try {
+          const draining = await this.health();
+          if (draining.buildId === this.expectedBuildId
+            && draining.protocolVersion === this.expectedProtocolVersion
+            && draining.runtimePath
+            && resolve(draining.runtimePath) === this.expectedRuntimePath) return;
+        } catch { break; }
+      }
+      if (Date.now() >= deadline) throw Object.assign(new Error("Timed out waiting for the previous daemon to drain"), { code: "DAEMON_UPGRADE_PENDING" });
+    } catch (error) {
+      if (["DAEMON_UPGRADE_PENDING", "CLIENT_UPGRADE_REQUIRED"].includes(error.code)) throw error;
+    }
 
     const child = this.spawnProcess(process.execPath, [this.daemonPath, "--socket", this.socketPath], {
       detached: true,
@@ -36,8 +70,12 @@ export class ControlPlaneDaemonClient {
     while (Date.now() < deadline) {
       await delay(80);
       try {
-        await this.health();
-        return;
+        const health = await this.health();
+        if (health.buildId === this.expectedBuildId
+          && health.protocolVersion === this.expectedProtocolVersion
+          && health.runtimePath
+          && resolve(health.runtimePath) === this.expectedRuntimePath) return;
+        lastError = new Error(`Unexpected daemon identity: ${health.buildId ?? "legacy"}/${health.protocolVersion ?? "legacy"}/${health.runtimePath ?? "unknown path"}`);
       } catch (error) {
         lastError = error;
       }
@@ -47,6 +85,27 @@ export class ControlPlaneDaemonClient {
 
   health() {
     return this.#request("GET", "/health", undefined, 1_000);
+  }
+
+  async shutdown(options = {}) {
+    const health = await this.health();
+    if (!this.allowBuildHandover) {
+      throw Object.assign(new Error("Daemon shutdown requires explicit deployment authority"), { code: "HANDOVER_AUTHORITY_REQUIRED" });
+    }
+    if (health.activeTasks > 0 && options.requireIdle !== false) {
+      throw Object.assign(new Error(`Daemon has ${health.activeTasks} active task(s); wait for drain before reinstall`), { code: "DAEMON_ACTIVE_TASKS", activeTasks: health.activeTasks });
+    }
+    const result = await this.#request("POST", "/shutdown", {
+      expectedBuildId: options.expectedBuildId ?? this.expectedBuildId,
+      authority: "deployment",
+    }, 2_000);
+    if (options.wait === false) return result;
+    const deadline = Date.now() + (options.timeoutMs ?? this.upgradeTimeoutMs);
+    while (Date.now() < deadline) {
+      await delay(100);
+      try { await this.health(); } catch { return result; }
+    }
+    throw Object.assign(new Error("Timed out waiting for daemon shutdown"), { code: "DAEMON_UPGRADE_PENDING" });
   }
 
   async call(method, params = {}) {

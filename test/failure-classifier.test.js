@@ -24,3 +24,18 @@ test("result assessment rejects completed turns with real command or test failur
   assert.equal(explicitFailure.type, "worker");
   assert.equal(assessTaskResult({ turn: { status: "completed" }, output: "tests: 12 passed" }), null);
 });
+
+test("successful test execution is not overturned by identifiers in narrative output", () => {
+  const result = assessTaskResult({
+    turn: { status: "completed" },
+    output: "42/42 tests passed with exit 0. failed_static_inspection remains a result field name.",
+    executionItems: [{ id: "cmd_ok", type: "commandExecution", command: "node --test", status: "completed", exitCode: 0 }],
+  });
+  assert.equal(result, null);
+});
+
+test("standalone machine-shaped failed test summaries remain failures", () => {
+  const result = assessTaskResult({ turn: { status: "completed" }, output: "42 tests failed\n" });
+  assert.equal(result.type, "test");
+  assert.match(result.message, /42 tests failed/);
+});

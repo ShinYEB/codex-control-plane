@@ -214,11 +214,48 @@ export class ContextManager {
       confidence: 0.75,
       metadata: { taskId: task.id, agentId: agent?.id ?? null, runId: task.metadata?.runId ?? null },
     });
+    const claimId = `claim_task_${task.id}`;
+    let claim = this.registry.getContextClaim(claimId);
+    if (!claim) claim = this.registry.createContextClaim({
+      id: claimId,
+      projectId: task.projectId ?? memory.projectId ?? null,
+      kind: "task_result",
+      subject: `task:${task.id}`,
+      body: summary,
+      scope: task.projectId || memory.projectId ? "project" : "task",
+      authority: "validated_task_result",
+      status: "candidate",
+      metadata: { taskId: task.id, agentId: agent?.id ?? null, runId: task.metadata?.runId ?? null },
+    });
+    const resultDigest = createHash("sha256").update(summary).digest("hex");
+    this.registry.addContextClaimSource(claim.id, {
+      kind: "task_result",
+      id: task.id,
+      revision: task.version ?? task.attempt ?? 0,
+      digest: resultDigest,
+      metadata: { agentId: agent?.id ?? null, runId: task.metadata?.runId ?? null },
+    });
+    if (claim.status === "candidate") claim = this.registry.activateContextClaim(claim.id);
+    let threadSnapshot = null;
+    if (agent?.id) {
+      threadSnapshot = this.registry.upsertThreadKnowledgeSnapshot({
+        threadId: agent.id,
+        throughTurnId: task.turnId ?? null,
+        projectId: task.projectId ?? memory.projectId ?? agent.projectId ?? null,
+        role: task.role ?? agent.role ?? null,
+        topics: [...new Set([task.role, ...(task.requiredCapabilities ?? [])].filter(Boolean))],
+        claimIds: [claim.id],
+        sourceDigest: createHash("sha256").update(`${task.id}\n${task.turnId ?? ""}\n${resultDigest}`).digest("hex"),
+        extractorVersion: "task-result-v1",
+        status: "current",
+        metadata: { taskId: task.id, runId: task.metadata?.runId ?? null },
+      });
+    }
     if (agent?.id && this.registry.getAgent(agent.id)) {
       const previous = this.registry.getAgent(agent.id);
       this.registry.updateAgent(agent.id, {
         summary: compact([previous.summary, `Recent result: ${summary}`].filter(Boolean).join("\n"), 2_400),
-        metadata: { contextUpdatedAt: new Date().toISOString(), lastResultMemoryId: memory.id },
+        metadata: { contextUpdatedAt: new Date().toISOString(), lastResultMemoryId: memory.id, lastContextClaimId: claim.id, lastThreadKnowledgeSnapshotId: threadSnapshot?.id ?? null },
       });
     }
     return memory;
@@ -226,3 +263,4 @@ export class ContextManager {
 }
 
 export { compact, tokens, compareSemanticVersions, freshness };
+import { createHash } from "node:crypto";

@@ -12,6 +12,7 @@ export class McpDaemonProxy {
     this.output = options.output ?? process.stdout;
     this.client = options.client ?? new ControlPlaneDaemonClient(options);
     this.requesterThreadId = options.requesterThreadId ?? process.env.CODEX_THREAD_ID ?? process.env.CODEX_SESSION_ID ?? null;
+    this.requesterTurnId = options.requesterTurnId ?? process.env.CODEX_TURN_ID ?? null;
     this.lines = null;
   }
 
@@ -36,9 +37,11 @@ export class McpDaemonProxy {
     if (message.id === undefined) return;
     try {
       const params = structuredClone(message.params ?? {});
-      if (message.method === "tools/call" && params.name === "show_agent_dashboard" && this.requesterThreadId) {
-        params.arguments ??= {};
-        params.arguments.requesterThreadId ??= this.requesterThreadId;
+      if (message.method === "tools/call" && this.requesterThreadId) {
+        params._meta = {
+          ...(params._meta ?? {}),
+          "codex/origin": { threadId: this.requesterThreadId, turnId: this.requesterTurnId ?? null, source: "host_environment" },
+        };
       }
       const result = await this.client.call(message.method, params);
       this.#write({ jsonrpc: "2.0", id: message.id, result });

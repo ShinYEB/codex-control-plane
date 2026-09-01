@@ -13,6 +13,12 @@ export class AppServerError extends Error {
   }
 }
 
+function isExperimentalCapabilityNegotiationError(error) {
+  return error?.method === "initialize"
+    && [-32600, -32602].includes(Number(error.code))
+    && /experimental|capabilit|unknown (?:field|parameter)|invalid params/i.test(String(error.message ?? ""));
+}
+
 export class CodexAppServerClient extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -32,6 +38,8 @@ export class CodexAppServerClient extends EventEmitter {
     this.waiters = new Set();
     this.stderr = [];
     this.initialized = false;
+    this.requestExperimentalApi = options.experimentalApi ?? true;
+    this.experimentalApiEnabled = false;
   }
 
   async connect() {
@@ -57,13 +65,24 @@ export class CodexAppServerClient extends EventEmitter {
       this.#handleExit(new AppServerError(message));
     });
 
-    await this.request("initialize", {
+    const initializeParams = {
       clientInfo: {
         name: "codex_control_plane",
         title: "Codex Control Plane",
         version: "0.1.0",
       },
-    });
+    };
+    if (this.requestExperimentalApi) {
+      try {
+        await this.request("initialize", { ...initializeParams, capabilities: { experimentalApi: true } });
+        this.experimentalApiEnabled = true;
+      } catch (error) {
+        if (!isExperimentalCapabilityNegotiationError(error)) throw error;
+        await this.request("initialize", initializeParams);
+      }
+    } else {
+      await this.request("initialize", initializeParams);
+    }
     this.notify("initialized", {});
     this.initialized = true;
   }

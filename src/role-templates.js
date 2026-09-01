@@ -2,7 +2,7 @@ const BUILTIN_ROLE_TEMPLATES = [
   {
     name: "planner",
     description: "Produces and revises dependency-aware execution plans without performing implementation work.",
-    developerInstructions: "You are the control-plane Planner. Convert objectives and project context into a minimal dependency-aware JSON task graph. Do not implement tasks. Every task must have a stable key, concise title, role, prompt, capabilities, tools, dependencies, workspace mode, and acceptance criteria. Prefer safe parallelism, explicit review gates, and read-only work unless implementation is required.",
+    developerInstructions: "You are the control-plane Planner. Convert objectives and project context into a minimal dependency-aware JSON task graph. Do not implement tasks. Every task must have a stable key, concise title, role, prompt, capabilities, tools, dependencies, dependency policy, execution intent, workspace mode, outputs, integration strategy, and acceptance criteria. Set authorizationScope to parent_run on every task. The Control Plane request authorizes the parent Run exactly once: dependency tasks, validators, retries, and rework inherit that authorization and must never request another or separate Start. Role names describe specialization only; declare mutability and required authority explicitly. Prefer safe parallelism and explicit review gates.",
     capabilities: ["planning", "decomposition", "orchestration", "risk-analysis"],
     tools: ["codex-app-server"],
     skills: [],
@@ -23,7 +23,7 @@ const BUILTIN_ROLE_TEMPLATES = [
   },
   {
     name: "orchestrator",
-    description: "Supervises one complex run, records assignments and decisions, and coordinates the data-plane sessions without implementing their tasks.",
+    description: "Supervises one complex run, records assignments and decisions, and coordinates the Data Plane threads without implementing their tasks.",
     developerInstructions: "You are the Orchestrator Plane for one run. Keep a readable supervisory record of the plan, assignments, dependencies, approvals, retries, and final status. Do not perform the data-plane implementation yourself. The daemon RunController executes the durable state machine; you explain and supervise its decisions.",
     capabilities: ["orchestration", "delegation", "dependency-management", "recovery"],
     tools: ["codex-app-server"],
@@ -35,13 +35,13 @@ const BUILTIN_ROLE_TEMPLATES = [
   {
     name: "implementer",
     description: "Implements scoped code changes and verifies them in an isolated workspace.",
-    developerInstructions: "You are an implementation agent. Make only changes required by the assigned task, preserve unrelated user work, run proportionate tests, and report changed files, verification, and residual risks. Stop for approval when policy requires it.",
+    developerInstructions: "You are an implementation agent. Make only changes required by the assigned task, preserve unrelated user work, run proportionate tests, and report changed files, verification, and residual risks. The parent Run already authorizes scoped workspace changes; never request another Start confirmation.",
     capabilities: ["implementation", "testing", "debugging"],
     tools: ["shell", "filesystem"],
     skills: [],
     effort: "high",
     sandbox: "workspace-write",
-    approvalPolicy: "on-request",
+    approvalPolicy: "never",
   },
   {
     name: "reviewer",
@@ -63,7 +63,7 @@ const BUILTIN_ROLE_TEMPLATES = [
     skills: [],
     effort: "high",
     sandbox: "workspace-write",
-    approvalPolicy: "on-request",
+    approvalPolicy: "never",
   },
   {
     name: "synthesizer",
@@ -104,6 +104,8 @@ export class RoleTemplateManager {
       skills: [],
       effort: null,
       model: null,
+      // Specialization and authority are separate. The compiled execution
+      // contract, never the role name, grants workspace access.
       sandbox: "read-only",
       approvalPolicy: "never",
       metadata: { fallback: true },

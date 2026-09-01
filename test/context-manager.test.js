@@ -27,6 +27,13 @@ test("completed task output flows back to project and agent context", () => {
   assert.equal(memory.kind, "task_result");
   assert.match(registry.getAgent("agent").summary, /Implemented \/v2\/users/);
   assert.equal(registry.getAgent("agent").metadata.lastResultMemoryId, memory.id);
+  const claim = registry.getContextClaim("claim_task_task");
+  assert.equal(claim.status, "active");
+  assert.equal(claim.authority, "validated_task_result");
+  assert.equal(registry.listContextClaimSources(claim.id)[0].kind, "task_result");
+  const snapshot = registry.listThreadKnowledgeSnapshots({ threadId: "agent", status: "current" })[0];
+  assert.deepEqual(snapshot.claimIds, [claim.id]);
+  assert.equal(registry.getAgent("agent").metadata.lastThreadKnowledgeSnapshotId, snapshot.id);
   registry.close();
 });
 

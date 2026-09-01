@@ -29,15 +29,14 @@ export class DashboardServer {
   constructor(options) {
     this.registry = options.registry;
     this.html = options.html;
-    this.onStart = options.onStart ?? options.onReady;
     this.onCancel = options.onCancel;
-    this.onApproval = options.onApproval;
     this.onCleanupWorktree = options.onCleanupWorktree;
     this.onRegisterAgent = options.onRegisterAgent;
     this.onArchiveRun = options.onArchiveRun;
     this.onUnarchiveRun = options.onUnarchiveRun;
     this.onArchiveAgent = options.onArchiveAgent;
     this.onUnarchiveAgent = options.onUnarchiveAgent;
+    this.onRepairTask = options.onRepairTask;
     this.getGraph = options.getGraph;
     this.host = options.host ?? "127.0.0.1";
     this.port = options.port ?? 0;
@@ -167,7 +166,7 @@ export class DashboardServer {
       return;
     }
 
-    const detailMatch = request.method === "GET" && url.pathname.match(/^\/api\/details\/(agent|task|run|graph|plan|approval|worktree|memory)\/([^/]+)$/);
+    const detailMatch = request.method === "GET" && url.pathname.match(/^\/api\/details\/(agent|task|run|graph|plan|worktree|memory|context_snapshot|global_run)\/([^/]+)$/);
     if (detailMatch) {
       const detail = getDashboardDetail(this.registry, detailMatch[1], decodeURIComponent(detailMatch[2]), { getGraph: this.getGraph });
       if (!detail) sendJson(response, 404, { error: "Dashboard detail not found" });
@@ -212,22 +211,24 @@ export class DashboardServer {
       return;
     }
 
-    const startMatch = request.method === "POST" && url.pathname.match(/^\/api\/runs\/([^/]+)\/(?:start|ready)$/);
-    if (startMatch) {
+    const cancelMatch = request.method === "POST" && url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
+    if (cancelMatch) {
       try {
-        const result = await this.onStart?.(decodeURIComponent(startMatch[1]), { source: "dashboard" });
-        sendJson(response, 200, result ?? { started: true });
+        const result = await this.onCancel?.(decodeURIComponent(cancelMatch[1]), { source: "dashboard" });
+        sendJson(response, 200, result ?? { cancelled: true });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
       }
       return;
     }
 
-    const cancelMatch = request.method === "POST" && url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/);
-    if (cancelMatch) {
+    const repairTaskMatch = request.method === "POST" && url.pathname.match(/^\/api\/tasks\/([^/]+)\/repair$/);
+    if (repairTaskMatch) {
       try {
-        const result = await this.onCancel?.(decodeURIComponent(cancelMatch[1]), { source: "dashboard" });
-        sendJson(response, 200, result ?? { cancelled: true });
+        const body = await readJson(request);
+        if (!this.onRepairTask) throw new Error("Task contract repair is not configured");
+        const result = await this.onRepairTask({ taskId: decodeURIComponent(repairTaskMatch[1]), ...body }, { source: "dashboard" });
+        sendJson(response, 200, result ?? { repaired: true });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
       }
@@ -262,16 +263,6 @@ export class DashboardServer {
       return;
     }
 
-    const approvalMatch = request.method === "POST" && url.pathname.match(/^\/api\/approvals\/([^/]+)\/(accept|decline)$/);
-    if (approvalMatch) {
-      try {
-        const result = await this.onApproval?.(decodeURIComponent(approvalMatch[1]), approvalMatch[2], { source: "dashboard" });
-        sendJson(response, 200, result ?? { resolved: true });
-      } catch (error) {
-        sendJson(response, 400, { error: error.message });
-      }
-      return;
-    }
 
     const cleanupMatch = request.method === "POST" && url.pathname.match(/^\/api\/worktrees\/([^/]+)\/cleanup$/);
     if (cleanupMatch) {

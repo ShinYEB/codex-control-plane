@@ -27,6 +27,7 @@ export class CodexControlPlane {
   constructor(client, options = {}) {
     this.client = client;
     this.resumeFlights = new Map();
+    this.activeTaskStreams = new Map();
     this.resumeRetryDelaysMs = options.resumeRetryDelaysMs ?? [100, 300, 750];
     this.delay = options.delay ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.managedThreadConfig = options.managedThreadConfig ?? DEFAULT_MANAGED_THREAD_CONFIG;
@@ -108,7 +109,7 @@ export class CodexControlPlane {
   async #resumeWithOwnershipRetry(threadId, options) {
     const params = {
       threadId,
-      excludeTurns: true,
+      ...(this.client.experimentalApiEnabled === false ? {} : { excludeTurns: true }),
       ...(options.model ? { model: options.model } : {}),
       ...(options.cwd ? { cwd: options.cwd } : {}),
       ...(options.sandbox ? { sandbox: options.sandbox } : {}),
@@ -162,9 +163,21 @@ export class CodexControlPlane {
     if (!prompt?.trim()) throw new TypeError("Task prompt must not be empty");
 
     let output = "";
+    let turnId = null;
+    const pendingDeltas = [];
+    const streamToken = Symbol(threadId);
+    const activeStreams = this.activeTaskStreams.get(threadId) ?? new Set();
+    activeStreams.add(streamToken);
+    this.activeTaskStreams.set(threadId, activeStreams);
     const observedItems = [];
     const onDelta = (params) => {
-      if (params.threadId === threadId && typeof params.delta === "string") output += params.delta;
+      if (params.threadId !== threadId || typeof params.delta !== "string") return;
+      const deltaTurnId = params.turnId ?? params.turn?.id ?? null;
+      if (!turnId) {
+        pendingDeltas.push({ turnId: deltaTurnId, delta: params.delta });
+        return;
+      }
+      if (deltaTurnId === turnId || (!deltaTurnId && activeStreams.size === 1)) output += params.delta;
     };
     const onItemCompleted = (params) => {
       if (params?.threadId === threadId && params.item) observedItems.push({ turnId: params.turnId ?? null, item: params.item });
@@ -180,9 +193,15 @@ export class CodexControlPlane {
         ...(options.model ? { model: options.model } : {}),
         ...(options.effort ? { effort: options.effort } : {}),
         ...(options.approvalPolicy ? { approvalPolicy: options.approvalPolicy } : {}),
+        ...(options.sandboxPolicy && this.client.experimentalApiEnabled !== false
+          ? { sandboxPolicy: options.sandboxPolicy }
+          : {}),
         ...(options.outputSchema ? { outputSchema: options.outputSchema } : {}),
       });
-      const turnId = result.turn.id;
+      turnId = result.turn.id;
+      for (const delta of pendingDeltas) {
+        if (delta.turnId === turnId || (!delta.turnId && activeStreams.size === 1)) output += delta.delta;
+      }
       options.onStarted?.({ threadId, turnId, turn: result.turn });
       let completion;
       const timeoutMs = options.timeoutMs ?? this.client.turnTimeoutMs ?? 30 * 60_000;
@@ -234,6 +253,8 @@ export class CodexControlPlane {
     } finally {
       this.client.off("item/agentMessage/delta", onDelta);
       this.client.off("item/completed", onItemCompleted);
+      activeStreams.delete(streamToken);
+      if (!activeStreams.size && this.activeTaskStreams.get(threadId) === activeStreams) this.activeTaskStreams.delete(threadId);
     }
   }
 

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { agentDisplayName } from "./agent-names.js";
+import { ContextResolver } from "./context-resolver.js";
+import { ThreadKnowledgeIndexer } from "./thread-knowledge-indexer.js";
+import { compileAndValidateExecutionContract, RUN_AUTHORIZATION_SCOPES, SIDE_EFFECT_POLICIES } from "./execution-contracts.js";
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -15,7 +18,7 @@ const PLAN_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "title", "prompt", "role", "capabilities", "tools", "dependsOn", "workspaceMode", "acceptanceCriteria"],
+        required: ["key", "title", "prompt", "role", "capabilities", "tools", "dependsOn", "dependencyPolicy", "workspaceMode", "acceptanceCriteria", "taskKind", "mutatesWorkspace", "networkAccess", "sideEffectPolicy", "authorizationScope", "outputs", "integrationStrategy"],
         properties: {
           key: { type: "string" },
           title: { type: "string" },
@@ -24,8 +27,16 @@ const PLAN_SCHEMA = {
           capabilities: { type: "array", items: { type: "string" } },
           tools: { type: "array", items: { type: "string" } },
           dependsOn: { type: "array", items: { type: "string" } },
+          dependencyPolicy: { type: "string", enum: ["all_success", "all_terminal", "on_failure"] },
           workspaceMode: { type: "string", enum: ["shared", "worktree"] },
           acceptanceCriteria: { type: "array", items: { type: "string" } },
+          taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
+          mutatesWorkspace: { type: "boolean" },
+          networkAccess: { type: "boolean" },
+          sideEffectPolicy: { type: "string", enum: SIDE_EFFECT_POLICIES },
+          authorizationScope: { type: "string", enum: RUN_AUTHORIZATION_SCOPES },
+          outputs: { type: "array", items: { type: "string" } },
+          integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         },
       },
     },
@@ -51,10 +62,46 @@ function parseJsonOutput(output) {
   return JSON.parse(value);
 }
 
+const ADDITIONAL_START_PATTERNS = [
+  /\b(?:wait(?:s|ing)?\s+for|request(?:s|ing)?|ask(?:s|ing)?\s+for|require(?:s|d|ing)?|need(?:s|ed|ing)?|confirm(?:s|ed|ing)?|approve(?:s|d|ing)?)\b.{0,64}\b(?:another|additional|separate|second)\b.{0,32}\bstart\b/i,
+  /\b(?:another|additional|separate|second)\b.{0,32}\bstart\b.{0,40}\b(?:is\s+)?(?:required|needed|confirmed|approved|must\s+happen)\b/i,
+  /(?:별도|추가|다시|두\s*번째).{0,40}(?:Start|시작\s*승인|작업\s*시작).{0,48}(?:필요(?:하다|함|한|합니다)?|요구(?:하다|함|한|합니다)?|확인(?:하다|함|한|합니다)?|승인(?:을|이)?\s*받|받은\s*후|해야\s*(?:한다|함|합니다)?|기다(?:린|려|립니다))/i,
+  /(?:반드시|필수로).{0,64}(?:별도|추가|다시|두\s*번째).{0,40}(?:Start|시작\s*승인|작업\s*시작)/i,
+];
+const NEGATED_ADDITIONAL_START_PATTERN = /(?:\bnever\b|\bmust\s+not\b|\bdo(?:es)?\s+not\b|\bwithout\b|\bnot\s+(?:required|needed|allowed)\b|\bno\b.{0,40}\b(?:another|additional|separate|second)\b|(?:요구|요청|호출|확인|승인|기다리|필요)하지\s*않|하지\s*(?:않|말)|(?:추가|별도).{0,24}없이|불필요|금지)/i;
+
+function statementRequestsAdditionalStart(statement) {
+  if (NEGATED_ADDITIONAL_START_PATTERN.test(statement)) return false;
+  return ADDITIONAL_START_PATTERNS.some((pattern) => pattern.test(statement));
+}
+
+function assertSingleRunStart(plan) {
+  const violations = (plan?.tasks ?? []).filter((task) => {
+    if (task.authorizationScope && task.authorizationScope !== "parent_run") return true;
+    const statements = [task.prompt, ...(task.acceptanceCriteria ?? [])]
+      .filter(Boolean)
+      .flatMap((value) => String(value).split(/[.!?。\n;；,，]+/));
+    return statements.some(statementRequestsAdditionalStart);
+  });
+  if (!violations.length) return;
+  const error = new Error(`Planner requested an additional Start in tasks: ${violations.map((task) => task.key).join(", ")}`);
+  error.code = "PLAN_ADDITIONAL_START";
+  throw error;
+}
+
+function assertPlanExecutionContracts(plan, roleTemplates) {
+  for (const task of plan?.tasks ?? []) {
+    const roleTemplate = roleTemplates.resolve(task.role);
+    compileAndValidateExecutionContract(task, {}, roleTemplate);
+  }
+}
+
 export class PlannerEngine {
   constructor(options) {
     this.registry = options.registry;
     this.contextManager = options.contextManager;
+    this.contextResolver = options.contextResolver ?? new ContextResolver(options.registry);
+    this.threadKnowledgeIndexer = options.threadKnowledgeIndexer ?? new ThreadKnowledgeIndexer(options.registry);
     this.roleTemplates = options.roleTemplates;
     this.getControl = options.getControl;
     this.decorateAgent = options.decorateAgent;
@@ -65,10 +112,17 @@ export class PlannerEngine {
     const existing = options.requestKey ? this.registry.listPlans({ limit: 200 }).find((plan) => plan.requestKey === options.requestKey) : null;
     if (existing?.status === "planned" && existing.plan?.tasks?.length) return existing;
     const targetId = existing?.id ?? id;
-    if (!existing) this.registry.createPlan({ id: targetId, requestKey: options.requestKey, objective: options.objective, cwd: options.cwd, metadata: { constraints: options.constraints ?? [] } });
+    if (!existing) this.registry.createPlan({ id: targetId, requestKey: options.requestKey, objective: options.objective, cwd: options.cwd, metadata: { constraints: options.constraints ?? [], requestedThreadIds: options.requestedThreadIds ?? [], requiredContextSubjects: options.requiredContextSubjects ?? [] } });
     else this.registry.updatePlan(targetId, { status: "planning", metadata: { resumedAt: new Date().toISOString() } });
     try {
-      return await this.#invoke(targetId, null);
+      const snapshot = options.contextSnapshot
+        ? this.contextResolver.assertSnapshot(options.contextSnapshot)
+        : await this.#resolveContext({
+          objective: options.objective, cwd: options.cwd, requiredSubjects: options.requiredContextSubjects,
+          requestedThreadIds: options.requestedThreadIds, maxContextBudget: options.maxContextBudget,
+        });
+      this.registry.updatePlan(targetId, { metadata: { contextSnapshotId: snapshot.id, contextSnapshotFingerprint: snapshot.fingerprint } });
+      return await this.#invoke(targetId, null, snapshot);
     } catch (error) {
       this.registry.updatePlan(targetId, { status: "failed", metadata: { error: error.message } });
       throw error;
@@ -80,7 +134,13 @@ export class PlannerEngine {
     if (!plan) throw new Error(`Plan not found: ${planId}`);
     this.registry.updatePlan(planId, { status: "revising", feedback });
     try {
-      return await this.#invoke(planId, feedback);
+      const snapshot = await this.#resolveContext({
+        objective: plan.objective, cwd: plan.cwd, objectiveRevision: plan.version + 1,
+        requiredSubjects: plan.metadata?.requiredContextSubjects,
+        requestedThreadIds: plan.metadata?.requestedThreadIds,
+      });
+      this.registry.updatePlan(planId, { metadata: { contextSnapshotId: snapshot.id, contextSnapshotFingerprint: snapshot.fingerprint } });
+      return await this.#invoke(planId, feedback, snapshot);
     } catch (error) {
       this.registry.updatePlan(planId, { status: "failed", metadata: { error: error.message } });
       throw error;
@@ -101,30 +161,57 @@ export class PlannerEngine {
     return this.registry.updatePlan(planId, { status: "synthesized", synthesis, completedAt: new Date().toISOString() });
   }
 
-  async #invoke(planId, feedback) {
+  async #invoke(planId, feedback, contextSnapshot) {
     const plan = this.registry.getPlan(planId);
-    const { control, agent } = await this.#ensureAgent(plan.cwd, "planner", plan.plannerAgentId);
+    const validatedSnapshot = this.contextResolver.assertSnapshot(contextSnapshot ?? plan.metadata?.contextSnapshotId);
     const context = this.contextManager.build({ cwd: plan.cwd, prompt: plan.objective, role: "planner", touch: true });
-    const prompt = [
+    const { control, agent } = await this.#ensureAgent(plan.cwd, "planner", plan.plannerAgentId);
+    const basePrompt = [
       "Create or revise an executable control-plane task graph. Return only JSON matching the supplied schema.",
       `Objective: ${plan.objective}`,
       feedback ? `Revision feedback: ${feedback}` : null,
       plan.plan ? `Previous plan: ${JSON.stringify(plan.plan)}` : null,
+      `Validated context snapshot (${validatedSnapshot.id}, fingerprint=${validatedSnapshot.fingerprint}):\n${this.contextResolver.format(validatedSnapshot)}`,
       `Project context:\n${this.contextManager.format(context)}`,
       "Use worktree workspace mode for concurrent file-writing tasks. Follow-up work must never start automatically.",
+      "The user Start gate applies exactly once to the parent Run. Every dependency task, validator, retry, and rework must execute under that existing authorization and must never request another, additional, separate, or second Start.",
+      "Set authorizationScope to parent_run for every task. This structured field is the authoritative authorization contract; task prose must not contradict it.",
+      "Declare taskKind, mutatesWorkspace, networkAccess, sideEffectPolicy, outputs, integrationStrategy, and dependencyPolicy explicitly. sideEffectPolicy=none means observation or computation only; local-runtime means lifecycle changes limited to this product's local daemon/process/socket; workspace means project file changes; external means changing remote services or other external systems; destructive means difficult-to-recover deletion or overwrite. Reading local process, socket, MCP, or health state is none. Normal automatic startup of this product's local daemon is local-runtime, never external. External and destructive tasks are outside automatic Run dispatch.",
+      "Use all_terminal for always-run cleanup/reporting and on_failure for fallback work. Role names describe specialization and never grant permissions.",
     ].filter(Boolean).join("\n\n");
-    const result = await control.runTask(agent.id, prompt, { cwd: plan.cwd, outputSchema: PLAN_SCHEMA, approvalPolicy: "never" });
-    const materialized = parseJsonOutput(result.output);
-    if (!materialized || !Array.isArray(materialized.tasks) || materialized.tasks.length === 0) {
-      throw new Error("Planner returned an invalid graph without tasks");
+    let materialized;
+    let contractError;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const prompt = [
+        basePrompt,
+        contractError ? `Your previous graph violated the Run authorization contract: ${contractError.message}. Correct every affected task and return the complete JSON graph again.` : null,
+      ].filter(Boolean).join("\n\n");
+      const result = await control.runTask(agent.id, prompt, { cwd: plan.cwd, outputSchema: PLAN_SCHEMA, approvalPolicy: "never" });
+      materialized = parseJsonOutput(result.output);
+      if (!materialized || !Array.isArray(materialized.tasks) || materialized.tasks.length === 0) {
+        throw new Error("Planner returned an invalid graph without tasks");
+      }
+      try {
+        assertSingleRunStart(materialized);
+        assertPlanExecutionContracts(materialized, this.roleTemplates);
+        contractError = null;
+        break;
+      } catch (error) {
+        contractError = error;
+      }
     }
+    if (contractError) throw contractError;
     return this.registry.updatePlan(planId, {
       status: "planned",
       version: plan.version + (feedback ? 1 : 0),
       plannerAgentId: agent.id,
       plan: materialized,
       feedback: feedback ?? plan.feedback,
-      metadata: { contextMemoryIds: context.memories.map((item) => item.id) },
+      metadata: {
+        contextMemoryIds: context.memories.map((item) => item.id),
+        contextSnapshotId: validatedSnapshot.id,
+        contextSnapshotFingerprint: validatedSnapshot.fingerprint,
+      },
     });
   }
 
@@ -146,6 +233,14 @@ export class PlannerEngine {
     this.registry.upsertAgent({ ...agent, status: "idle" }, { role, capabilities: template.capabilities, metadata: { tools: template.tools, controlPlane: true } });
     return { control, agent };
   }
+
+  async #resolveContext(options) {
+    if (options.requestedThreadIds?.length) {
+      const control = await this.getControl();
+      await this.threadKnowledgeIndexer.indexMany(control, { threadIds: options.requestedThreadIds, cwd: options.cwd });
+    }
+    return this.contextResolver.resolve(options);
+  }
 }
 
-export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput };
+export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput, assertSingleRunStart };

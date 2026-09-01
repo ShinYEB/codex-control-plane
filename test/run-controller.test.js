@@ -28,6 +28,25 @@ test("run controller exposes agent-assigned dependency graph", () => {
   registry.close();
 });
 
+test("run graph repairs a stale parent status after every task is terminal", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createTaskGraph(
+    { id: "run_stale_terminal", name: "stale terminal", status: "running", cwd: "/tmp/project" },
+    [
+      { id: "task_rejected", prompt: "inspect", status: "rejected" },
+      { id: "task_failed", prompt: "test", status: "failed", dependsOn: ["task_rejected"] },
+    ],
+  );
+  const controller = new RunController({ registry, getControl: async () => null });
+
+  const graph = controller.graph("run_stale_terminal");
+
+  assert.equal(graph.run.status, "failed");
+  assert.equal(graph.run.completedAt !== null, true);
+  assert.equal(registry.getRun("run_stale_terminal").status, "failed");
+  registry.close();
+});
+
 test("run controller releases roots and keeps dependent nodes blocked", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createTaskGraph({ id: "run_start", status: "awaiting_user_start" }, [

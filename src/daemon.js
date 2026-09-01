@@ -3,7 +3,8 @@
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { dirname } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { runtimeIdentity } from "./build-info.js";
 
 import { DEFAULT_DAEMON_SOCKET } from "./daemon-client.js";
 import { McpControlServer } from "./mcp-server.js";
@@ -34,9 +35,14 @@ export class ControlPlaneDaemon {
     this.control = options.control ?? new McpControlServer({ sessionWriter: true });
     this.server = null;
     this.lockOwned = false;
+    this.startedAt = null;
+    this.draining = false;
+    this.drainTargetBuildId = null;
+    this.drainTimer = null;
   }
 
   async start() {
+    this.startedAt = new Date().toISOString();
     mkdirSync(dirname(this.socketPath), { recursive: true });
     this.#acquireLock();
     try { unlinkSync(this.socketPath); } catch (error) { if (error.code !== "ENOENT") throw error; }
@@ -54,6 +60,8 @@ export class ControlPlaneDaemon {
   }
 
   async close() {
+    clearInterval(this.drainTimer);
+    this.drainTimer = null;
     const server = this.server;
     this.server = null;
     const serverClosed = server ? new Promise((resolve) => server.close(resolve)) : Promise.resolve();
@@ -83,12 +91,44 @@ export class ControlPlaneDaemon {
   }
 
   async #handle(request, response) {
+    const activeTasks = this.#activeTasks();
     if (request.method === "GET" && request.url === "/health") {
-      sendJson(response, 200, { ok: true, pid: process.pid, version: "0.14.0" });
+      sendJson(response, 200, {
+        ok: true,
+        pid: process.pid,
+        ...runtimeIdentity(fileURLToPath(import.meta.url)),
+        startedAt: this.startedAt,
+        activeTasks,
+        draining: this.draining,
+        targetBuildId: this.drainTargetBuildId,
+        capabilities: ["execution-contract-v1", "dirty-worktree-snapshot", "artifact-integration", "authorized-build-handover"],
+      });
+      return;
+    }
+    if (request.method === "POST" && request.url === "/shutdown") {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(chunk);
+      let payload = {};
+      try { payload = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : {}; } catch {}
+      if (payload.authority !== "deployment") {
+        sendJson(response, 403, { error: { code: "HANDOVER_AUTHORITY_REQUIRED", message: "Daemon handover requires explicit deployment authority" } });
+        return;
+      }
+      if (activeTasks > 0) {
+        this.#beginDrain(payload.expectedBuildId ?? null);
+        sendJson(response, 202, { ok: true, code: "DAEMON_UPGRADE_PENDING", draining: true, activeTasks, targetBuildId: this.drainTargetBuildId });
+        return;
+      }
+      sendJson(response, 200, { ok: true, draining: true });
+      setImmediate(() => void this.close());
       return;
     }
     if (request.method !== "POST" || request.url !== "/rpc") {
       sendJson(response, 404, { error: "Not found" });
+      return;
+    }
+    if (this.draining) {
+      sendJson(response, 409, { error: { code: "DAEMON_UPGRADE_PENDING", message: "Daemon is draining and no longer accepts new Control Plane work" } });
       return;
     }
     const chunks = [];
@@ -108,6 +148,26 @@ export class ControlPlaneDaemon {
     } catch (error) {
       sendJson(response, 500, { error: { message: error.message, code: error.code ?? -32603 } });
     }
+  }
+
+  #activeTasks() {
+    return Math.max(this.control.runningTaskIds?.size ?? 0, this.control.activeTaskPromises?.size ?? 0)
+      + (this.control.controlDispatches?.size ?? 0)
+      + (this.control.runFinalizations?.size ?? 0)
+      + (this.control.controlDeliveryFlights?.size ?? 0);
+  }
+
+  #beginDrain(targetBuildId) {
+    this.draining = true;
+    this.drainTargetBuildId = targetBuildId;
+    if (this.drainTimer) return;
+    this.drainTimer = setInterval(() => {
+      if (this.#activeTasks() > 0) return;
+      clearInterval(this.drainTimer);
+      this.drainTimer = null;
+      setImmediate(() => void this.close());
+    }, 100);
+    this.drainTimer.unref?.();
   }
 }
 

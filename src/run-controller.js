@@ -1,21 +1,20 @@
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
-const TERMINAL_TASK_STATUSES = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "canceled", "interrupted"]);
+import { ACTIVE_TASK_STATUSES, TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES, WAITING_TASK_STATUSES } from "./domain-states.js";
 
 function dependencyId(entry) {
   return typeof entry === "string" ? entry : entry?.taskId ?? entry?.dependsOnTaskId;
 }
 
 function nodeProgress(status) {
-  if (["completed", "completed_with_warnings"].includes(status)) return 100;
-  if (["rejected", "validation_failed", "failed", "canceled", "interrupted"].includes(status)) return 100;
-  if (["running", "approval_waiting", "agent_done", "validating"].includes(status)) return null;
+  if (["completed", "completed_with_warnings", "skipped"].includes(status)) return 100;
+  if (TERMINAL_TASK_STATUSES.has(status)) return 100;
+  if (ACTIVE_TASK_STATUSES.has(status)) return null;
   return 0;
 }
 
 function compactFailure(failure) {
   if (!failure) return null;
   return {
-    type: failure.type ?? null, cause: failure.cause ?? failure.message ?? null,
+    type: failure.type ?? null, category: failure.category ?? null, cause: failure.cause ?? failure.message ?? null,
     retryable: Boolean(failure.retryable), nextAction: failure.nextAction ?? failure.requestedAction ?? null,
     attemptBudget: failure.attemptBudget ?? null, exhausted: Boolean(failure.exhausted),
   };
@@ -35,7 +34,6 @@ export function buildRunGraph(registry, runId, options = {}) {
   const run = registry.getRun(runId);
   if (!run) throw new Error(`Run not found: ${runId}`);
   const tasks = registry.listTasks({ runId, limit: 1000 });
-  const approvals = registry.listApprovals?.({ limit: 1000 }) ?? [];
   const worktrees = registry.listManagedWorktrees?.({ limit: 1000 }) ?? [];
   const plan = run.planId ? registry.getPlan?.(run.planId) : null;
   const orchestratorSessionIdentity = run.metadata?.orchestratorSessionIdentity
@@ -44,7 +42,6 @@ export function buildRunGraph(registry, runId, options = {}) {
   const nodes = tasks.map((task) => {
     const execution = task.metadata?.execution ?? {};
     const agent = task.agentId ? registry.getAgent(task.agentId) : null;
-    const approval = approvals.find((item) => item.taskId === task.id && item.status === "pending") ?? null;
     const worktreeId = task.metadata?.managedWorktreeId;
     const worktree = worktreeId ? worktrees.find((item) => item.id === worktreeId) : null;
     const routing = execution.preparedRouting ?? task.routing ?? null;
@@ -60,13 +57,23 @@ export function buildRunGraph(registry, runId, options = {}) {
       maxAttempts: task.maxAttempts,
       dependsOn: (task.dependencies ?? []).map(dependencyId).filter(Boolean),
       agent: agent ? { id: agent.id, name: agent.name, role: agent.role, status: agent.status } : null,
+      resultSession: task.agentId ? {
+        threadId: task.agentId,
+        turnId: task.turnId ?? null,
+        name: agent?.name ?? null,
+        role: agent?.role ?? task.role ?? "agent",
+        available: TERMINAL_TASK_STATUSES.has(task.status),
+      } : null,
       workspace: {
         mode: execution.workspaceMode ?? "shared",
         path: worktree?.path ?? task.metadata?.effectiveCwd ?? task.cwd,
         branch: worktree?.branch ?? execution.branch ?? null,
         status: worktree?.status ?? null,
+        baseline: worktree?.metadata?.baseline ?? null,
+        artifact: worktree?.metadata?.artifact ?? null,
+        integration: task.metadata?.integration ?? null,
       },
-      approval: approval ? { id: approval.id, method: approval.method, status: approval.status, createdAt: approval.createdAt } : null,
+      executionContract: task.metadata?.executionContract ?? execution.executionContract ?? null,
       failureSummary: compactFailure(task.metadata?.failure),
       routingSummary: compactRouting(routing),
       ...(options.detail === false ? {} : {
@@ -97,6 +104,16 @@ export function buildRunGraph(registry, runId, options = {}) {
       planVersion: plan?.version ?? null,
       dispatchPath: run.metadata?.dispatchPath ?? (tasks.length === 1 ? "direct" : "orchestrated"),
       complexity: run.metadata?.complexity ?? null,
+      dispatchPhase: run.metadata?.dispatchPhase ?? null,
+      failure: run.metadata?.dispatchError ? {
+        type: "configuration",
+        category: "configuration",
+        stage: run.metadata?.dispatchPhase ?? "dispatch",
+        cause: run.metadata.dispatchError,
+        nextAction: "repair_contract",
+        retryable: false,
+      } : null,
+      workspacePreflight: run.metadata?.workspacePreflight ?? null,
       scheduler: run.metadata?.schedulerIdentity ?? null,
       orchestratorSession: orchestratorSessionIdentity,
       orchestrator: orchestratorSessionIdentity ? {
@@ -115,8 +132,8 @@ export function buildRunGraph(registry, runId, options = {}) {
       total: nodes.length,
       completed,
       finished,
-      active: nodes.filter((node) => ["running", "approval_waiting", "agent_done", "validating"].includes(node.status)).length,
-      waiting: nodes.filter((node) => ["staged", "queued", "blocked", "retry_waiting", "waiting_for_lease"].includes(node.status)).length,
+      active: nodes.filter((node) => ACTIVE_TASK_STATUSES.has(node.status)).length,
+      waiting: nodes.filter((node) => WAITING_TASK_STATUSES.has(node.status)).length,
       progress: nodes.length ? Math.round((finished / nodes.length) * 100) : 0,
       counts,
     },
@@ -132,6 +149,11 @@ export class RunController {
   }
 
   graph(runId, options = {}) {
+    // A graph is the authoritative live view of a Run. Repair a stale parent
+    // status before projecting it, including Runs left inconsistent by an
+    // older daemon that terminalized a dependency cascade without refreshing
+    // the parent Run.
+    this.registry.refreshRun(runId);
     return buildRunGraph(this.registry, runId, options);
   }
 
@@ -139,7 +161,7 @@ export class RunController {
     const run = this.registry.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
     if (run.status === "running") return { runId, status: "running", releasedTasks: 0, tasks: this.registry.listTasks({ runId, limit: 1000 }) };
-    if (run.status !== "awaiting_user_start") throw new Error(`Run ${runId} cannot start from ${run.status}`);
+    if (!["preparing", "agents_prepared", "awaiting_user_start"].includes(run.status)) throw new Error(`Run ${runId} cannot start from ${run.status}`);
     const tasks = this.registry.listTasks({ runId, limit: 1000 });
     if (!tasks.length) throw new Error(`Run has no tasks: ${runId}`);
     const result = this.registry.releaseStagedRun(runId, details);
@@ -152,9 +174,9 @@ export class RunController {
     if (!run) throw new Error(`Run not found: ${runId}`);
     if (TERMINAL_RUN_STATUSES.has(run.status)) return run;
     const tasks = this.registry.listTasks({ runId, limit: 1000 });
-    const control = tasks.some((task) => ["running", "approval_waiting", "validating"].includes(task.status)) ? await this.getControl() : null;
+    const control = tasks.some((task) => ["running", "validating", "integration_pending"].includes(task.status)) ? await this.getControl() : null;
     for (const task of tasks) {
-      if (!["running", "approval_waiting", "validating"].includes(task.status)) continue;
+      if (!["running", "validating", "integration_pending"].includes(task.status)) continue;
       const threadId = task.status === "validating" ? task.metadata?.validationInProgress?.agentId : task.agentId;
       const turnId = task.status === "validating" ? task.metadata?.validationInProgress?.turnId : task.turnId;
       if (!threadId || !turnId) continue;

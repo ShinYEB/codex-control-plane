@@ -60,34 +60,59 @@
     .button:disabled { opacity: .55; cursor: wait; }
     .button.primary { border-color: var(--accent); background: var(--accent); color: white; font-weight: 700; }
     .button.danger { color: var(--red); }
+    .secondary-section { margin-bottom:10px; border:1px solid var(--line); border-radius:13px; background:var(--surface); box-shadow:var(--shadow); overflow:hidden; }
+    .secondary-section > summary { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; cursor:pointer; color:var(--muted); font-size:12px; font-weight:700; list-style:none; }
+    .secondary-section > summary::-webkit-details-marker { display:none; }
+    .secondary-section > summary::after { content:"펼치기"; color:var(--accent); font-size:11px; font-weight:700; }
+    .secondary-section[open] > summary::after { content:"접기"; }
+    .secondary-section[open] > summary { border-bottom:1px solid var(--line); }
     .dispatch-board { margin-bottom:10px; padding:12px 14px; border:1px solid var(--line); border-radius:13px; background:var(--surface); box-shadow:var(--shadow); }
     .dispatch-board-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:9px; }
     .dispatch-board-title { font-weight:760; }
     .dispatch-board-help { color:var(--muted); font-size:11px; }
     .control-ready { display:inline-flex; align-items:center; gap:6px; color:var(--green); font-size:11px; font-weight:700; white-space:nowrap; }
     .control-ready::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--green); }
-    .run-lanes { display:flex; gap:8px; overflow-x:auto; padding-bottom:2px; }
-    .run-card { flex:0 0 min(280px, 78vw); display:grid; gap:6px; padding:10px 11px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
+    .run-lanes { display:grid; gap:7px; max-height:330px; overflow-y:auto; overflow-x:hidden; }
+    .run-card { width:100%; min-width:0; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px 12px; padding:11px 12px; border:1px solid var(--line); border-radius:10px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
     .run-card:hover, .run-card.selected { border-color:var(--accent); background:var(--accent-soft); }
-    .run-card-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .run-card-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:700; }
-    .run-card-path { color:var(--muted); font-size:10px; }
-    .dispatch-track { display:grid; grid-template-columns:repeat(4,1fr); gap:3px; }
+    .run-card-top { min-width:0; }
+    .run-card-name { display:-webkit-box; min-width:0; min-height:2.7em; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:2; font-weight:700; line-height:1.35; word-break:keep-all; overflow-wrap:anywhere; }
+    .run-card-path { min-width:0; color:var(--muted); font-size:10px; word-break:keep-all; overflow-wrap:anywhere; }
+    .run-card-actors { grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:4px 10px; min-width:0; color:var(--muted); font-size:10px; }
+    .run-card-actors span { min-width:0; word-break:keep-all; overflow-wrap:anywhere; }
+    .run-card-meta { display:flex; align-items:center; justify-content:flex-end; gap:7px; white-space:nowrap; }
+    .run-card-progress { grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:9px; min-width:0; }
+    .run-card-progress small { color:var(--muted); font-size:10px; white-space:nowrap; }
+    .dispatch-track { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:3px; width:100%; min-width:0; overflow:hidden; }
     .dispatch-track span { height:3px; border-radius:99px; background:var(--surface-2); }
     .dispatch-track span.done { background:var(--green); }
     .dispatch-track span.current { background:var(--accent); animation:graph-pulse 1.4s ease-in-out infinite alternate; }
-    .runbar { display: none; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); border-radius: 13px; box-shadow: var(--shadow); }
+    .runbar { display: none; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 10px; padding: 18px; border: 1px solid var(--line); background: var(--surface); border-radius: 15px; box-shadow: var(--shadow); }
     .runbar.visible { display: flex; }
     .run-main { min-width: 0; flex: 1; }
     .run-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
     .run-title-line { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; }
-    .run-title-line .name { font-size: 16px; }
+    .run-title-line .name { min-width:0; font-size:16px; white-space:normal; word-break:keep-all; overflow-wrap:anywhere; text-overflow:clip; }
     .run-status-badge { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 9px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 700; }
     .run-guidance { margin-top: 3px; color: var(--muted); font-size:12px; }
-    .run-select-wrap { flex: 0 1 250px; color: var(--muted); font-size: 11px; }
-    .run-select { display: block; width: 100%; margin-top: 4px; border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 9px; padding: 8px 10px; }
+    .focus-now { margin-top:12px; padding:10px 12px; border-radius:10px; background:var(--surface-2); }
+    .focus-now-label { color:var(--muted); font-size:10px; font-weight:750; letter-spacing:.06em; text-transform:uppercase; }
+    .focus-now-value { margin-top:2px; font-weight:680; word-break:keep-all; overflow-wrap:anywhere; }
+    .focus-result { display:none; margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+    .focus-result.visible { display:block; }
+    .focus-result strong { display:block; margin-bottom:3px; }
+    .focus-result p { display:-webkit-box; margin:0; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:4; color:var(--muted); font-size:12px; word-break:keep-all; overflow-wrap:anywhere; }
     .run-actions { display: flex; gap: 8px; flex-shrink: 0; }
+    .notification-banner { display:none; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:10px; padding:11px 13px; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:11px; background:var(--surface); box-shadow:var(--shadow); }
+    .notification-banner.visible { display:flex; }
+    .notification-banner.completed { border-left-color:var(--green); }
+    .notification-banner.failed { border-left-color:var(--red); }
+    .notification-banner.attention_required, .notification-banner.policy_blocked { border-left-color:var(--amber); }
+    .notification-kind { font-size:11px; font-weight:800; color:var(--muted); }
+    .notification-title { margin-top:1px; font-weight:760; }
+    .notification-body { margin-top:2px; color:var(--muted); font-size:12px; word-break:keep-all; overflow-wrap:anywhere; }
     .metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 10px; }
+    .inspector-body { padding:10px; }
     .metric { display:grid; grid-template-columns:1fr auto; align-items:center; gap:8px; padding: 9px 12px; border: 1px solid var(--line); background: var(--surface); border-radius: 11px; }
     .metric-label { color: var(--muted); font-size: 12px; }
     .metric-value { grid-column:2; grid-row:1 / span 2; font-size: 22px; font-weight: 720; letter-spacing: -.04em; }
@@ -100,16 +125,30 @@
     .search { width: min(260px, 42vw); border: 1px solid var(--line); background: var(--bg); color: var(--text); border-radius: 9px; padding: 7px 10px; outline: none; }
     .search:focus { border-color: var(--accent); }
     .list { min-height: 0; overflow: visible; }
+    .result-view { display:grid; gap:12px; padding:16px; }
+    .result-hero { padding:14px; border-radius:12px; background:var(--surface-2); }
+    .result-hero h2 { margin:0 0 6px; font-size:17px; word-break:keep-all; overflow-wrap:anywhere; }
+    .result-hero p { margin:0; color:var(--muted); word-break:keep-all; overflow-wrap:anywhere; }
+    .result-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
+    .result-card { min-width:0; padding:12px; border:1px solid var(--line); border-radius:11px; background:var(--surface); }
+    .result-card strong { display:block; margin-bottom:5px; font-size:12px; }
+    .result-card ul { margin:0; padding-left:18px; color:var(--muted); font-size:11px; }
+    .result-card .meta { white-space:normal; word-break:keep-all; overflow-wrap:anywhere; }
+    .advanced-body { display:grid; gap:14px; }
+    .diagnostic-block { padding:12px; border:1px solid var(--line); border-radius:11px; background:var(--surface-2); }
+    .diagnostic-block h3 { margin:0 0 8px; font-size:13px; }
     .graph-view { min-height: 0; overflow: auto; overflow-x:hidden; padding: 16px; background: color-mix(in srgb, var(--bg) 72%, transparent); }
-    .graph-summary { display: grid; grid-template-columns:minmax(180px, 1fr) auto minmax(180px, 1fr) auto; align-items: center; gap: 14px; padding: 0 2px 16px; color: var(--muted); }
+    .graph-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px 14px; padding:0 2px 14px; color:var(--muted); }
     .graph-summary strong { color: var(--text); font-size: 17px; }
     .graph-summary-title { min-width: 0; }
-    .graph-summary-title strong { display:block; word-break:keep-all; overflow-wrap:break-word; }
+    .graph-summary-title strong { display:block; word-break:keep-all; overflow-wrap:anywhere; }
     .graph-summary-title small { display:block; margin-top:2px; color:var(--muted); font-size:11px; font-weight:400; }
+    .graph-objective { grid-column:1 / -1; display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:3; color:var(--muted); font-size:12px; word-break:keep-all; overflow-wrap:anywhere; }
+    .graph-progress-row { grid-column:1 / -1; display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; min-width:0; }
     .stage-line { display:flex; align-items:center; gap:5px; color:var(--muted); font-size:11px; }
     .stage-line span { white-space:nowrap; }
     .stage-line .current { color:var(--accent); font-weight:700; }
-    .graph-progress { flex: 1; max-width: 260px; height: 6px; overflow: hidden; border-radius: 99px; background: var(--surface-2); }
+    .graph-progress { width:100%; min-width:0; height:6px; overflow:hidden; border-radius:99px; background:var(--surface-2); }
     .graph-progress > span { display: block; height: 100%; background: var(--accent); transition: width .25s ease; }
     .plane-map-wrap { margin-bottom:12px; padding:13px; border:1px solid var(--line); border-radius:13px; background:var(--surface); }
     .plane-map-head { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:8px 12px; margin-bottom:10px; }
@@ -136,25 +175,27 @@
     .plane-connector span { font-size:9px; text-align:center; }
     .attention-bar { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; padding:8px 11px; border-radius:9px; color:var(--muted); background:var(--surface-2); font-size:11px; }
     .attention-bar.needs-action { color:var(--amber); background:color-mix(in srgb, var(--amber) 11%, var(--surface)); }
-    .graph-board { position: relative; min-width: 560px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); overflow: hidden; }
-    .graph-edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    .graph-edge { fill: none; stroke: color-mix(in srgb, var(--muted) 38%, transparent); stroke-width: 1.5; }
-    .graph-node { position: absolute; width: 252px; min-height: 128px; padding: 14px 15px; border: 1px solid var(--line); border-top: 4px solid var(--muted); border-radius: 12px; background: var(--surface); color: var(--text); text-align: left; cursor: pointer; box-shadow: 0 7px 20px rgba(0,0,0,.08); }
+    .graph-board { display:grid; gap:0; min-width:0; border:1px solid var(--line); border-radius:14px; background:var(--surface); overflow:hidden; }
+    .dependency-level { display:grid; gap:9px; padding:12px; }
+    .dependency-level + .dependency-level { border-top:1px solid var(--line); }
+    .dependency-level-head { display:flex; align-items:center; justify-content:space-between; gap:10px; color:var(--muted); font-size:11px; }
+    .dependency-level-head strong { color:var(--text); font-size:12px; }
+    .dependency-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; }
+    .dependency-connector { display:flex; align-items:center; justify-content:center; gap:7px; margin:-4px 0; color:var(--muted); font-size:10px; }
+    .dependency-connector strong { color:var(--accent); font-size:18px; line-height:1; }
+    .graph-node { width:100%; min-width:0; min-height:0; padding:11px 12px; border:1px solid var(--line); border-left:4px solid var(--muted); border-radius:10px; background:var(--bg); color:var(--text); text-align:left; cursor:pointer; }
     .graph-node:hover { border-color: var(--accent); transform: translateY(-1px); }
-    .graph-node.running, .graph-node.agent_done, .graph-node.validating { border-top-color: var(--green); }
-    .graph-node.approval_waiting, .graph-node.queued, .graph-node.blocked, .graph-node.staged { border-top-color: var(--amber); }
-    .graph-node.completed { border-top-color: var(--accent); }
-    .graph-node.completed_with_warnings { border-top-color: var(--amber); }
-    .graph-node.rejected, .graph-node.validation_failed, .graph-node.failed, .graph-node.interrupted, .graph-node.canceled { border-top-color: var(--red); }
+    .graph-node.running, .graph-node.agent_done, .graph-node.validating { border-left-color:var(--green); }
+    .graph-node.queued, .graph-node.blocked, .graph-node.staged { border-left-color:var(--amber); }
+    .graph-node.completed { border-left-color:var(--accent); }
+    .graph-node.completed_with_warnings { border-left-color:var(--amber); }
+    .graph-node.rejected, .graph-node.validation_failed, .graph-node.failed, .graph-node.interrupted, .graph-node.canceled { border-left-color:var(--red); }
     .graph-node-head { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
-    .graph-node-title { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .graph-node-title { min-width:0; font-weight:700; line-height:1.35; word-break:keep-all; overflow-wrap:anywhere; }
     .graph-node-status { padding:3px 7px; border-radius:999px; color: var(--muted); background:var(--surface-2); font-size: 11px; white-space: nowrap; }
-    .graph-node-agent { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .graph-node-foot { display: flex; justify-content: space-between; gap: 8px; margin-top: 13px; color: var(--muted); font-size: 11px; }
-    .advanced-nav { position:relative; }
-    .advanced-nav summary { list-style:none; cursor:pointer; color:var(--muted); padding:8px 10px; white-space:nowrap; }
-    .advanced-nav summary::-webkit-details-marker { display:none; }
-    .advanced-tabs { position:absolute; z-index:5; right:0; top:calc(100% + 7px); display:grid; grid-template-columns:repeat(2, minmax(100px, 1fr)); gap:4px; min-width:230px; padding:7px; border:1px solid var(--line); border-radius:11px; background:var(--surface); box-shadow:var(--shadow); }
+    .graph-node-agent { color:var(--muted); font-size:11px; word-break:keep-all; overflow-wrap:anywhere; }
+    .graph-node-dependencies { margin-top:8px; padding:6px 8px; border-radius:7px; color:var(--muted); background:var(--surface-2); font-size:10px; word-break:keep-all; overflow-wrap:anywhere; }
+    .graph-node-foot { display:flex; justify-content:space-between; flex-wrap:wrap; gap:5px 8px; margin-top:8px; color:var(--muted); font-size:10px; }
     .graph-node-pulse { width: 100%; height: 3px; margin-top: 8px; overflow: hidden; border-radius: 99px; background: var(--surface-2); }
     .graph-node-pulse::after { content: ""; display: block; width: 38%; height: 100%; background: var(--green); animation: graph-pulse 1.4s ease-in-out infinite alternate; }
     @keyframes graph-pulse { from { transform: translateX(-10%); } to { transform: translateX(190%); } }
@@ -169,7 +210,7 @@
     .status { display: inline-flex; align-items: center; gap: 7px; text-transform: capitalize; }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
     .dot.active, .dot.running, .dot.inprogress, .dot.agentdone, .dot.validating { background: var(--green); box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 12%, transparent); }
-    .dot.staged, .dot.queued, .dot.blocked, .dot.approvalwaiting, .dot.retrywaiting, .dot.waitingforlease { background: var(--amber); }
+    .dot.staged, .dot.queued, .dot.blocked, .dot.retrywaiting, .dot.waitingforlease { background: var(--amber); }
     .dot.rejected, .dot.validationfailed, .dot.failed, .dot.interrupted, .dot.canceled { background: var(--red); }
     .dot.completed, .dot.idle, .dot.available { background: var(--accent); }
     .pill { display: inline-block; width: fit-content; padding: 3px 7px; border-radius: 999px; color: var(--muted); background: var(--surface-2); font-size: 11px; }
@@ -178,7 +219,7 @@
     dialog { width: min(680px, calc(100vw - 32px)); max-height: 78vh; border: 1px solid var(--line); border-radius: 15px; background: var(--surface); color: var(--text); box-shadow: 0 28px 80px rgba(0,0,0,.28); padding: 0; }
     dialog::backdrop { background: rgba(0,0,0,.38); backdrop-filter: blur(3px); }
     .detail-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px; border-bottom: 1px solid var(--line); }
-    .detail-body { padding: 18px; overflow: auto; max-height: 66vh; }
+    .detail-body { padding: 18px; overflow: auto; max-height: 66vh; word-break:keep-all; overflow-wrap:anywhere; }
     .detail-section + .detail-section { margin-top:18px; padding-top:18px; border-top:1px solid var(--line); }
     .detail-section h3 { margin:0 0 8px; font-size:13px; }
     .detail-grid { display:grid; grid-template-columns:repeat(2, minmax(0, 1fr)); gap:10px; }
@@ -193,104 +234,178 @@
     .form-grid { display:grid; gap:14px; }
     .field { display:grid; gap:6px; }
     .field span { color:var(--muted); font-size:12px; }
-    .field input, .field textarea { width:100%; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--text); padding:9px 10px; outline:none; }
-    .field input:focus, .field textarea:focus { border-color:var(--accent); }
+    .field input, .field textarea, .field select { width:100%; border:1px solid var(--line); border-radius:9px; background:var(--bg); color:var(--text); padding:9px 10px; outline:none; }
+    .field input:focus, .field textarea:focus, .field select:focus { border-color:var(--accent); }
     .field textarea { min-height:92px; resize:vertical; }
+    .repair-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:14px; }
+    .repair-check { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+    .repair-check input { width:auto; }
     .form-help { color:var(--muted); font-size:12px; }
     .dialog-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:18px; }
     .text-destructive { color: var(--red); }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); font: 11px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    @media (max-width: 1040px) {
+    @media (max-width: 1180px) {
       .plane-map { grid-template-columns:1fr; }
       .plane-step { min-height:0; }
       .plane-connector { min-height:28px; grid-template-columns:auto auto; align-content:center; }
       .plane-connector strong { transform:rotate(90deg); }
+      .dependency-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    }
+    @media (max-width: 900px) {
       .header { align-items:flex-start; flex-direction: column; }
+      .toolbar { width:100%; }
       .row, .row.agent-row { grid-template-columns:1fr; align-items:start; }
       .row > *, .row.agent-row > * { min-width:0; }
       .row .name, .row .meta { white-space:normal; word-break:keep-all; overflow-wrap:break-word; }
       .row-actions { grid-column:1; justify-content:flex-start; }
       .panel-head { align-items: stretch; flex-direction: column; }
       .runbar { align-items:stretch; flex-direction:column; }
-      .run-select-wrap { flex-basis:auto; }
       .graph-summary { grid-template-columns:1fr auto; }
-      .graph-summary .graph-progress { grid-column:1 / -1; max-width:none; width:100%; }
       .stage-line { display:none; }
       .plane-step { grid-template-columns:32px minmax(0,1fr); padding:11px; text-align:left; }
       .plane-number { width:30px; height:30px; }
       .plane-name { font-size:13px; }
-      .graph-board { display:grid; gap:8px; width:100% !important; min-width:0; height:auto !important; padding:8px; }
-      .graph-edges { display:none; }
-      .graph-node { position:relative; inset:auto !important; width:100%; min-height:0; }
       .detail-grid { grid-template-columns:1fr; }
       .search { width: 100%; }
     }
     @media (max-width: 720px) {
+      body { font-size:14px; }
+      .app { padding:12px 10px; }
+      .dispatch-board-head { align-items:flex-start; }
+      .control-ready { font-size:10px; }
+      .run-card { grid-template-columns:minmax(0,1fr); }
+      .run-card-name { min-height:4.05em; -webkit-line-clamp:3; }
+      .run-card-meta { justify-content:space-between; }
+      .run-card-progress { grid-column:1; }
+      .run-actions { flex-wrap:wrap; }
       .metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
       .metric { display:block; padding:9px; text-align:center; }
       .metric-value { margin-top:2px; font-size:19px; }
       .metric-help { display:none; }
+      .dependency-grid { grid-template-columns:1fr; }
+      .graph-node-head { display:grid; grid-template-columns:minmax(0,1fr); }
+      .graph-node-title { width:100%; }
+      .graph-node-status { justify-self:start; }
       .requirement-grid { grid-template-columns:1fr; }
+      .result-grid { grid-template-columns:1fr; }
+    }
+    @media (max-width: 520px) {
+      .app { padding:8px; }
+      .header { gap:10px; margin-bottom:10px; }
+      h1 { font-size:20px; }
+      .subtitle { font-size:12px; word-break:keep-all; overflow-wrap:anywhere; }
+      .toolbar { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:7px; }
+      .scope-filter { grid-column:1 / -1; display:grid; grid-template-columns:auto minmax(0,1fr); }
+      .scope-filter select { width:100%; min-width:0; }
+      .live { align-self:center; }
+      .dispatch-board { padding:10px; }
+      .dispatch-board-head { flex-direction:column; gap:5px; }
+      .dispatch-board-help { line-height:1.4; }
+      .run-lanes { max-height:300px; }
+      .run-card { padding:10px; }
+      .run-card-name { font-size:13px; }
+      .run-status-badge { padding:3px 7px; font-size:10px; }
+      .runbar { padding:11px; }
+      .run-title-line { align-items:flex-start; }
+      .run-title-line .name { flex:1 1 100%; white-space:normal; word-break:keep-all; overflow-wrap:anywhere; }
+      .run-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); }
+      .run-actions .button { width:100%; }
+      .metric { min-width:0; }
+      .panel { border-radius:12px; }
+      .panel-head { padding:10px; }
+      .tabs { width:100%; }
+      .tab { flex:1 1 0; text-align:center; }
+      .graph-view { padding:10px; }
+      .graph-summary { gap:7px 10px; }
+      .graph-summary strong { font-size:15px; }
+      .graph-objective { -webkit-line-clamp:2; font-size:11px; }
+      .plane-map-wrap { padding:10px; }
+      .plane-map-head { margin-bottom:8px; }
+      .plane-help { display:none; }
+      .plane-step { grid-template-columns:28px minmax(0,1fr); gap:6px 8px; padding:9px; }
+      .plane-number { width:28px; height:28px; }
+      .plane-state, .plane-step > .button-link { grid-column:2; }
+      .attention-bar { align-items:flex-start; flex-direction:column; gap:4px; }
+      .dependency-level { padding:9px; }
+      .dependency-level-head { align-items:flex-start; }
+      .graph-node { padding:10px; }
+      .graph-node-head { align-items:flex-start; flex-wrap:wrap; }
+      .graph-node-title { flex:1 1 220px; }
+      .graph-node-status { flex:0 0 auto; }
+      .graph-node-dependencies { display:-webkit-box; overflow:hidden; -webkit-box-orient:vertical; -webkit-line-clamp:3; }
+      .footer { align-items:flex-start; flex-direction:column; gap:2px; }
+      dialog { width:calc(100vw - 16px); max-height:92vh; }
+      .detail-head { padding:11px 12px; }
+      .detail-body { max-height:78vh; padding:12px; }
+      .detail-grid, .repair-grid { grid-template-columns:1fr; }
+    }
+    @media (max-width: 380px) {
+      .run-actions { grid-template-columns:1fr; }
     }
   </style>
 </head>
 <body>
-  <main class="app" data-visual-regression-widths="600 800 1000">
+  <main class="app" data-visual-regression-widths="360 480 600 800 1000 1200">
     <header class="header">
       <div>
         <div class="eyebrow">Control plane</div>
-        <h1>멀티 에이전트 작업 현황</h1>
-        <div class="subtitle" id="scope">요청별 실행 상태와 담당 에이전트를 확인합니다.</div>
+        <h1>작업 진행 상황</h1>
+        <div class="subtitle" id="scope">필요할 때만 백그라운드 작업의 상세 내용을 확인합니다.</div>
       </div>
       <div class="toolbar">
-        <label class="scope-filter">표시 범위<select id="archive-scope"><option value="active">활성</option><option value="archived">보관됨</option><option value="all">전체</option></select></label>
         <span class="live">자동 갱신</span>
         <button class="button" id="refresh">새로고침</button>
       </div>
     </header>
 
-    <section class="dispatch-board" id="dispatch-board">
-      <div class="dispatch-board-head"><div><div class="dispatch-board-title">컨트롤 플레인 작업함</div><div class="dispatch-board-help">요청을 접수하면 각 실행이 백그라운드에서 독립적으로 진행됩니다.</div></div><span class="control-ready">새 요청 접수 가능</span></div>
-      <div class="run-lanes" id="run-lanes"><div class="meta">접수된 실행이 없습니다.</div></div>
-    </section>
-
     <section class="runbar" id="runbar">
       <div class="run-main">
-        <div class="run-label">선택한 실행</div>
+        <div class="run-label">현재 작업</div>
         <div class="run-title-line"><div class="name" id="run-name">준비된 실행</div><span class="run-status-badge" id="run-status-badge">확인 중</span></div>
         <div class="run-guidance" id="run-status">상태를 확인하고 있습니다.</div>
+        <div class="focus-now"><div class="focus-now-label">지금 하는 일</div><div class="focus-now-value" id="focus-now">실행 정보를 불러오는 중입니다.</div></div>
+        <div class="focus-result" id="focus-result"><strong>결과 요약</strong><p id="focus-result-summary"></p></div>
       </div>
-      <label class="run-select-wrap" id="run-select-wrap">다른 실행 보기<select class="run-select" id="run-select"></select></label>
-      <div class="run-actions"><button class="button" id="archive-run">보관</button><button class="button danger" id="cancel-run">취소</button><button class="button primary" id="start-run">작업 시작</button></div>
+      <div class="run-actions"><button class="button primary" id="open-inspector">상세 보기</button><button class="button danger" id="cancel-run">취소</button><button class="button" id="archive-run">보관</button></div>
     </section>
 
-    <section class="metrics">
-      <article class="metric"><div class="metric-label">전체 작업</div><div class="metric-value" id="m-agents">—</div><div class="metric-help">이번 실행의 작업 수</div></article>
-      <article class="metric"><div class="metric-label">진행 중</div><div class="metric-value" id="m-active">—</div><div class="metric-help">작업 또는 검증 중</div></article>
-      <article class="metric"><div class="metric-label">확인 필요</div><div class="metric-value" id="m-running">—</div><div class="metric-help">승인·실패·검증 반려</div></article>
-      <article class="metric"><div class="metric-label">완료</div><div class="metric-value" id="m-completed">—</div><div class="metric-help">완료된 작업 수</div></article>
+    <section class="notification-banner" id="notification-banner" aria-live="polite">
+      <div><div class="notification-kind" id="notification-kind"></div><div class="notification-title" id="notification-title"></div><div class="notification-body" id="notification-body"></div></div>
     </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <div class="tabs">
-          <button class="tab active" data-tab="graph">실행 현황</button>
-          <button class="tab" data-tab="agents">에이전트</button>
-          <button class="tab" data-tab="approvals">승인 요청</button>
-          <details class="advanced-nav"><summary>고급 관리 ▾</summary><div class="advanced-tabs">
-            <button class="tab" data-tab="tasks">전체 작업</button>
-            <button class="tab" data-tab="plans">계획 기록</button>
-            <button class="tab" data-tab="worktrees">Worktree</button>
-            <button class="tab" data-tab="roles">역할 정책</button>
-            <button class="tab" data-tab="memories">프로젝트 맥락</button>
-            <button class="tab" data-tab="events">이벤트 로그</button>
-          </div></details>
-        </div>
-        <input class="search" id="search" placeholder="이름, 상태, 작업 경로 검색" />
+    <details class="secondary-section" id="history-drawer">
+      <summary><span>이전 작업 <span id="history-count">0</span></span><span>필요할 때만 확인</span></summary>
+      <section class="dispatch-board" id="dispatch-board">
+        <div class="dispatch-board-head"><div><div class="dispatch-board-title">컨트롤 플레인 작업함</div><div class="dispatch-board-help">완료되거나 진행 중인 다른 요청을 선택할 수 있습니다.</div></div><span class="control-ready">새 요청 접수 가능</span></div>
+        <label class="scope-filter">표시 범위<select id="archive-scope"><option value="active">활성</option><option value="archived">보관됨</option><option value="all">전체</option></select></label>
+        <div class="run-lanes" id="run-lanes"><div class="meta">접수된 실행이 없습니다.</div></div>
+      </section>
+    </details>
+
+    <details class="secondary-section" id="inspector">
+      <summary><span>실행 상세</span><span>진행 흐름 · 스레드 · 진단</span></summary>
+      <div class="inspector-body">
+        <section class="metrics">
+          <article class="metric"><div class="metric-label">전체 작업</div><div class="metric-value" id="m-agents">—</div><div class="metric-help">이번 실행의 작업 수</div></article>
+          <article class="metric"><div class="metric-label">진행 중</div><div class="metric-value" id="m-active">—</div><div class="metric-help">작업 또는 검증 중</div></article>
+          <article class="metric"><div class="metric-label">확인 필요</div><div class="metric-value" id="m-running">—</div><div class="metric-help">실패·경고·검증 반려</div></article>
+          <article class="metric"><div class="metric-label">완료</div><div class="metric-value" id="m-completed">—</div><div class="metric-help">완료된 작업 수</div></article>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <div class="tabs">
+              <button class="tab active" data-tab="results">결과</button>
+              <button class="tab" data-tab="progress">진행</button>
+              <button class="tab" data-tab="sessions">스레드</button>
+              <button class="tab" data-tab="graph">그래프</button>
+            </div>
+            <div class="toolbar"><input class="search" id="search" placeholder="작업 또는 스레드 검색" /><button class="button" id="open-diagnostics" type="button">고급 진단</button></div>
+          </div>
+          <div class="list" id="list"><div class="empty">상세 데이터를 기다리는 중…</div></div>
+          <div class="footer"><span id="count">—</span><span id="updated">—</span></div>
+        </section>
       </div>
-      <div class="list" id="list"><div class="empty">상황판 데이터를 기다리는 중…</div></div>
-      <div class="footer"><span id="count">—</span><span id="updated">—</span></div>
-    </section>
+    </details>
   </main>
 
   <dialog id="detail">
@@ -302,27 +417,34 @@
     <div class="detail-head"><strong>에이전트 프로필 편집</strong><button class="button" id="register-close" type="button">닫기</button></div>
     <form class="detail-body" id="register-form">
       <div class="form-grid">
-        <div><div class="name" id="register-name">선택한 세션</div><div class="meta" id="register-id"></div></div>
+        <div><div class="name" id="register-name">선택한 스레드</div><div class="meta" id="register-id"></div></div>
         <label class="field"><span>역할 *</span><input id="register-role" required placeholder="예: backend, reviewer, qa" /></label>
         <label class="field"><span>전문 역량</span><input id="register-capabilities" placeholder="예: api, database, testing (쉼표로 구분)" /></label>
-        <label class="field"><span>맥락 요약</span><textarea id="register-summary" placeholder="이 세션이 알고 있는 프로젝트 맥락과 잘하는 일을 적으세요."></textarea></label>
-        <div class="form-help">모든 세션은 플러그인을 실행할 때 자동으로 등록됩니다. 여기서는 자동 배정에 사용할 역할과 맥락을 설정합니다.</div>
+        <label class="field"><span>맥락 요약</span><textarea id="register-summary" placeholder="이 스레드가 알고 있는 프로젝트 맥락과 잘하는 일을 적으세요."></textarea></label>
+        <div class="form-help">Codex 스레드는 플러그인을 실행할 때 자동으로 등록됩니다. 여기서는 자동 배정에 사용할 역할과 맥락을 설정합니다.</div>
       </div>
       <div class="dialog-actions"><button class="button" id="register-cancel" type="button">취소</button><button class="button primary" id="register-submit" type="submit">프로필 저장</button></div>
     </form>
+  </dialog>
+
+  <dialog id="diagnostics">
+    <div class="detail-head"><div><strong>고급 진단</strong><div class="meta">실행 계약, 내부 이벤트와 원시 상태</div></div><button class="button" id="diagnostics-close" type="button">닫기</button></div>
+    <div class="detail-body advanced-body" id="diagnostics-content"></div>
   </dialog>
 
   <script>
     const pageParams = new URLSearchParams(location.search);
     const standalone = window.parent === window && pageParams.has("token");
     const openaiBridge = typeof window !== "undefined" ? window.openai : undefined;
-    const state = { agents: [], tasks: [], plans: [], approvals: [], worktrees: [], roles: [], memories: [], events: [], runs: [], run: null, graph: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "graph", query: "", updatedAt: null };
+    const state = { agents: [], tasks: [], plans: [], worktrees: [], roles: [], memories: [], notifications: [], events: [], runs: [], globalRuns: [], run: null, graph: null, threadBudget: null, contextSnapshotDetail: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "results", query: "", updatedAt: null };
     const pending = new Map();
     let nextId = 1;
     let refreshFlight = null;
     let pollTimer = null;
     let eventStream = null;
     let unchangedPolls = 0;
+    let pageActive = true;
+    let lifecycleGeneration = 0;
 
     const el = (id) => document.getElementById(id);
     const normalize = (value) => String(value ?? "unknown").replace(/[^a-z]/gi, "").toLowerCase();
@@ -335,30 +457,30 @@
     };
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
     const statusLabels = {
-      draft: "초안", accepted: "접수 완료", planning: "계획 수립 중", preparing: "에이전트 구성 중", agents_prepared: "에이전트 준비 완료", awaiting_user_start: "시작 대기", staged: "시작 대기",
-      blocked: "선행 작업 대기", queued: "실행 대기", running: "작업 중", approval_waiting: "승인 필요",
-      agent_done: "결과 제출됨", validating: "완료 기준 검증 중", retry_waiting: "재시도 대기",
+      draft: "초안", accepted: "접수 완료", planning: "계획 수립 중", preparing: "에이전트 구성 중", agents_prepared: "에이전트 준비 완료", staged: "실행 준비",
+      blocked: "선행 작업 대기", blocked_by_policy: "정책으로 차단", queued: "실행 대기", running: "작업 중",
+      agent_done: "결과 제출됨", validating: "완료 기준 검증 중", integration_pending: "변경 통합 중", integration_blocked: "통합 충돌", upgrade_pending: "데몬 전환 대기", retry_waiting: "재시도 대기",
       waiting_for_lease: "작업 공간 대기", completed: "완료", rejected: "검증 반려",
-      completed_with_warnings: "경고와 함께 완료", validation_failed: "검증 오류", failed: "실패", interrupted: "중단", canceled: "취소", cancelled: "취소",
+      completed_with_warnings: "경고와 함께 완료", validation_failed: "검증 오류", failed: "실패", skipped: "조건 불충족으로 생략", interrupted: "중단", canceled: "취소", cancelled: "취소",
       leased: "작업 배정됨", idle: "대기", available: "사용 가능", pending: "대기"
     };
     const statusLabel = (value) => statusLabels[value] ?? value ?? "알 수 없음";
-    const failureActionLabel = (value) => ({ retry: "자동 재시도", rework: "피드백 기반 재작업", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
-    const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted", "canceled", "cancelled"]);
+    const notificationLabels = { completed: "완료", failed: "실패", attention_required: "판단 필요", policy_blocked: "정책 중단" };
+    const failureActionLabel = (value) => ({ retry: "일시 오류 재시도", rework: "피드백 기반 재작업", repair_contract: "실행 계약 수정 필요", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
+    const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "skipped", "interrupted", "canceled", "cancelled", "blocked_by_policy", "integration_blocked"]);
     const isTerminalStatus = (status) => terminalStatuses.has(status);
-    const threadLink = (threadId, label = "Codex에서 세션 찾기") => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}" title="현재 대화에 세션 이동 요청 보내기">${label}</button>`;
+    const threadLink = (threadId, label = "Codex 스레드 열기", { readOnly = false } = {}) => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}"${readOnly ? ' data-read-only="true"' : ""} title="${readOnly ? "실행 중인 실제 Codex 스레드를 읽기 전용으로 엽니다" : "실제 Codex 스레드를 엽니다"}">${label}</button>`;
     const runGuidance = (status) => ({
       accepted: "요청을 접수했습니다. 컨트롤 플레인은 다음 요청을 바로 받을 수 있습니다.",
       planning: "플래너가 작업 규모를 분석하고 실행 경로를 정하고 있습니다.",
       preparing: "오케스트레이터와 작업 에이전트를 구성하고 있습니다.",
-      awaiting_user_start: "담당 에이전트와 작업 순서를 검토한 뒤 ‘작업 시작’을 누르세요.",
       running: "에이전트가 계획에 따라 작업하고 있습니다. 확인이 필요할 때만 알려드립니다.",
       completed: "모든 작업이 완료되었습니다. 작업 카드를 눌러 결과와 검증 근거를 확인할 수 있습니다.",
-      failed: "완료하지 못한 작업이 있습니다. 빨간 작업 카드를 눌러 원인과 미충족 기준을 확인하세요.",
+      failed: "실행이 중단되었습니다. 아래 실패 원인과 필요한 조치를 확인하세요.",
       cancelled: "사용자가 실행을 취소했습니다.", canceled: "사용자가 실행을 취소했습니다."
     })[status] ?? "현재 실행 상태를 확인하세요.";
-    const dispatchStage = (status) => ({ accepted: 0, draft: 0, planning: 1, preparing: 2, agents_prepared: 2, awaiting_user_start: 2, running: 3, completed: 4, failed: 4, cancelled: 4, canceled: 4 })[status] ?? 0;
-    const runStage = (status) => ["accepted", "draft", "planning", "preparing", "agents_prepared", "awaiting_user_start"].includes(status) ? 0 : ["running"].includes(status) ? 1 : ["completed"].includes(status) ? 3 : 2;
+    const dispatchStage = (status) => ({ accepted: 0, draft: 0, planning: 1, preparing: 2, agents_prepared: 2, running: 3, completed: 4, failed: 4, cancelled: 4, canceled: 4 })[status] ?? 0;
+    const runStage = (status) => ["accepted", "draft", "planning", "preparing", "agents_prepared"].includes(status) ? 0 : ["running"].includes(status) ? 1 : ["completed"].includes(status) ? 3 : 2;
 
     function request(method, params) {
       const id = nextId++;
@@ -378,20 +500,17 @@
     }
 
     async function openAgentThread(threadId) {
-      const prompt = `Codex Desktop에서 작업 세션 ${threadId}을 열어줘.`;
       try {
-        if (openaiBridge?.sendFollowUpMessage) {
-          await openaiBridge.sendFollowUpMessage({ prompt });
-        } else {
-          await request("ui/message", { role: "user", content: [{ type: "text", text: prompt }] });
-        }
-        el("updated").textContent = `세션 이동 요청을 보냈습니다 · ${shortId(threadId)}`;
+        if (standalone) throw new Error("웹 대시보드에서는 Codex Desktop 직접 이동을 지원하지 않습니다.");
+        if (!state.dashboardLeaseToken) throw new Error("대시보드 소유권이 없습니다. Control Plane에서 다시 여세요.");
+        await callTool("open_desktop_thread", { threadId, dashboardLeaseToken: state.dashboardLeaseToken });
+        el("updated").textContent = `Codex Desktop에서 작업을 열었습니다 · ${shortId(threadId)}`;
       } catch (error) {
         try {
           await navigator.clipboard.writeText(threadId);
-          el("updated").textContent = `직접 이동을 지원하지 않는 호스트입니다. 세션 ID를 복사했습니다 · ${shortId(threadId)}`;
+          el("updated").textContent = `${error.message} 작업 ID를 복사했습니다 · ${shortId(threadId)}`;
         } catch {
-          el("updated").textContent = `세션 ID: ${threadId}`;
+          el("updated").textContent = `${error.message} · 작업 ID: ${threadId}`;
         }
       }
     }
@@ -407,16 +526,21 @@
 
     function applySnapshot(snapshot) {
       if (Array.isArray(snapshot.agents)) state.agents = snapshot.agents;
+      if (snapshot.threadBudget) state.threadBudget = snapshot.threadBudget;
       if (Array.isArray(snapshot.tasks)) state.tasks = snapshot.tasks;
       if (Array.isArray(snapshot.plans)) state.plans = snapshot.plans;
-      if (Array.isArray(snapshot.approvals)) state.approvals = snapshot.approvals;
       if (Array.isArray(snapshot.worktrees)) state.worktrees = snapshot.worktrees;
       if (Array.isArray(snapshot.roles)) state.roles = snapshot.roles;
       if (Array.isArray(snapshot.memories)) state.memories = snapshot.memories;
+      if (Array.isArray(snapshot.notifications)) state.notifications = snapshot.notifications;
       if (Array.isArray(snapshot.events)) state.events = snapshot.events;
       if (Array.isArray(snapshot.runs)) state.runs = snapshot.runs;
+      if (Array.isArray(snapshot.globalRuns)) state.globalRuns = snapshot.globalRuns;
       if (snapshot.graph !== undefined) state.graph = snapshot.graph;
-      if (snapshot.run !== undefined) state.run = snapshot.run;
+      if (snapshot.run !== undefined) {
+        if (state.run?.contextSnapshot?.id !== snapshot.run?.contextSnapshot?.id) state.contextSnapshotDetail = null;
+        state.run = snapshot.run;
+      }
       if (snapshot.cwd !== undefined) state.cwd = snapshot.cwd;
       if (snapshot.scope !== undefined) state.scope = snapshot.scope;
       if (snapshot.runId !== undefined) state.runId = snapshot.runId;
@@ -468,10 +592,12 @@
     function scheduleEmbeddedPoll() {
       clearTimeout(pollTimer);
       pollTimer = null;
-      if (standalone || document.hidden || isTerminalView()) return;
+      if (!pageActive || standalone || document.hidden || isTerminalView()) return;
+      const generation = lifecycleGeneration;
       const delay = unchangedPolls === 0 ? 10_000 : unchangedPolls === 1 ? 30_000 : 60_000;
       pollTimer = setTimeout(async () => {
         const changed = await refresh();
+        if (!pageActive || generation !== lifecycleGeneration) return;
         unchangedPolls = changed ? 0 : Math.min(2, unchangedPolls + 1);
         scheduleEmbeddedPoll();
       }, delay);
@@ -490,14 +616,71 @@
     }
 
     function filteredRows() {
-      const rows = state[state.tab] ?? [];
+      const participantIds = new Set([
+        state.run?.executionParticipants?.orchestrator?.id,
+        ...(state.run?.executionParticipants?.dataAgents ?? []).map((agent) => agent.id),
+      ].filter(Boolean));
+      const rows = state.tab === "progress" ? state.tasks : state.tab === "sessions"
+        ? state.agents.filter((agent) => !participantIds.size || participantIds.has(agent.id)) : [];
       const query = state.query.trim().toLowerCase();
       if (!query) return rows;
       return rows.filter((row) => JSON.stringify(row).toLowerCase().includes(query));
     }
 
+    function renderNotification() {
+      const notifications = state.notifications.filter((item) => !item.runId || !state.runId || item.runId === state.runId);
+      const priority = { policy_blocked: 4, attention_required: 3, failed: 2, completed: 1 };
+      const notification = notifications.sort((a, b) => (priority[b.kind] ?? 0) - (priority[a.kind] ?? 0) || String(b.createdAt).localeCompare(String(a.createdAt)))[0] ?? null;
+      const banner = el("notification-banner");
+      banner.className = `notification-banner${notification ? ` visible ${notification.kind}` : ""}`;
+      el("notification-kind").textContent = notification ? notificationLabels[notification.kind] ?? notification.kind : "";
+      el("notification-title").textContent = notification?.title ?? "";
+      el("notification-body").textContent = notification?.body ?? "";
+    }
+
+    function renderRunResult() {
+      const result = state.run?.result;
+      el("search").style.display = "none";
+      el("count").textContent = result ? `검증 ${result.validationCount ?? 0}개` : "결과 대기 중";
+      if (!result) {
+        el("list").innerHTML = '<div class="empty">작업이 끝나면 종합 결과와 산출물이 여기에 표시됩니다.</div>';
+        return;
+      }
+      const artifacts = result.artifacts ?? [];
+      const risks = result.unresolvedRisks ?? [];
+      el("list").innerHTML = `<div class="result-view">
+        <section class="result-hero"><h2>${escapeHtml(statusLabel(result.status))}</h2><p>${escapeHtml(result.summary || "종합 결과가 기록되지 않았습니다.")}</p></section>
+        <div class="result-grid">
+          <section class="result-card"><strong>산출물</strong>${artifacts.length ? `<ul>${artifacts.slice(0, 8).map((item) => `<li>${escapeHtml(item.path || item.commit || item.taskId || JSON.stringify(item))}</li>`).join("")}</ul>` : '<div class="meta">기록된 산출물이 없습니다.</div>'}</section>
+          <section class="result-card"><strong>검증</strong><div class="meta">${escapeHtml(result.validationCount ?? 0)}개 검증 기록 · 종합 ${escapeHtml(result.synthesisStatus || "미적용")}</div></section>
+          <section class="result-card"><strong>남은 위험</strong>${risks.length ? `<ul>${risks.slice(0, 8).map((risk) => `<li>${escapeHtml(typeof risk === "string" ? risk : JSON.stringify(risk))}</li>`).join("")}</ul>` : '<div class="meta">기록된 위험이 없습니다.</div>'}</section>
+        </div>
+      </div>`;
+    }
+
+    function renderAdvancedDiagnostics() {
+      const taskContracts = state.tasks.filter((task) => task.executionContract);
+      const events = state.events.filter((event) => !state.runId || event.entityId === state.runId || state.tasks.some((task) => task.id === event.entityId)).slice(0, 30);
+      const contextSnapshot = state.contextSnapshotDetail ?? state.run?.contextSnapshot ?? null;
+      el("diagnostics-content").innerHTML = `<section class="diagnostic-block"><h3>실행 identity</h3><pre>${escapeHtml(JSON.stringify({ runId: state.runId, cwd: state.cwd, scheduler: state.run?.schedulerIdentity, orchestrator: state.run?.orchestratorSessionIdentity }, null, 2))}</pre></section>
+        <section class="diagnostic-block"><h3>Global Run</h3><pre>${escapeHtml(JSON.stringify(state.run?.globalRun ?? { status: "standalone_project_run" }, null, 2))}</pre></section>
+        <section class="diagnostic-block"><h3>Context Snapshot</h3><pre>${escapeHtml(JSON.stringify(contextSnapshot ?? { status: "not_recorded" }, null, 2))}</pre></section>
+        <section class="diagnostic-block"><h3>실행 계약 ${taskContracts.length}개</h3><pre>${escapeHtml(JSON.stringify(taskContracts.map((task) => ({ taskId: task.id, status: task.status, contract: task.executionContract, failure: task.failure })), null, 2))}</pre></section>
+        <section class="diagnostic-block"><h3>최근 내부 이벤트 ${events.length}개</h3><pre>${escapeHtml(JSON.stringify(events, null, 2))}</pre></section>`;
+    }
+
+    async function loadContextSnapshotDiagnostics() {
+      const snapshotId = state.run?.contextSnapshot?.id;
+      if (!snapshotId || state.contextSnapshotDetail?.id === snapshotId) return;
+      const payload = standalone
+        ? await fetch(`/api/details/context_snapshot/${encodeURIComponent(snapshotId)}?${pageParams.toString()}`).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); return response.json(); })
+        : await callTool("get_dashboard_detail", { dashboardLeaseToken: state.dashboardLeaseToken, entityType: "context_snapshot", entityId: snapshotId });
+      state.contextSnapshotDetail = payload.detail;
+    }
+
     function renderRunInbox() {
       const runs = state.runs.slice(0, 12);
+      el("history-count").textContent = String(Math.max(0, state.runs.length - (state.runId ? 1 : 0)));
       if (!runs.length) {
         el("run-lanes").innerHTML = '<div class="meta">아직 접수된 실행이 없습니다. 컨트롤 플레인 채팅에 작업을 입력하면 여기에 바로 추가됩니다.</div>';
         return;
@@ -507,13 +690,24 @@
         const terminal = ["completed", "failed", "cancelled", "canceled"].includes(run.status);
         const path = run.dispatchPath === "orchestrated" ? "오케스트레이터 경유" : run.dispatchPath === "direct" ? "작업 에이전트에 바로 전달" : ["accepted", "planning", "preparing"].includes(run.status) ? "실행 경로 결정 중" : "기존 실행";
         const track = [0, 1, 2, 3].map((index) => `<span class="${terminal || index < stage ? "done" : index === stage ? "current" : ""}"></span>`).join("");
-        return `<button class="run-card ${run.id === state.runId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}"><div class="run-card-top"><span class="run-card-name">${escapeHtml(run.name || `실행 ${shortId(run.id)}`)}</span><span class="run-status-badge">${escapeHtml(statusLabel(run.status))}</span></div><div class="dispatch-track" aria-label="접수, 계획, 준비, 실행">${track}</div><div class="run-card-path">${escapeHtml(path)} · ${date(run.updatedAt || run.createdAt)}</div></button>`;
+        const participants = run.executionParticipants ?? {};
+        const orchestratorName = participants.orchestrator?.name || (participants.orchestrator?.id ? `스레드 ${shortId(participants.orchestrator.id)}` : null);
+        const workers = participants.dataAgents ?? [];
+        const workerNames = workers.slice(0, 2).map((agent) => agent.name || agent.role || `스레드 ${shortId(agent.id)}`).join(" · ");
+        const workerSuffix = workers.length > 2 ? ` 외 ${workers.length - 2}개` : "";
+        const actorLine = `<div class="run-card-actors"><span>${orchestratorName ? `조정 · ${escapeHtml(orchestratorName)}` : run.dispatchPath === "direct" ? "조정 · 직접 실행" : "조정 스레드 준비 중"}</span><span>${workers.length ? `작업 · ${escapeHtml(workerNames)}${escapeHtml(workerSuffix)}` : "작업 에이전트 배정 전"}</span></div>`;
+        return `<button class="run-card ${run.id === state.runId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}" aria-pressed="${run.id === state.runId}"><div class="run-card-top"><span class="run-card-name">${escapeHtml(run.name || `실행 ${shortId(run.id)}`)}</span></div><div class="run-card-meta"><span class="run-status-badge">${escapeHtml(statusLabel(run.status))}</span></div><div class="run-card-path">${escapeHtml(path)} · ${date(run.updatedAt || run.createdAt)}</div>${actorLine}<div class="run-card-progress"><div class="dispatch-track" aria-label="접수, 계획, 준비, 실행">${track}</div><small>${Math.min(100, stage * 25)}%</small></div></button>`;
       }).join("");
       [...document.querySelectorAll(".run-card")].forEach((card) => card.addEventListener("click", async () => {
+        if (card.dataset.runId === state.runId) return;
         state.runId = card.dataset.runId;
+        state.run = null;
+        state.graph = null;
+        state.revision = 0;
         pageParams.set("runId", state.runId);
         if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
         await refresh();
+        el("history-drawer").open = false;
         if (standalone) connectEventStream();
       }));
     }
@@ -524,8 +718,12 @@
       if (!graph?.nodes?.length) {
         if (graph?.run) {
           const phase = statusLabel(graph.run.status);
+          const failed = graph.run.status === "failed";
+          const failure = graph.run.failure;
           el("count").textContent = `백그라운드 실행 준비 · ${phase}`;
-          el("list").innerHTML = `<div class="graph-view"><div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "접수된 요청")}</strong><small>${escapeHtml(runGuidance(graph.run.status))}</small></div><div class="stage-line"><span class="current">접수</span>→<span>계획</span>→<span>구성</span>→<span>실행</span></div><div class="graph-progress"><span style="width:${Math.min(92, dispatchStage(graph.run.status) * 28 + 8)}%"></span></div><strong>${escapeHtml(phase)}</strong></div><section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">백그라운드 실행 준비</div><div class="plane-map-caption">데몬은 준비만 수행하며 사용자 Start 전에는 작업을 해제하지 않습니다.</div></div><span class="pill">${escapeHtml(phase)}</span></div><div class="plane-map"><div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 접수 완료</div><div class="plane-help">실행 ID 발급 · 경로 결정 · 중앙 계획</div></div><span class="plane-state">접수 가능</span></div><div class="plane-connector"><strong>→</strong><span>계획 전달</span></div><div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">영속 큐와 실행 잠금 관리</div><div class="plane-help">작업 순서 · claim · fencing · 재시도 상태를 관리하는 데몬입니다.</div></div><span class="plane-state">Codex 채팅 아님</span></div><div class="plane-connector"><strong>→</strong><span>세션 준비</span></div><div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX SESSION</div><div class="plane-name">실제 조정 세션 준비 중</div><div class="plane-help">복합 실행에서 작업 분해와 결과 종합을 수행하는 별도 Codex 세션입니다.</div></div><span class="plane-state">준비 중</span></div><div class="plane-connector"><strong>→</strong><span>Start 후 해제</span></div><div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">에이전트 배정 대기</div><div class="plane-help">명시적 작업 시작을 누른 뒤에만 전문 Codex 세션이 실행됩니다.</div></div><span class="plane-state">사용자 시작 대기</span></div></div></section></div>`;
+          const preparingProgress = failed ? 0 : Math.min(92, dispatchStage(graph.run.status) * 28 + 8);
+          const failurePanel = failed ? `<section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">${escapeHtml(failure?.stage === "planning" ? "계획 계약 검증 실패" : "실행 준비 실패")}</div><div class="plane-map-caption">작업 스레드를 만들기 전에 안전하게 중단했습니다.</div></div><span class="pill">실패</span></div><div class="detail-item"><span>원인</span><strong>${escapeHtml(failure?.cause || "실패 원인이 기록되지 않았습니다.")}</strong></div><div class="attention-bar needs-action"><span>${escapeHtml(failureActionLabel(failure?.nextAction || "repair_contract"))}</span><span>워커 생성 0개</span></div></section>` : `<section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">백그라운드 실행 준비</div><div class="plane-map-caption">데몬이 실행 순서와 작업 스레드를 준비하고 있습니다.</div></div><span class="pill">${escapeHtml(phase)}</span></div><div class="plane-map"><div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 접수 완료</div><div class="plane-help">실행 ID 발급 · 경로 결정 · 중앙 계획</div></div><span class="plane-state">접수 가능</span></div><div class="plane-connector"><strong>→</strong><span>계획 전달</span></div><div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">영속 큐와 실행 잠금 관리</div><div class="plane-help">작업 순서 · claim · fencing · 재시도 상태를 관리하는 데몬입니다.</div></div><span class="plane-state">Codex 채팅 아님</span></div><div class="plane-connector"><strong>→</strong><span>스레드 준비</span></div><div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX THREAD</div><div class="plane-name">실제 조정 스레드 준비 중</div><div class="plane-help">복합 실행에서 작업 분해와 결과 종합을 수행하는 별도 Codex 스레드입니다.</div></div><span class="plane-state">준비 중</span></div><div class="plane-connector"><strong>→</strong><span>작업 배정</span></div><div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">에이전트 배정 대기</div><div class="plane-help">전문 Codex 스레드가 실제 작업을 수행합니다.</div></div><span class="plane-state">배정 대기</span></div></div></section>`;
+          el("list").innerHTML = `<div class="graph-view"><div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "접수된 요청")}</strong><small>${escapeHtml(phase)}</small></div><div class="stage-line"><span class="current">접수</span>→<span>계획</span>→<span>구성</span>→<span>실행</span></div>${graph.run.objective ? `<div class="graph-objective">${escapeHtml(graph.run.objective)}</div>` : ""}<div class="graph-progress-row"><div class="graph-progress"><span style="width:${preparingProgress}%"></span></div><strong>${preparingProgress}%</strong></div></div>${failurePanel}</div>`;
         } else {
           el("count").textContent = "작업 흐름 없음";
           el("list").innerHTML = '<div class="empty">아직 표시할 실행이 없습니다.<br>컨트롤 플레인 채팅에 작업을 입력하면 바로 접수됩니다.</div>';
@@ -538,7 +736,7 @@
         if (memo.has(node.id)) return memo.get(node.id);
         if (visiting.has(node.id)) return 0;
         const next = new Set(visiting).add(node.id);
-        const dependencies = (node.dependsOn || []).map((id) => nodesById.get(id)).filter(Boolean);
+        const dependencies = (node.dependsOn || node.dependencies || []).map((id) => nodesById.get(id)).filter(Boolean);
         const level = dependencies.length ? Math.max(...dependencies.map((parent) => levelOf(parent, next))) + 1 : 0;
         memo.set(node.id, level);
         return level;
@@ -548,40 +746,22 @@
         const level = levelOf(node);
         (columns[level] ||= []).push(node);
       }
-      const naturalWidth = columns.length * 310 - 10;
-      const width = Math.max(560, naturalWidth);
-      const horizontalOffset = Math.max(0, (width - naturalWidth) / 2);
-      const maxRows = Math.max(...columns.map((column) => column?.length || 0), 1);
-      const height = Math.max(360, maxRows * 166 + 44);
-      const positions = new Map();
-      columns.forEach((column, level) => {
-        const blockHeight = column.length * 166;
-        const offset = Math.max(22, (height - blockHeight) / 2);
-        column.forEach((node, index) => positions.set(node.id, { x: 24 + horizontalOffset + level * 310, y: offset + index * 166 }));
-      });
-      const edges = (graph.edges || []).map((edge) => {
-        const source = positions.get(edge.source);
-        const target = positions.get(edge.target);
-        if (!source || !target) return "";
-        const x1 = source.x + 252;
-        const y1 = source.y + 64;
-        const x2 = target.x;
-        const y2 = target.y + 64;
-        const bend = Math.max(34, (x2 - x1) / 2);
-        return `<path class="graph-edge" d="M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}" />`;
-      }).join("");
-      const nodes = graph.nodes.map((node) => {
-        const position = positions.get(node.id);
-        const active = ["running", "approval_waiting", "agent_done", "validating"].includes(node.status);
+      const renderNode = (node) => {
+        const active = ["running", "agent_done", "validating", "integration_pending"].includes(node.status);
         const workspace = node.workspace?.mode === "worktree" ? `Worktree · ${node.workspace.branch || "격리됨"}` : "공유 작업 공간";
         const verdict = node.validation?.decision === "accept" ? "검증 통과" : node.validation?.decision === "reject" ? `기준 미충족 ${node.validation.unmetCriteria?.length || 0}` : node.failureSummary?.nextAction ? failureActionLabel(node.failureSummary.nextAction) : null;
-        return `<button class="graph-node ${escapeHtml(node.status)}" data-node-id="${escapeHtml(node.id)}" style="left:${position.x}px;top:${position.y}px" aria-label="${escapeHtml(node.title)} · ${escapeHtml(statusLabel(node.status))}">
+        const dependencies = (node.dependsOn || node.dependencies || []).map((id) => nodesById.get(id)?.title || shortId(id));
+        const fullAgentName = node.agent?.name || "";
+        const agentLabel = fullAgentName.match(/^\[[^\]]+\]/)?.[0] || fullAgentName || `역할 · ${node.role || "일반"}`;
+        return `<button class="graph-node ${escapeHtml(node.status)}" data-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(node.title)} · ${escapeHtml(statusLabel(node.status))}">
           <div class="graph-node-head"><span class="graph-node-title">${escapeHtml(node.title)}</span><span class="graph-node-status">${escapeHtml(statusLabel(node.status))}</span></div>
-          <div class="graph-node-agent">담당 · ${escapeHtml(node.agent?.name || "에이전트 준비 중")} · ${escapeHtml(node.role || "일반")}</div>
+          <div class="graph-node-agent">담당 · ${escapeHtml(agentLabel)}</div>
+          <div class="graph-node-dependencies">${dependencies.length ? `선행 작업 · ${escapeHtml(dependencies.join(" · "))}` : "선행 작업 없음 · 바로 시작 가능"}</div>
           ${active ? '<div class="graph-node-pulse"></div>' : ''}
-          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${escapeHtml(verdict || (node.approval ? "승인 필요" : `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`))}</strong></div>
+          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${escapeHtml(verdict || `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`)}</strong></div>
         </button>`;
-      }).join("");
+      };
+      const dependencyFlow = columns.map((column, level) => `${level ? '<div class="dependency-connector"><strong>↓</strong><span>선행 단계 완료 후 시작</span></div>' : ""}<section class="dependency-level"><div class="dependency-level-head"><strong>단계 ${level + 1}</strong><span>${column.length > 1 ? `${column.length}개 작업 병렬 실행` : "1개 작업"}</span></div><div class="dependency-grid">${column.map(renderNode).join("")}</div></section>`).join("");
       const stage = runStage(graph.run.status);
       const stages = ["준비", "실행", "검증", "완료"].map((label, index) => `<span class="${index === stage ? "current" : ""}">${index < stage ? "✓ " : ""}${label}</span>${index < 3 ? "→" : ""}`).join("");
       const orchestrated = graph.run.dispatchPath === "orchestrated";
@@ -589,24 +769,28 @@
       const scheduler = graph.run.scheduler;
       const orchestratorSession = graph.run.orchestratorSession;
       const complexity = graph.run.complexity;
-      const attention = graph.nodes.filter((node) => ["approval_waiting", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
-      const planeFlow = `<section class="plane-map-wrap" aria-label="Control Plane, Daemon Scheduler, Orchestrator Codex session, Data Plane execution structure">
-        <div class="plane-map-head"><div><div class="plane-map-title">실행 구조와 실제 identity</div><div class="plane-map-caption">Daemon Scheduler는 영속 큐를 관리하는 프로세스이고, Orchestrator는 필요할 때 생성되는 실제 Codex 세션입니다.</div></div><span class="pill">${orchestrated ? "오케스트레이터 경유" : "작업 에이전트에 바로 전달"}</span></div>
+      const computedProgress = Number.isFinite(Number(graph.summary.progress))
+        ? Number(graph.summary.progress)
+        : graph.summary.total ? Math.round(((graph.summary.finished ?? graph.summary.completed ?? 0) / graph.summary.total) * 100) : 0;
+      const progress = Math.max(0, Math.min(100, computedProgress));
+      const attention = graph.nodes.filter((node) => ["blocked_by_policy", "integration_blocked", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
+      const planeFlow = `<section class="plane-map-wrap" aria-label="Control Plane, Daemon Scheduler, Orchestrator Codex thread, Data Plane execution structure">
+        <div class="plane-map-head"><div><div class="plane-map-title">실행 구조와 실제 identity</div><div class="plane-map-caption">Daemon Scheduler는 영속 큐를 관리하는 프로세스이고, Orchestrator는 필요할 때 생성되는 실제 Codex 스레드입니다.</div></div><span class="pill">${orchestrated ? "오케스트레이터 경유" : "작업 에이전트에 바로 전달"}</span></div>
         <div class="plane-map">
           <div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 판단과 위임</div><div class="plane-help">작업 규모 산정 · 실행 경로 선택 · 전역 맥락 관리</div></div><span class="plane-state">위임 완료</span></div>
           <div class="plane-connector"><strong>→</strong><span>영속 큐 전달</span></div>
           <div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">큐 · claim · fencing 관리</div><div class="plane-help">Codex 채팅이 아니라 재시작 복구와 bounded retry/rework를 관리하는 데몬 실행자입니다.</div></div><span class="plane-state">${escapeHtml(scheduler?.instanceId ? `daemon ${shortId(scheduler.instanceId)}` : "identity 미기록")}</span></div>
-          <div class="plane-connector"><strong>→</strong><span>${orchestrated ? "조정 세션 배정" : "직접 배정"}</span></div>
-          <div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX SESSION</div><div class="plane-name">${orchestrated ? escapeHtml(orchestrator?.name || "실행 조정 세션") : "단순 실행: 별도 세션 없음"}</div><div class="plane-help">${orchestrated ? "실제 Codex session이 작업 분해 · 병렬 배치 · 결과 종합을 담당합니다." : "Daemon Scheduler가 Data Plane 작업을 직접 배정합니다."}</div></div>${orchestratorSession?.agentId && isTerminalStatus(graph.run.status) ? threadLink(orchestratorSession.agentId) : `<span class="plane-state">${orchestratorSession?.agentId ? `session ${shortId(orchestratorSession.agentId)}` : "생성되지 않음"}</span>`}</div>
+          <div class="plane-connector"><strong>→</strong><span>${orchestrated ? "조정 스레드 배정" : "직접 배정"}</span></div>
+          <div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX THREAD</div><div class="plane-name">${orchestrated ? escapeHtml(orchestrator?.name || "실행 조정 스레드") : "단순 실행: 별도 스레드 없음"}</div><div class="plane-help">${orchestrated ? "실제 Codex 스레드가 작업 분해 · 병렬 배치 · 결과 종합을 담당합니다." : "Daemon Scheduler가 Data Plane 작업을 직접 배정합니다."}</div></div>${orchestratorSession?.agentId ? threadLink(orchestratorSession.agentId, `오케스트레이터 스레드 열기${isTerminalStatus(graph.run.status) ? "" : " · 읽기 전용"}`, { readOnly: !isTerminalStatus(graph.run.status) }) : '<span class="plane-state">생성되지 않음</span>'}</div>
           <div class="plane-connector"><strong>→</strong><span>작업 배정</span></div>
-          <div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">작업 에이전트 ${escapeHtml(graph.nodes.length)}개</div><div class="plane-help">전문화된 Codex 채팅 세션이 실제 작업과 검증을 수행합니다.</div></div><span class="plane-state">${escapeHtml(graph.summary.active || 0)}개 진행 · ${escapeHtml(graph.summary.waiting || 0)}개 대기</span></div>
+          <div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">작업 에이전트 ${escapeHtml(graph.nodes.length)}개</div><div class="plane-help">전문화된 Codex 스레드가 실제 작업과 검증을 수행합니다.</div></div><span class="plane-state">${escapeHtml(graph.summary.active || 0)}개 진행 · ${escapeHtml(graph.summary.waiting || 0)}개 대기</span></div>
         </div>
-      </section><div class="attention-bar ${attention ? "needs-action" : ""}"><span>${attention ? `확인이 필요한 작업이 ${attention}개 있습니다.` : graph.run.status === "awaiting_user_start" ? "실행 전 검토 단계입니다. 작업 흐름을 확인한 뒤 ‘작업 시작’을 누르세요." : graph.run.status === "completed" ? "모든 작업이 완료되었습니다." : "현재는 사용자 확인 없이 계획대로 진행할 수 있습니다."}</span>${complexity ? `<span>복잡도 ${escapeHtml(complexity.level)} · ${escapeHtml(complexity.score)}/100</span>` : `<span>${orchestrated ? "오케스트레이터 경유" : "바로 전달"}</span>`}</div>`;
+      </section><div class="attention-bar ${attention ? "needs-action" : ""}"><span>${attention ? `확인이 필요한 작업이 ${attention}개 있습니다.` : graph.run.status === "completed" ? "모든 작업이 완료되었습니다." : "그래프 준비 후 사용자 확인 없이 자동으로 진행합니다."}</span>${complexity ? `<span>복잡도 ${escapeHtml(complexity.level)} · ${escapeHtml(complexity.score)}/100</span>` : `<span>${orchestrated ? "오케스트레이터 경유" : "바로 전달"}</span>`}</div>`;
       el("count").textContent = `전체 ${graph.summary.total}개 중 ${graph.summary.finished ?? graph.summary.completed}개 종료 · ${graph.summary.completed}개 완료`;
       el("list").innerHTML = `<div class="graph-view">
-        <div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.objective || graph.run.name || "실행 계획")}</strong><small>${escapeHtml(statusLabel(graph.run.status))}</small></div><div class="stage-line">${stages}</div><div class="graph-progress"><span style="width:${graph.summary.progress}%"></span></div><strong>${graph.summary.progress}%</strong></div>
+        <div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "실행 계획")}</strong><small>${escapeHtml(statusLabel(graph.run.status))}</small></div><div class="stage-line">${stages}</div>${graph.run.objective && graph.run.objective !== graph.run.name ? `<div class="graph-objective">${escapeHtml(graph.run.objective)}</div>` : ""}<div class="graph-progress-row"><div class="graph-progress"><span style="width:${progress}%"></span></div><strong>${progress}%</strong></div></div>
         ${planeFlow}
-        <div class="graph-board" style="width:${width}px;height:${height}px"><svg class="graph-edges" viewBox="0 0 ${width} ${height}" aria-hidden="true">${edges}</svg>${nodes}</div>
+        <div class="graph-board" aria-label="작업 의존 순서">${dependencyFlow}</div>
       </div>`;
       [...document.querySelectorAll(".graph-node")].forEach((button) => button.addEventListener("click", () => showDetail(nodesById.get(button.dataset.nodeId))));
       bindAgentLinks();
@@ -614,9 +798,10 @@
 
     function render() {
       renderRunInbox();
+      renderNotification();
       const graphNodes = state.graph?.nodes ?? [];
-      const active = graphNodes.filter((node) => ["running", "approval_waiting", "agent_done", "validating"].includes(node.status)).length;
-      const approvals = graphNodes.filter((node) => ["approval_waiting", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
+      const active = graphNodes.filter((node) => ["running", "agent_done", "validating", "integration_pending"].includes(node.status)).length;
+      const approvals = graphNodes.filter((node) => ["blocked_by_policy", "integration_blocked", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
       const completed = graphNodes.filter((node) => node.status === "completed").length;
       el("m-agents").textContent = graphNodes.length;
       el("m-active").textContent = active;
@@ -630,19 +815,26 @@
         el("run-name").textContent = run.name || `실행 ${shortId(run.id)}`;
         el("run-status-badge").textContent = statusLabel(run.status);
         el("run-status").textContent = runGuidance(run.status);
-        el("start-run").disabled = run.status !== "awaiting_user_start";
-        el("start-run").textContent = run.status === "awaiting_user_start" ? "작업 시작" : run.status === "running" ? "실행 중" : "시작됨";
+        const activeNode = graphNodes.find((node) => ["running", "agent_done", "validating", "integration_pending", "upgrade_pending"].includes(node.status));
+        const waitingNode = graphNodes.find((node) => ["queued", "blocked", "retry_waiting", "staged"].includes(node.status));
+        el("focus-now").textContent = activeNode
+          ? `${activeNode.title} · ${statusLabel(activeNode.status)}`
+          : waitingNode ? `${waitingNode.title} · ${statusLabel(waitingNode.status)}` : runGuidance(run.status);
+        const resultSummary = run.result?.summary || null;
+        el("focus-result").classList.toggle("visible", Boolean(resultSummary));
+        el("focus-result-summary").textContent = resultSummary || "";
         el("cancel-run").disabled = ["completed", "failed", "cancelled"].includes(run.status);
-        el("start-run").style.display = run.status === "awaiting_user_start" ? "inline-block" : "none";
-        el("cancel-run").style.display = ["accepted", "planning", "preparing", "awaiting_user_start", "running"].includes(run.status) ? "inline-block" : "none";
+        el("cancel-run").style.display = ["accepted", "planning", "preparing", "running"].includes(run.status) ? "inline-block" : "none";
         el("archive-run").style.display = run.archiveAllowed || run.unarchiveAllowed ? "inline-block" : "none";
         el("archive-run").textContent = run.unarchiveAllowed ? "보관 해제" : "실행 보관";
         el("archive-run").dataset.action = run.unarchiveAllowed ? "unarchive" : "archive";
-        el("run-select").innerHTML = state.runs.map((item) => `<option value="${escapeHtml(item.id)}" ${item.id === run.id ? "selected" : ""}>${escapeHtml(item.name || `Run ${shortId(item.id)}`)} · ${escapeHtml(statusLabel(item.status))}</option>`).join("");
-        el("run-select-wrap").style.display = state.runs.length > 1 ? "block" : "none";
       } else el("archive-run").style.display = "none";
 
       el("updated").textContent = `마지막 갱신 ${date(state.updatedAt)}`;
+      if (state.tab === "results") {
+        renderRunResult();
+        return;
+      }
       if (state.tab === "graph") {
         renderRunGraph();
         return;
@@ -650,21 +842,23 @@
       el("search").style.display = "block";
 
       const rows = filteredRows();
-      const labels = { agents: "에이전트", tasks: "작업", plans: "계획", approvals: "승인", worktrees: "Worktree", roles: "역할", memories: "맥락", events: "이벤트" };
+      const labels = { sessions: "스레드", progress: "작업" };
       const unit = labels[state.tab] || state.tab;
-      el("count").textContent = `${unit} ${rows.length}개`;
+      el("count").textContent = state.tab === "sessions" && state.threadBudget
+        ? `${unit} ${rows.length}개 · 영구 ${state.threadBudget.projectCount}/${state.threadBudget.budget?.policy?.maxProjectThreads ?? "—"}`
+        : `${unit} ${rows.length}개`;
       if (!rows.length) {
         el("list").innerHTML = `<div class="empty">표시할 ${unit}가 없습니다.</div>`;
         return;
       }
 
-      el("list").innerHTML = rows.map((row, index) => state.tab === "agents" ? `
+      el("list").innerHTML = rows.map((row, index) => state.tab === "sessions" ? `
         <div class="row agent-row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.name || `Agent ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.role || row.id)}</div></div>
-          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
+          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}<span class="pill">${escapeHtml(row.lifecycle?.status || "candidate")} · ${escapeHtml(String(row.lifecycle?.contextHealth ?? "—"))}</span></div>
           <div><div class="meta">${escapeHtml(row.cwd || "경로 없음")}</div><span class="pill">${escapeHtml((row.capabilities || []).join(", ") || row.source || "codex")}</span></div>
           <div class="row-actions">${threadLink(row.id)}${row.currentTaskId ? '<span class="pill">작업 중 · 읽기 전용으로 확인</span>' : ''}<button class="button register-agent" data-index="${index}">프로필 편집</button>${row.archiveAllowed || row.unarchiveAllowed ? `<button class="button archive-agent" data-id="${escapeHtml(row.id)}" data-action="${row.unarchiveAllowed ? "unarchive" : "archive"}">${row.unarchiveAllowed ? "보관 해제" : "보관"}</button>` : ""}</div>
-        </div>` : state.tab === "tasks" ? `
+        </div>` : state.tab === "progress" ? `
         <div class="row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.title || row.prompt || `Task ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.failure?.cause || row.id)}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
@@ -675,12 +869,6 @@
           <div><div class="name">${escapeHtml(row.objective)}</div><div class="meta">${escapeHtml(row.id)} · v${escapeHtml(row.version)}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
           <div class="meta">${escapeHtml(row.plan?.summary || "계획 생성 중")}</div><div class="meta">${date(row.updatedAt)}</div>
-        </div>` : state.tab === "approvals" ? `
-        <div class="row" data-index="${index}">
-          <div><div class="name">${escapeHtml(row.reason || row.method || "승인 요청")}</div><div class="meta">${escapeHtml(row.command || row.method || "명령 정보 없음")}</div>${row.cwd ? `<div class="meta">${escapeHtml(row.cwd)}</div>` : ""}</div>
-          <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
-          <div>${row.status === "pending" ? `<button class="button approval" data-id="${escapeHtml(row.id)}" data-decision="decline">거절</button> <button class="button primary approval" data-id="${escapeHtml(row.id)}" data-decision="accept">승인</button>` : `<span class="pill">${escapeHtml(row.decision || row.status)}</span>`}</div>
-          <div class="meta">${date(row.createdAt)}</div>
         </div>` : state.tab === "worktrees" ? `
         <div class="row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.branch || row.id)}</div><div class="meta">${escapeHtml(row.path)}</div></div>
@@ -723,15 +911,6 @@
         } catch (error) { el("updated").textContent = `에이전트 보관 실패: ${error.message}`; }
         finally { button.disabled = false; }
       }));
-      [...document.querySelectorAll(".approval")].forEach((button) => button.addEventListener("click", async (event) => {
-        event.stopPropagation();
-        button.disabled = true;
-        try {
-          if (standalone) await fetch(`/api/approvals/${encodeURIComponent(button.dataset.id)}/${button.dataset.decision}?${pageParams.toString()}`, { method: "POST" }).then(async (response) => { if (!response.ok) throw new Error((await response.json()).error); });
-          else await callTool("resolve_approval", { approvalId: button.dataset.id, decision: button.dataset.decision });
-          await refresh();
-        } catch (error) { el("updated").textContent = `승인 처리 실패: ${error.message}`; }
-      }));
       [...document.querySelectorAll(".cleanup")].forEach((button) => button.addEventListener("click", async (event) => {
         event.stopPropagation();
         try {
@@ -758,19 +937,55 @@
       const matrix = routing?.selectedRequirementMatrix ?? routing?.assignmentRequirementMatrix ?? routing?.requirementMatrix ?? null;
       const reasons = [...(routing?.reasons ?? []), ...(routing?.blockers ?? [])];
       const budget = failure?.attemptBudget;
+      const contract = row.executionContract ?? row.metadata?.executionContract ?? row.metadata?.execution?.executionContract ?? null;
+      const integration = row.integration ?? row.workspace?.integration ?? row.metadata?.integration ?? null;
+      const repairable = failure && ["repair_contract", "manual_intervention"].includes(failure.nextAction || failure.requestedAction) && ["rejected", "validation_failed", "failed", "interrupted", "canceled"].includes(row.status);
+      const resultSession = row.resultSession ?? (row.agent?.id ? { threadId: row.agent.id, turnId: row.turnId ?? null, name: row.agent.name, role: row.agent.role, available: isTerminalStatus(row.status) } : null);
       return `<section class="detail-section"><div class="detail-grid">
         <div class="detail-item"><span>상태</span><strong>${escapeHtml(statusLabel(row.status))}</strong></div>
         <div class="detail-item"><span>담당 에이전트</span><strong>${escapeHtml(row.agent?.name || shortId(row.agentId))}</strong></div>
         <div class="detail-item"><span>역할</span><strong>${escapeHtml(row.role || "일반")}</strong></div>
         <div class="detail-item"><span>작업 공간</span><strong>${escapeHtml(row.workspace?.mode || row.metadata?.execution?.workspaceMode || "shared")}</strong></div>
-      </div>${row.agent?.id && isTerminalStatus(row.status) ? `<div class="dialog-actions">${threadLink(row.agent.id)}</div>` : row.agent?.id ? '<div class="form-help">작업 중에는 데몬의 세션 소유권을 보호하기 위해 채팅 열기가 잠깁니다.</div>' : ""}</section>
+      </div>${resultSession?.threadId ? `<div class="dialog-actions">${threadLink(resultSession.threadId, `작업 에이전트 스레드 열기${resultSession.available ? "" : " · 읽기 전용"}`, { readOnly: !resultSession.available })}</div><div class="form-help">${resultSession.available ? "이 작업을 실제로 수행한 Codex 스레드의 대화, 명령 실행과 최종 답변을 엽니다." : "실행 중인 실제 작업 스레드를 읽기 전용으로 엽니다. 작업 입력은 데몬이 계속 관리합니다."}</div>` : ""}</section>
+      ${contract ? `<section class="detail-section"><h3>실행 계약</h3><div class="detail-grid"><div class="detail-item"><span>작업 종류</span><strong>${escapeHtml(contract.taskKind)}</strong></div><div class="detail-item"><span>권한</span><strong>${escapeHtml(contract.sandbox)}</strong></div><div class="detail-item"><span>네트워크</span><strong>${contract.networkAccess ? "허용" : "차단"}</strong></div><div class="detail-item"><span>작업공간</span><strong>${escapeHtml(contract.workspaceMode)}</strong></div><div class="detail-item"><span>통합 방식</span><strong>${escapeHtml(contract.integrationStrategy)}</strong></div><div class="detail-item"><span>계약 ID</span><strong>${escapeHtml(contract.fingerprint)}</strong></div></div></section>` : ""}
+      ${integration ? `<section class="detail-section"><h3>변경 통합</h3><div class="detail-grid"><div class="detail-item"><span>상태</span><strong>${escapeHtml(integration.status)}</strong></div><div class="detail-item"><span>산출물 commit</span><strong>${escapeHtml(integration.artifact?.commit || "변경 없음")}</strong></div></div></section>` : ""}
       <section class="detail-section"><h3>요청한 작업</h3><div>${escapeHtml(row.prompt || "—")}</div></section>
       <section class="detail-section"><h3>완료 기준</h3>${criteria.length ? `<ol class="detail-list">${criteria.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>` : '<div class="meta">완료 기준이 지정되지 않았습니다.</div>'}</section>
-      ${failure ? `<section class="detail-section"><h3>실패 판정과 다음 조치</h3><div class="detail-grid"><div class="detail-item"><span>Failure type</span><strong>${escapeHtml(failure.type || "unknown")}</strong></div><div class="detail-item"><span>원인</span><strong>${escapeHtml(failure.cause || failure.message || "원인 미기록")}</strong></div><div class="detail-item"><span>다음 조치</span><strong>${escapeHtml(failureActionLabel(failure.nextAction || failure.requestedAction))}</strong></div><div class="detail-item"><span>Attempt budget</span><strong>${budget ? `${escapeHtml(budget.used ?? 0)}/${escapeHtml(budget.max ?? "—")} · 잔여 ${escapeHtml(budget.remaining ?? "—")}` : "—"}</strong></div><div class="detail-item"><span>Retryable</span><strong>${failure.retryable ? "예" : "아니요"}</strong></div><div class="detail-item"><span>Exhausted</span><strong>${failure.exhausted ? "예 · 수동 확인 필요" : "아니요"}</strong></div></div></section>` : ""}
-      ${routing ? `<section class="detail-section"><h3>Routing provenance와 충족 행렬</h3><div class="detail-grid"><div class="detail-item"><span>결정</span><strong>${escapeHtml(routing.decision || "기록됨")}</strong></div><div class="detail-item"><span>결정 출처</span><strong>${escapeHtml(routing.provenance?.decisionSource || "unknown")}</strong></div><div class="detail-item"><span>Daemon Scheduler</span><strong>${escapeHtml(routing.schedulerIdentity?.instanceId || "run identity 참조")}</strong></div><div class="detail-item"><span>Orchestrator Codex session</span><strong>${escapeHtml(routing.orchestratorSessionIdentity?.agentId || "별도 세션 없음")}</strong></div></div>${reasons.length ? `<h3>선택 이유</h3><ul class="detail-list">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}${requirementMatrixDetail(matrix)}</section>` : ""}
+      ${failure?.category ? `<section class="detail-section"><h3>실패 범주</h3><div class="pill">${escapeHtml(failure.category)}</div><div class="form-help">product는 코드·산출물, configuration은 실행 계약, policy는 권한 경계, environment는 런타임, coordination은 스레드 소유권·lease, validation은 완료 판정을 뜻합니다.</div></section>` : ""}
+      ${failure ? `<section class="detail-section"><h3>실패 판정과 다음 조치</h3><div class="detail-grid"><div class="detail-item"><span>Failure type</span><strong>${escapeHtml(failure.type || "unknown")}</strong></div><div class="detail-item"><span>원인</span><strong>${escapeHtml(failure.cause || failure.message || "원인 미기록")}</strong></div><div class="detail-item"><span>다음 조치</span><strong>${escapeHtml(failureActionLabel(failure.nextAction || failure.requestedAction))}</strong></div><div class="detail-item"><span>Attempt budget</span><strong>${budget ? `${escapeHtml(budget.used ?? 0)}/${escapeHtml(budget.max ?? "—")} · 잔여 ${escapeHtml(budget.remaining ?? "—")}` : "—"}</strong></div><div class="detail-item"><span>Retryable</span><strong>${failure.retryable ? "예" : "아니요"}</strong></div><div class="detail-item"><span>Exhausted</span><strong>${failure.exhausted ? "예 · 수동 확인 필요" : "아니요"}</strong></div></div>${repairable && contract ? `<div class="repair-grid"><label class="field"><span>실행 권한</span><select data-repair-field="sandbox"><option value="read-only" ${contract.sandbox === "read-only" ? "selected" : ""}>읽기 전용</option><option value="workspace-write" ${contract.sandbox === "workspace-write" ? "selected" : ""}>프로젝트 쓰기</option><option value="danger-full-access" ${contract.sandbox === "danger-full-access" ? "selected" : ""}>전체 접근</option></select></label><label class="field"><span>작업 공간</span><select data-repair-field="workspaceMode"><option value="shared" ${contract.workspaceMode === "shared" ? "selected" : ""}>공유 작업공간</option><option value="worktree" ${contract.workspaceMode === "worktree" ? "selected" : ""}>격리 worktree</option></select></label><label class="field"><span>통합 방식</span><select data-repair-field="integrationStrategy"><option value="none" ${contract.integrationStrategy === "none" ? "selected" : ""}>통합 없음</option><option value="patch" ${contract.integrationStrategy === "patch" ? "selected" : ""}>patch 적용</option><option value="commit" ${contract.integrationStrategy === "commit" ? "selected" : ""}>commit 통합</option></select></label><label class="repair-check"><input type="checkbox" data-repair-field="networkAccess" ${contract.networkAccess ? "checked" : ""}>네트워크 허용</label></div><div class="dialog-actions"><button class="button primary repair-task" type="button" data-task-id="${escapeHtml(row.id)}">계약 수정 후 이 작업 재실행</button></div><div class="form-help">이전 실패 기록은 보존하고 새 계약 fingerprint로 한 번 더 실행합니다. 외부 서비스 변경과 파괴적 작업은 여기서 승인할 수 없습니다.</div>` : ""}</section>` : ""}
+      ${routing ? `<section class="detail-section"><h3>Routing provenance와 충족 행렬</h3><div class="detail-grid"><div class="detail-item"><span>결정</span><strong>${escapeHtml(routing.decision || "기록됨")}</strong></div><div class="detail-item"><span>결정 출처</span><strong>${escapeHtml(routing.provenance?.decisionSource || "unknown")}</strong></div><div class="detail-item"><span>Daemon Scheduler</span><strong>${escapeHtml(routing.schedulerIdentity?.instanceId || "run identity 참조")}</strong></div><div class="detail-item"><span>Orchestrator Codex thread</span><strong>${escapeHtml(routing.orchestratorSessionIdentity?.agentId || "별도 스레드 없음")}</strong></div></div>${reasons.length ? `<h3>선택 이유</h3><ul class="detail-list">${reasons.map((reason) => `<li>${escapeHtml(reason)}</li>`).join("")}</ul>` : ""}${requirementMatrixDetail(matrix)}</section>` : ""}
       ${validation ? `<section class="detail-section"><h3>검증 결과 · ${escapeHtml(statusLabel(row.status))}</h3><div>${escapeHtml(validation.summary || "검증 요약이 없습니다.")}</div>${evidence.length ? `<h3>검증 근거</h3><ul class="detail-list">${evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}${unmet.length ? `<h3>미충족 기준</h3><ul class="detail-list">${unmet.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}</section>` : ""}
       ${row.output ? `<section class="detail-section"><h3>에이전트 결과</h3><pre class="detail-output">${escapeHtml(row.output)}</pre></section>` : ""}
       ${row.error ? `<section class="detail-section"><h3>확인할 문제</h3><div class="text-destructive">${escapeHtml(row.error)}</div></section>` : ""}`;
+    }
+
+    function bindTaskRepair(row) {
+      const button = el("detail-content").querySelector(".repair-task");
+      if (!button) return;
+      button.addEventListener("click", async () => {
+        const root = el("detail-content");
+        const value = (name) => root.querySelector(`[data-repair-field="${name}"]`);
+        const args = {
+          sandbox: value("sandbox").value,
+          workspaceMode: value("workspaceMode").value,
+          integrationStrategy: value("integrationStrategy").value,
+          networkAccess: value("networkAccess").checked,
+        };
+        if (!confirm("수정한 실행 계약으로 이 작업을 다시 실행할까요?")) return;
+        button.disabled = true;
+        try {
+          if (standalone) {
+            const response = await fetch(`/api/tasks/${encodeURIComponent(row.id)}/repair?${pageParams.toString()}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(args) });
+            if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
+          } else await callTool("repair_task_contract", { taskId: row.id, ...args });
+          el("detail").close();
+          unchangedPolls = 0;
+          await refresh();
+        } catch (error) {
+          el("updated").textContent = `계약 수정 실패: ${error.message}`;
+          button.disabled = false;
+        }
+      });
     }
 
     function genericDetail(row) {
@@ -782,9 +997,10 @@
     async function showDetail(row) {
       el("detail-title").textContent = row.title || row.name || row.prompt || row.id || "상세 정보";
       el("detail-content").innerHTML = row.acceptanceCriteria || row.validation || row.workspace ? taskDetail(row) : genericDetail(row);
+      bindTaskRepair(row);
       el("detail").showModal();
       if (!row.id) return;
-      const types = { agents: "agent", tasks: "task", plans: "plan", approvals: "approval", worktrees: "worktree", memories: "memory", graph: "task" };
+      const types = { sessions: "agent", progress: "task", graph: "task" };
       const entityType = types[state.tab];
       if (!entityType) return;
       try {
@@ -793,6 +1009,7 @@
           : await callTool("get_dashboard_detail", { dashboardLeaseToken: state.dashboardLeaseToken, entityType, entityId: row.id });
         const detail = payload.detail;
         el("detail-content").innerHTML = entityType === "task" ? taskDetail(detail) : genericDetail(detail);
+        if (entityType === "task") bindTaskRepair(detail);
       } catch (error) { el("detail-content").innerHTML = `<div class="text-destructive">${escapeHtml(error.message)}</div>`; }
     }
 
@@ -831,16 +1048,8 @@
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
       state.tab = tab.dataset.tab;
       document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item === tab));
-      document.querySelector(".advanced-nav").open = false;
       render();
     }));
-    el("run-select").addEventListener("change", async (event) => {
-      state.runId = event.target.value;
-      pageParams.set("runId", state.runId);
-      if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
-      await refresh();
-      if (standalone) connectEventStream();
-    });
     el("search").addEventListener("input", (event) => { state.query = event.target.value; render(); });
     el("archive-scope").addEventListener("change", async (event) => {
       state.scope = event.target.value;
@@ -857,17 +1066,21 @@
       await refresh();
       scheduleEmbeddedPoll();
     });
-    el("start-run").addEventListener("click", async () => {
-      if (!state.runId) return;
-      el("start-run").disabled = true;
-      try {
-        if (standalone) {
-          const response = await fetch(`/api/runs/${encodeURIComponent(state.runId)}/start?${pageParams.toString()}`, { method: "POST" });
-          if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
-        } else await callTool("start_agent_run", { runId: state.runId });
-        await refresh();
-      } catch (error) { el("updated").textContent = `시작 실패: ${error.message}`; }
+    el("open-inspector").addEventListener("click", () => {
+      el("inspector").open = true;
+      el("inspector").scrollIntoView({ behavior: "smooth", block: "start" });
     });
+    el("open-diagnostics").addEventListener("click", async () => {
+      renderAdvancedDiagnostics();
+      el("diagnostics").showModal();
+      try {
+        await loadContextSnapshotDiagnostics();
+        renderAdvancedDiagnostics();
+      } catch (error) {
+        el("updated").textContent = `Context Snapshot 진단 로드 실패: ${error.message}`;
+      }
+    });
+    el("diagnostics-close").addEventListener("click", () => el("diagnostics").close());
     el("cancel-run").addEventListener("click", async () => {
       if (!state.runId || !confirm("이 실행과 남은 작업을 취소할까요?")) return;
       try {
@@ -939,14 +1152,20 @@
       }
       document.addEventListener("visibilitychange", () => {
         if (document.hidden) {
+          pageActive = false;
+          lifecycleGeneration += 1;
           clearTimeout(pollTimer);
           pollTimer = null;
         } else {
+          pageActive = true;
+          lifecycleGeneration += 1;
           unchangedPolls = 0;
           void refresh().then(scheduleEmbeddedPoll);
         }
       });
       window.addEventListener("pagehide", () => {
+        pageActive = false;
+        lifecycleGeneration += 1;
         clearTimeout(pollTimer);
         pollTimer = null;
       }, { once: true });

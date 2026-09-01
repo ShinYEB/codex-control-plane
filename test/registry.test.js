@@ -1,11 +1,51 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-import { ControlRegistry } from "../src/registry.js";
+import { ControlRegistry, CURRENT_SCHEMA_VERSION } from "../src/registry.js";
 import { AgentRouter } from "../src/router.js";
+import { compileExecutionContract } from "../src/execution-contracts.js";
+
+test("registry persists only the four canonical notification kinds", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const legacy = registry.createNotification({ kind: "run_completed", dedupeKey: "legacy-complete", title: "done" });
+  assert.equal(legacy.kind, "completed");
+  assert.equal(legacy.severity, "success");
+
+  registry.createTaskGraph({ id: "policy_run", cwd: "/repo", status: "running" }, [
+    { id: "policy_task", prompt: "external mutation", status: "blocked_by_policy" },
+  ]);
+  registry.refreshRun("policy_run");
+  const notification = registry.listNotifications({ runId: "policy_run" })[0];
+  assert.equal(notification.kind, "policy_blocked");
+  assert.equal(notification.title, "정책으로 작업 중단");
+  assert.throws(() => registry.createNotification({ kind: "progress_update", dedupeKey: "quiet-progress" }), /Unsupported notification kind/);
+  registry.close();
+});
+
+test("Control Plane result delivery is durable, idempotent, and retryable", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createRun({ id: "run_delivery", cwd: "/repo", status: "completed" });
+  const created = registry.enqueueControlDelivery({
+    runId: "run_delivery",
+    originThreadId: "control_thread",
+    originTurnId: "origin_turn",
+    payload: { summary: "done" },
+  });
+  assert.equal(created.status, "pending");
+  assert.equal(registry.enqueueControlDelivery({ runId: "run_delivery", originThreadId: "control_thread", payload: { summary: "updated" } }).id, created.id);
+  assert.equal(registry.listControlDeliveries({ originThreadId: "control_thread", ready: true })[0].payload.summary, "updated");
+  const deferred = registry.deferControlDelivery(created.id, new Error("active writer"), 0);
+  assert.equal(deferred.status, "retry_waiting");
+  assert.equal(deferred.attempt, 1);
+  const delivered = registry.markControlDeliveryDelivered(created.id, "delivered_turn");
+  assert.equal(delivered.status, "delivered");
+  assert.equal(delivered.deliveredTurnId, "delivered_turn");
+  registry.close();
+});
 
 test("registry persists agent profiles and task state across reopen", () => {
   const directory = mkdtempSync(join(tmpdir(), "codex-control-registry-"));
@@ -24,9 +64,154 @@ test("registry persists agent profiles and task state across reopen", () => {
     assert.deepEqual(second.getAgent("agent_1").capabilities, ["security"]);
     assert.equal(second.getTask("task_1").status, "running");
     assert.equal(second.recoverInterruptedTasks(), 1);
-    assert.equal(second.getTask("task_1").status, "recovery_attention");
+    assert.equal(second.getTask("task_1").status, "failed");
+    assert.equal(second.getTask("task_1").metadata.failure.nextAction, "repair_contract");
     second.close();
   } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("legacy database upgrades transactionally with backup, run foreign key, and status constraint", () => {
+  const directory = mkdtempSync(join(tmpdir(), "codex-control-migration-"));
+  const path = join(directory, "registry.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE runs (
+      id TEXT PRIMARY KEY, request_key TEXT, plan_id TEXT, name TEXT, status TEXT NOT NULL,
+      cwd TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, started_at TEXT,
+      completed_at TEXT, archived_at TEXT, metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE tasks (
+      id TEXT PRIMARY KEY, status TEXT NOT NULL, prompt TEXT NOT NULL, cwd TEXT,
+      source_thread_id TEXT, agent_id TEXT, mode TEXT, output TEXT, error TEXT, turn_id TEXT,
+      role TEXT, required_capabilities_json TEXT NOT NULL DEFAULT '[]', routing_json TEXT,
+      created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT, updated_at TEXT NOT NULL,
+      worker_id TEXT, heartbeat_at TEXT, attempt INTEGER NOT NULL DEFAULT 0,
+      max_attempts INTEGER NOT NULL DEFAULT 1, retry_delay_ms INTEGER NOT NULL DEFAULT 0,
+      next_retry_at TEXT, claim_token TEXT, version INTEGER NOT NULL DEFAULT 0,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+    INSERT INTO runs (id, status, created_at, updated_at) VALUES ('legacy_run', 'running', '2026-01-01', '2026-01-01');
+    INSERT INTO tasks (id, status, prompt, created_at, updated_at, metadata_json)
+      VALUES ('legacy_task', 'queued', 'legacy', '2026-01-01', '2026-01-01', '{"runId":"legacy_run"}');
+    PRAGMA user_version = 0;
+  `);
+  legacy.close();
+  try {
+    const registry = new ControlRegistry({ path });
+    assert.equal(registry.schemaVersion, CURRENT_SCHEMA_VERSION);
+    assert.equal(registry.getTask("legacy_task").runId, "legacy_run");
+    assert.equal(existsSync(registry.migrationBackupPath), true);
+    assert.equal(registry.db.prepare("PRAGMA foreign_key_list(tasks)").all().some((entry) => entry.from === "run_id" && entry.table === "runs"), true);
+    assert.throws(() => registry.db.prepare("UPDATE tasks SET status = 'not_a_state' WHERE id = 'legacy_task'").run(), /CHECK constraint failed/);
+    registry.close();
+
+    const reopened = new ControlRegistry({ path });
+    assert.equal(reopened.schemaVersionBeforeMigration, CURRENT_SCHEMA_VERSION);
+    assert.equal(reopened.migrationBackupPath, null);
+    assert.equal(reopened.getTask("legacy_task").runId, "legacy_run");
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("schema v1 expands canonical projects and backfills legacy memories as unverified candidate claims", () => {
+  const directory = mkdtempSync(join(tmpdir(), "codex-project-migration-"));
+  const projectRoot = join(directory, "project");
+  const missingRoot = join(directory, "missing-project");
+  const path = join(directory, "registry.sqlite");
+  mkdirSync(projectRoot);
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    CREATE TABLE project_memories (
+      id TEXT PRIMARY KEY,
+      cwd TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'note',
+      title TEXT,
+      content TEXT NOT NULL,
+      tags_json TEXT NOT NULL DEFAULT '[]',
+      source TEXT NOT NULL DEFAULT 'user',
+      authority TEXT NOT NULL DEFAULT 'reference',
+      subject TEXT,
+      semantic_version TEXT,
+      supersedes_json TEXT NOT NULL DEFAULT '[]',
+      confidence REAL NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      last_used_at TEXT,
+      metadata_json TEXT NOT NULL DEFAULT '{}'
+    );
+  `);
+  legacy.prepare(`
+    INSERT INTO project_memories (
+      id, cwd, kind, content, created_at, updated_at
+    ) VALUES (?, ?, 'decision', ?, '2026-01-01', '2026-01-01')
+  `).run("legacy_valid", projectRoot, "Use the canonical project registry");
+  legacy.prepare(`
+    INSERT INTO project_memories (
+      id, cwd, kind, content, created_at, updated_at
+    ) VALUES (?, ?, 'fact', ?, '2026-01-01', '2026-01-01')
+  `).run("legacy_missing", missingRoot, "This path no longer exists");
+  legacy.exec("PRAGMA user_version = 1");
+  legacy.close();
+
+  try {
+    const registry = new ControlRegistry({ path });
+    assert.equal(registry.schemaVersion, CURRENT_SCHEMA_VERSION);
+    assert.equal(existsSync(registry.migrationBackupPath), true);
+    assert.equal(registry.listProjects().length, 1);
+    assert.ok(registry.getMemory("legacy_valid").projectId);
+    assert.equal(registry.getMemory("legacy_missing").projectId, null);
+
+    const claims = registry.listContextClaims({ authority: "legacy_unverified" });
+    assert.equal(claims.length, 2);
+    assert.ok(claims.every((claim) => claim.status === "candidate"));
+    assert.ok(claims.find((claim) => claim.metadata.legacyMemoryId === "legacy_valid").projectId);
+    assert.equal(claims.find((claim) => claim.metadata.legacyMemoryId === "legacy_missing").projectId, null);
+    assert.ok(registry.listMigrationAttention({ kind: "project_identity_unresolved" }).some((entry) => entry.sourceValue === missingRoot));
+    assert.ok(registry.listMigrationAttention({ kind: "legacy_memory_project_unresolved" }).some((entry) => entry.sourceId === "legacy_missing"));
+    registry.close();
+
+    const reopened = new ControlRegistry({ path });
+    assert.equal(reopened.migrationBackupPath, null);
+    assert.equal(reopened.listProjects().length, 1);
+    assert.equal(reopened.listContextClaims({ authority: "legacy_unverified" }).length, 2);
+    assert.equal(reopened.listMigrationAttention().filter((entry) => entry.sourceValue === missingRoot).length, 2);
+    reopened.close();
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("new project-scoped entities persist the same canonical project id", () => {
+  const directory = mkdtempSync(join(tmpdir(), "codex-project-write-"));
+  const projectRoot = join(directory, "project");
+  const nested = join(projectRoot, "packages", "app");
+  mkdirSync(nested, { recursive: true });
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    const project = registry.registerProject(projectRoot);
+    const run = registry.createRun({ id: "project_run", cwd: projectRoot, status: "draft" });
+    const task = registry.createTask({ id: "project_task", cwd: projectRoot, prompt: "inspect" });
+    const agent = registry.upsertAgent({ id: "project_agent", cwd: projectRoot, status: "idle" });
+    const plan = registry.createPlan({ id: "project_plan", cwd: projectRoot, objective: "inspect" });
+    const memory = registry.upsertMemory({ id: "project_memory", cwd: projectRoot, content: "shared identity" });
+
+    assert.deepEqual(
+      [run.projectId, task.projectId, agent.projectId, plan.projectId, memory.projectId],
+      Array(5).fill(project.id),
+    );
+    assert.equal(registry.listProjects().length, 1);
+    assert.deepEqual(registry.listRuns({ projectId: project.id }).map((entry) => entry.id), [run.id]);
+    assert.deepEqual(registry.listTasks({ projectId: project.id }).map((entry) => entry.id), [task.id]);
+    assert.deepEqual(registry.listAgents({ projectId: project.id }).map((entry) => entry.id), [agent.id]);
+    assert.deepEqual(registry.listPlans({ projectId: project.id }).map((entry) => entry.id), [plan.id]);
+    assert.deepEqual(registry.listMemories({ projectId: project.id }).map((entry) => entry.id), [memory.id]);
+    assert.equal(registry.listContextClaims({ projectId: project.id, authority: "legacy_unverified" }).length, 1);
+  } finally {
+    registry.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });
@@ -76,6 +261,64 @@ test("router rolls a heavily reused session into a fresh fork", () => {
   assert.equal(result.decision, "fork");
   assert.equal(result.rolloverRequired, true);
   assert.match(result.reasons.at(-1), /fresh context window/);
+});
+
+test("router rejects a reusable session below the required permission ceiling", () => {
+  const router = new AgentRouter();
+  const result = router.select([{
+    id: "readonly_writer",
+    cwd: "/repo",
+    status: "idle",
+    role: "implementer",
+    capabilities: ["implementation"],
+    metadata: { permissionCeiling: "read-only" },
+  }], {
+    prompt: "implement",
+    cwd: "/repo",
+    role: "implementer",
+    capabilities: ["implementation"],
+    executionContract: { fingerprint: "contract_1", sandbox: "workspace-write", workspaceMode: "shared" },
+  });
+  assert.equal(result.decision, "spawn");
+  assert.match(result.candidates[0].blockers.join(" "), /permission ceiling/);
+});
+
+test("router forks instead of reusing a session with an active writer or locked approval policy", () => {
+  const router = new AgentRouter();
+  const busy = router.select([{
+    id: "busy_writer", cwd: "/repo", status: "running", role: "implementer", capabilities: ["implementation"],
+    metadata: { permissionCeiling: "workspace-write", currentTaskId: "other_task", approvalPolicy: "never", approvalPolicyLocked: true },
+  }], {
+    taskId: "new_task", prompt: "implement", cwd: "/repo", role: "implementer", capabilities: ["implementation"], reuseExisting: true,
+    executionContract: { fingerprint: "writer_contract", sandbox: "workspace-write", workspaceMode: "shared", approvalPolicy: "never" },
+  });
+  assert.equal(busy.decision, "fork");
+  assert.equal(busy.selectedRequirementMatrix.execution.writerAvailable, false);
+  assert.match(busy.reasons.join(" "), /active writer ownership/);
+
+  const locked = router.select([{
+    id: "locked_policy", cwd: "/repo", status: "idle", role: "implementer", capabilities: ["implementation"],
+    metadata: { permissionCeiling: "workspace-write", approvalPolicy: "on-request", approvalPolicyLocked: true },
+  }], {
+    prompt: "implement", cwd: "/repo", role: "implementer", capabilities: ["implementation"], reuseExisting: true,
+    executionContract: { fingerprint: "policy_contract", sandbox: "workspace-write", workspaceMode: "shared", approvalPolicy: "never" },
+  });
+  assert.equal(locked.decision, "spawn");
+  assert.match(locked.candidates[0].blockers.join(" "), /approval policy/);
+});
+
+test("dependency policies support always-run and failure-only tasks", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createTask({ id: "parent_failed", prompt: "parent", status: "failed" });
+  registry.createTask({ id: "always", prompt: "cleanup", dependsOn: ["parent_failed"], metadata: { dependencyPolicy: "all_terminal" } });
+  registry.createTask({ id: "fallback", prompt: "recover", dependsOn: ["parent_failed"], metadata: { dependencyPolicy: "on_failure" } });
+  registry.createTask({ id: "parent_ok", prompt: "ok", status: "completed" });
+  registry.createTask({ id: "unused_fallback", prompt: "recover", dependsOn: ["parent_ok"], metadata: { dependencyPolicy: "on_failure" } });
+  registry.refreshBlockedTasks();
+  assert.equal(registry.getTask("always").status, "queued");
+  assert.equal(registry.getTask("fallback").status, "queued");
+  assert.equal(registry.getTask("unused_fallback").status, "skipped");
+  registry.close();
 });
 
 test("router never selects an agent missing a required capability or tool", () => {
@@ -183,11 +426,13 @@ test("dependency tasks unblock only after every parent completes", () => {
   registry.createTask({ id: "child", prompt: "child", dependsOn: ["parent_1", "parent_2"] });
   assert.equal(registry.getTask("child").status, "blocked");
 
-  registry.updateTask("parent_1", { status: "completed", completedAt: new Date().toISOString() });
+  const parent1Claim = registry.claimTask("parent_1", "worker_1");
+  registry.completeClaim("parent_1", "worker_1", parent1Claim.claimToken, { output: "done" });
   registry.refreshBlockedTasks();
   assert.equal(registry.getTask("child").status, "blocked");
 
-  registry.updateTask("parent_2", { status: "completed", completedAt: new Date().toISOString() });
+  const parent2Claim = registry.claimTask("parent_2", "worker_2");
+  registry.completeClaim("parent_2", "worker_2", parent2Claim.claimToken, { output: "done" });
   registry.refreshBlockedTasks();
   assert.equal(registry.getTask("child").status, "queued");
   assert.deepEqual(registry.getTask("child").dependencies.map((entry) => entry.taskId), ["parent_1", "parent_2"]);
@@ -209,6 +454,19 @@ test("claim is atomic and retry uses bounded exponential backoff", () => {
   registry.close();
 });
 
+test("claim requires a matching validated contract marker", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createTask({ id: "validated_marker", prompt: "inspect" });
+  const stored = registry.getTask("validated_marker");
+  assert.equal(stored.metadata.contractStatus, "validated");
+  assert.equal(stored.metadata.contractFingerprint, stored.metadata.executionContract.fingerprint);
+
+  registry.db.prepare("UPDATE tasks SET metadata_json = json_remove(metadata_json, '$.contractStatus') WHERE id = ?").run("validated_marker");
+  assert.equal(registry.claimTask("validated_marker", "worker"), null);
+  assert.equal(registry.getTask("validated_marker").attempt, 0);
+  registry.close();
+});
+
 test("two registry connections cannot claim once and stale completion is fenced", () => {
   const directory = mkdtempSync(join(tmpdir(), "codex-control-claim-"));
   const path = join(directory, "registry.sqlite");
@@ -222,12 +480,69 @@ test("two registry connections cannot claim once and stale completion is fenced"
 
     second.recoverInterruptedTasks({ staleBefore: new Date(Date.now() + 1000).toISOString() });
     assert.equal(first.completeClaim("shared", "worker_1", claimed.claimToken, { output: "late" }), null);
-    assert.equal(second.getTask("shared").status, "recovery_attention");
+    assert.equal(second.getTask("shared").status, "queued");
     first.close();
     second.close();
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("restart recovery automatically requeues only side-effect-free execution contracts", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const safeContract = compileExecutionContract({ key: "safe_read", taskKind: "analysis", mutatesWorkspace: false });
+  const writeContract = compileExecutionContract({ key: "uncertain_write", taskKind: "implementation", mutatesWorkspace: true, workspaceMode: "shared", integrationStrategy: "none" });
+  registry.createTask({
+    id: "safe_read",
+    prompt: "inspect",
+    status: "running",
+    metadata: { executionContract: safeContract },
+  });
+  registry.createTask({
+    id: "uncertain_write",
+    prompt: "modify",
+    status: "running",
+    metadata: { executionContract: writeContract },
+  });
+  registry.recoverInterruptedTasks({ staleBefore: new Date(Date.now() + 1000).toISOString() });
+  assert.equal(registry.getTask("safe_read").status, "queued");
+  assert.equal(registry.getTask("uncertain_write").status, "recovery_attention");
+  registry.close();
+});
+
+test("restart recovery terminalizes uncertain integration and clears claim ownership", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const executionContract = compileExecutionContract({ key: "integrating", taskKind: "integration", mutatesWorkspace: true, workspaceMode: "shared", integrationStrategy: "none" });
+  registry.createTask({ id: "integrating", prompt: "integrate", metadata: { executionContract } });
+  const claim = registry.claimTask("integrating", "worker");
+  registry.markClaimIntegrationPending("integrating", "worker", claim.claimToken, { strategy: "patch" });
+
+  assert.equal(registry.recoverInterruptedTasks({ staleBefore: new Date(Date.now() + 1_000).toISOString() }), 1);
+  const recovered = registry.getTask("integrating");
+  assert.equal(recovered.status, "recovery_attention");
+  assert.equal(recovered.workerId, null);
+  assert.equal(recovered.claimToken, null);
+  assert.equal(recovered.heartbeatAt, null);
+  registry.close();
+});
+
+test("cancellation clears task ownership and releases active leases", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.upsertAgent({ id: "agent", cwd: "/repo", status: "running" });
+  registry.createTask({ id: "cancelled", prompt: "work", agentId: "agent" });
+  const claim = registry.claimTask("cancelled", "worker");
+  registry.acquireLease({ key: "workspace", ownerTaskId: "cancelled", ownerAgentId: "agent", ownerToken: claim.claimToken });
+  registry.acquireAgentLease("agent", "cancelled", claim.claimToken);
+
+  const cancelled = registry.cancelTask("cancelled");
+  assert.equal(cancelled.status, "canceled");
+  assert.equal(cancelled.workerId, null);
+  assert.equal(cancelled.claimToken, null);
+  assert.equal(cancelled.heartbeatAt, null);
+  assert.equal(registry.listLeases({ ownerTaskId: "cancelled" })[0].status, "released");
+  assert.equal(registry.getAgentLease("agent").status, "released");
+  assert.equal(registry.getAgent("agent").status, "idle");
+  registry.close();
 });
 
 test("worktree lease has one active owner and can be released", () => {
@@ -331,7 +646,39 @@ test("task graph creation is atomic and idempotent", () => {
   assert.equal(materialized.run.status, "awaiting_user_start");
   assert.equal(materialized.run.metadata.dispatchPhase, "prepared");
   assert.equal(materialized.tasks.length, 1);
+
+  const replaced = registry.replaceStagedTaskGraph({
+    id: "run_accepted", requestKey: "request-accepted", planId: "plan_v2", cwd: "/repo", name: "revision",
+  }, [
+    { id: "replacement_child", prompt: "new child", status: "staged", dependsOn: ["replacement_root"] },
+    { id: "replacement_root", prompt: "new root", status: "staged" },
+  ]);
+  assert.equal(replaced.replaced, true);
+  assert.equal(replaced.run.planId, "plan_v2");
+  assert.deepEqual(replaced.tasks.map((task) => task.id).sort(), ["replacement_child", "replacement_root"]);
+  assert.equal(registry.getTask("accepted_task"), null);
+  registry.releaseStagedRun("run_accepted", { source: "test" });
+  assert.throws(() => registry.replaceStagedTaskGraph({ id: "run_accepted" }, [{ id: "late", prompt: "late" }]), /cannot replace its graph/);
   registry.close();
+});
+
+test("every terminal dependency failure cascades through multiple blocked levels in one refresh", () => {
+  for (const terminalStatus of ["rejected", "validation_failed", "failed", "canceled", "interrupted"]) {
+    const registry = new ControlRegistry({ path: ":memory:" });
+    const runId = `run_${terminalStatus}`;
+    registry.createRun({ id: runId, status: "running" });
+    registry.createTask({ id: `root_${terminalStatus}`, prompt: "root", status: terminalStatus, metadata: { runId } });
+    registry.createTask({ id: `middle_${terminalStatus}`, prompt: "middle", status: "blocked", dependsOn: [`root_${terminalStatus}`], metadata: { runId } });
+    registry.createTask({ id: `leaf_${terminalStatus}`, prompt: "leaf", status: "blocked", dependsOn: [`middle_${terminalStatus}`], metadata: { runId } });
+
+    const refreshed = registry.refreshBlockedTasks();
+
+    assert.equal(refreshed.failed, 2, terminalStatus);
+    assert.equal(registry.getTask(`middle_${terminalStatus}`).status, "failed", terminalStatus);
+    assert.equal(registry.getTask(`leaf_${terminalStatus}`).status, "failed", terminalStatus);
+    assert.equal(registry.getRun(runId).status, "failed", terminalStatus);
+    registry.close();
+  }
 });
 
 test("plans approvals worktrees and role templates persist", () => {
@@ -361,7 +708,7 @@ test("validation rejection is terminal and blocks dependent work", () => {
   registry.refreshBlockedTasks();
   assert.equal(registry.getTask("implementation").status, "rejected");
   assert.equal(registry.getTask("release").status, "failed");
-  assert.equal(registry.refreshRun("run_validation").status, "failed");
+  assert.equal(registry.getRun("run_validation").status, "failed");
   registry.close();
 });
 
@@ -370,10 +717,14 @@ test("completed_with_warnings is terminal, unblocks dependencies, and completes 
   registry.createRun({ id: "run_warning", status: "running" });
   registry.createTask({ id: "warning", prompt: "warning", metadata: { runId: "run_warning" } });
   registry.createTask({ id: "downstream", prompt: "downstream", status: "blocked", dependsOn: ["warning"], metadata: { runId: "run_warning" } });
-  registry.updateTask("warning", { status: "completed_with_warnings", completedAt: new Date().toISOString() });
+  const warningClaim = registry.claimTask("warning", "worker_warning");
+  registry.markClaimAgentDone("warning", "worker_warning", warningClaim.claimToken, { output: "done with warning" });
+  registry.markClaimValidating("warning", "worker_warning", warningClaim.claimToken);
+  registry.finishValidationClaim("warning", "worker_warning", warningClaim.claimToken, { decision: "accept_with_warnings", summary: "minor warning" });
   registry.refreshBlockedTasks();
   assert.equal(registry.getTask("downstream").status, "queued");
-  registry.updateTask("downstream", { status: "completed", completedAt: new Date().toISOString() });
+  const downstreamClaim = registry.claimTask("downstream", "worker_downstream");
+  registry.completeClaim("downstream", "worker_downstream", downstreamClaim.claimToken, { output: "done" });
   assert.equal(registry.refreshRun("run_warning").status, "completed");
   registry.close();
 });
@@ -409,6 +760,8 @@ test("validator rejection schedules bounded rework and repeated feedback is dedu
     assert.equal(waiting.metadata.failure.nextAction, "rework");
     assert.deepEqual(waiting.metadata.failure.attemptBudget, { used: 1, max: 3, remaining: 2 });
     assert.equal(waiting.metadata.failure.exhausted, false);
+    assert.equal(waiting.metadata.failure.retrySafety.reason, "validator_feedback_revision");
+    assert.equal(waiting.metadata.rework.feedbackRevision, 1);
     const hash = waiting.metadata.rework.current.feedbackHash;
     first.close();
 
@@ -425,6 +778,7 @@ test("validator rejection schedules bounded rework and repeated feedback is dedu
     assert.equal(terminal.metadata.failure.nextAction, "manual_intervention");
     assert.equal(terminal.metadata.failureHistory.length, 2);
     assert.equal(terminal.metadata.rework.feedbackHashes[0], hash);
+    assert.equal(terminal.metadata.rework.feedbackRevision, 1);
     assert.equal(second.finishValidationClaim("rework", "daemon_2", secondClaim.claimToken, feedback), null, "stale validator completion stays fenced");
     second.close();
   } finally {
@@ -451,5 +805,27 @@ test("infrastructure failures use bounded retry rather than validator rework", (
   assert.equal(exhausted.metadata.failure.nextAction, "manual_intervention");
   assert.equal(exhausted.metadata.failure.exhausted, true);
   assert.deepEqual(exhausted.metadata.failure.attemptBudget, { used: 2, max: 2, remaining: 0 });
+  registry.close();
+});
+
+test("configuration failures never repeat under the same execution contract", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const executionContract = compileExecutionContract({ key: "bad_contract", taskKind: "implementation", mutatesWorkspace: true, workspaceMode: "shared", integrationStrategy: "none" });
+  registry.createTask({
+    id: "bad_contract",
+    prompt: "write files",
+    maxAttempts: 3,
+    metadata: { executionContract },
+  });
+  const claim = registry.claimTask("bad_contract", "daemon");
+  const terminal = registry.finishFailureClaim("bad_contract", "daemon", claim.claimToken, {
+    type: "configuration", category: "configuration", stage: "execution",
+    cause: "read-only sandbox cannot modify files", retryable: true, nextAction: "repair_contract",
+  }, { terminalStatus: "failed" });
+  assert.equal(terminal.status, "failed");
+  assert.equal(terminal.attempt, 1);
+  assert.equal(terminal.metadata.failure.executionFingerprint, executionContract.fingerprint);
+  assert.equal(terminal.metadata.failure.retryMutation.reason, "no_automatic_retry");
+  assert.equal(registry.claimTask("bad_contract", "daemon"), null);
   registry.close();
 });

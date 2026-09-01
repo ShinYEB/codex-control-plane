@@ -34,8 +34,10 @@ function captureRequests(child, handler) {
 test("connect performs handshake and listAgents maps threads", async () => {
   const child = fakeProcess();
   let spawnOptions;
+  let initializeParams;
   captureRequests(child, (message) => {
     if (message.method === "initialize") {
+      initializeParams = message.params;
       child.stdout.write(`${JSON.stringify({ id: message.id, result: { userAgent: "test" } })}\n`);
     }
     if (message.method === "thread/list") {
@@ -55,6 +57,29 @@ test("connect performs handshake and listAgents maps threads", async () => {
   assert.equal(result.agents[0].status, "idle");
   assert.equal(spawnOptions.env.CODEX_DATA_PLANE_NODE, process.execPath);
   assert.equal(spawnOptions.env.PATH.split(delimiter)[0], dirname(process.execPath));
+  assert.equal(initializeParams.capabilities.experimentalApi, true);
+  assert.equal(client.experimentalApiEnabled, true);
+  await client.close();
+});
+
+test("connect falls back to the stable API when an older App Server rejects experimental capabilities", async () => {
+  const child = fakeProcess();
+  const initializeParams = [];
+  captureRequests(child, (message) => {
+    if (message.method !== "initialize") return;
+    initializeParams.push(message.params);
+    if (initializeParams.length === 1) {
+      child.stdout.write(`${JSON.stringify({ id: message.id, error: { code: -32602, message: "unknown field capabilities" } })}\n`);
+    } else {
+      child.stdout.write(`${JSON.stringify({ id: message.id, result: { userAgent: "legacy" } })}\n`);
+    }
+  });
+  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  await client.connect();
+  assert.equal(initializeParams.length, 2);
+  assert.equal(initializeParams[0].capabilities.experimentalApi, true);
+  assert.equal(initializeParams[1].capabilities, undefined);
+  assert.equal(client.experimentalApiEnabled, false);
   await client.close();
 });
 
@@ -100,6 +125,64 @@ test("runTask collects streamed output until the matching turn completes", async
   assert.equal(result.output, "hello");
   assert.equal(result.turn.status, "completed");
   assert.equal(result.executionItems[0].exitCode, 0);
+  await client.close();
+});
+
+test("concurrent turns on one thread collect only their turn-scoped deltas", async () => {
+  const child = fakeProcess();
+  let starts = 0;
+  captureRequests(child, (message) => {
+    if (message.method === "initialize") child.stdout.write(`${JSON.stringify({ id: message.id, result: {} })}\n`);
+    if (message.method !== "turn/start") return;
+    starts += 1;
+    const turnId = `turn_${starts}`;
+    child.stdout.write(`${JSON.stringify({ id: message.id, result: { turn: { id: turnId } } })}\n`);
+    if (starts === 2) {
+      queueMicrotask(() => {
+        child.stdout.write(`${JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: "thr_shared", turnId: "turn_2", delta: "second" } })}\n`);
+        child.stdout.write(`${JSON.stringify({ method: "item/agentMessage/delta", params: { threadId: "thr_shared", turnId: "turn_1", delta: "first" } })}\n`);
+        child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId: "thr_shared", turn: { id: "turn_2", status: "completed" } } })}\n`);
+        child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId: "thr_shared", turn: { id: "turn_1", status: "completed" } } })}\n`);
+      });
+    }
+  });
+
+  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  const control = new CodexControlPlane(client);
+  await control.connect();
+  const [first, second] = await Promise.all([
+    control.runTask("thr_shared", "first", { timeoutMs: 1_000 }),
+    control.runTask("thr_shared", "second", { timeoutMs: 1_000 }),
+  ]);
+  assert.equal(first.output, "first");
+  assert.equal(second.output, "second");
+  await client.close();
+});
+
+test("runTask forwards an explicit workspace-write network policy", async () => {
+  const child = fakeProcess();
+  let turnStartParams;
+  captureRequests(child, (message) => {
+    if (message.method === "initialize") child.stdout.write(`${JSON.stringify({ id: message.id, result: {} })}\n`);
+    if (message.method === "turn/start") {
+      turnStartParams = message.params;
+      child.stdout.write(`${JSON.stringify({ id: message.id, result: { turn: { id: "turn_network" } } })}\n`);
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId: "thr_network", turn: { id: "turn_network", status: "completed" } } })}\n`));
+    }
+  });
+
+  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  const control = new CodexControlPlane(client);
+  await control.connect();
+  const sandboxPolicy = {
+    type: "workspaceWrite",
+    writableRoots: ["/repo"],
+    networkAccess: true,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
+  };
+  await control.runTask("thr_network", "run integration tests", { sandboxPolicy, timeoutMs: 1_000 });
+  assert.deepEqual(turnStartParams.sandboxPolicy, sandboxPolicy);
   await client.close();
 });
 
@@ -285,6 +368,21 @@ test("resumeAgent surfaces an active-writer ownership error without stealing or 
   const control = new CodexControlPlane(client, { resumeRetryDelaysMs: [0, 0], delay: async () => {} });
   await assert.rejects(control.resumeAgent("native_locked"), (error) => error.code === "THREAD_ACTIVE_WRITER" && error.retryable === true);
   assert.equal(attempts, 3);
+});
+
+test("resumeAgent omits experimental fields after stable initialize fallback", async () => {
+  let observed;
+  const client = {
+    experimentalApiEnabled: false,
+    request: async (method, params) => {
+      assert.equal(method, "thread/resume");
+      observed = params;
+      return { thread: { id: "legacy_thread", cwd: "/repo", status: { type: "idle" } } };
+    },
+  };
+  const control = new CodexControlPlane(client);
+  await control.resumeAgent("legacy_thread", { cwd: "/repo" });
+  assert.equal("excludeTurns" in observed, false);
 });
 
 test("managed Data Plane threads disable the Control Plane plugin on start, resume, and fork", async () => {

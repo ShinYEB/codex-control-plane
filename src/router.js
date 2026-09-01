@@ -1,3 +1,6 @@
+import { normalizeAgentStatus } from "./domain-states.js";
+import { estimateContextHealth, isEphemeralTask } from "./thread-lifecycle.js";
+
 function tokens(value) {
   return new Set(String(value ?? "")
     .toLowerCase()
@@ -12,10 +15,7 @@ function overlap(left, right) {
   return count;
 }
 
-function normalizeStatus(status) {
-  if (status === "notLoaded") return "available";
-  return status ?? "unknown";
-}
+const normalizeStatus = normalizeAgentStatus;
 
 function relatedPath(left, right) {
   if (!left || !right) return false;
@@ -48,10 +48,26 @@ function satisfaction(requiredValues = [], providedValues = []) {
   };
 }
 
+const SANDBOX_LEVEL = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 };
+
+function executionCompatibility(request = {}, agent = {}) {
+  const contract = request.executionContract ?? {};
+  const ceiling = agent.metadata?.permissionCeiling ?? agent.metadata?.roleTemplate?.sandbox ?? null;
+  const sandboxSatisfied = !ceiling || (SANDBOX_LEVEL[ceiling] ?? -1) >= (SANDBOX_LEVEL[contract.sandbox] ?? 0);
+  const branchSatisfied = !request.branch || !agent.metadata?.branch || request.branch === agent.metadata.branch;
+  const workspaceSatisfied = contract.workspaceMode !== "worktree" || !agent.metadata?.effectiveCwd || relatedPath(request.cwd, agent.metadata.effectiveCwd);
+  const lockedApprovalPolicy = agent.metadata?.approvalPolicyLocked ? agent.metadata?.approvalPolicy : null;
+  const approvalSatisfied = !lockedApprovalPolicy || lockedApprovalPolicy === contract.approvalPolicy;
+  const writerOwnerTaskId = agent.metadata?.currentTaskId ?? agent.metadata?.writerOwnerTaskId ?? null;
+  const writerAvailable = !writerOwnerTaskId || writerOwnerTaskId === request.taskId;
+  return { ceiling, sandboxSatisfied, branchSatisfied, workspaceSatisfied, approvalSatisfied, writerOwnerTaskId, writerAvailable, allSatisfied: sandboxSatisfied && branchSatisfied && workspaceSatisfied && approvalSatisfied };
+}
+
 function requirementMatrix(request = {}, agent = {}) {
   const capabilities = satisfaction(request.capabilities ?? [], agent.capabilities ?? []);
   const tools = satisfaction(request.tools ?? [], agent.metadata?.tools ?? []);
-  return { capabilities, tools, eligible: capabilities.allSatisfied && tools.allSatisfied };
+  const execution = executionCompatibility(request, agent);
+  return { capabilities, tools, execution, eligible: capabilities.allSatisfied && tools.allSatisfied && execution.allSatisfied };
 }
 
 export class AgentRouter {
@@ -67,12 +83,16 @@ export class AgentRouter {
       const reasons = [];
       const blockers = [];
       const status = normalizeStatus(agent.status);
+      const knowledge = request.threadKnowledge?.[agent.id] ?? null;
+      const lifecycle = request.lifecycleByAgent?.[agent.id] ?? agent.lifecycle ?? null;
+      const contextHealth = lifecycle?.contextHealth ?? estimateContextHealth({ ...agent, lifecycle }, knowledge);
       const profileTokens = tokens([
         agent.name,
         agent.role,
         agent.summary,
         ...(agent.capabilities ?? []),
         ...(agent.metadata?.tools ?? []),
+        ...(knowledge?.topics ?? []),
       ].filter(Boolean).join(" "));
 
       if (request.cwd && agent.cwd === request.cwd) add(breakdown, reasons, "project", 30, "same working directory");
@@ -103,10 +123,22 @@ export class AgentRouter {
         blockers.push(`missing tools: ${missing.join(", ")}`);
       }
 
-      const eligible = matrix.eligible;
+      if (!matrix.execution.sandboxSatisfied) blockers.push(`sandbox exceeds agent permission ceiling (${matrix.execution.ceiling})`);
+      if (!matrix.execution.branchSatisfied) blockers.push("branch mismatch");
+      if (!matrix.execution.workspaceSatisfied) blockers.push("worktree workspace mismatch");
+      if (!matrix.execution.approvalSatisfied) blockers.push("approval policy is locked to another mode");
+      if (!matrix.execution.writerAvailable) reasons.push(`thread writer is owned by task ${matrix.execution.writerOwnerTaskId}; fork required`);
+
+      if (["compacted", "superseded", "archived"].includes(lifecycle?.status)) blockers.push(`thread lifecycle is ${lifecycle.status}`);
+      if (contextHealth < (request.threadBudget?.policy?.minContextHealth ?? 0)) blockers.push(`context health ${contextHealth} is below policy minimum`);
+      const eligible = matrix.eligible && !blockers.some((blocker) => blocker.startsWith("thread lifecycle") || blocker.startsWith("context health"));
 
       const contextMatches = overlap(taskTokens, profileTokens);
       if (contextMatches) add(breakdown, reasons, "context", Math.min(contextMatches * 6, 36), `${contextMatches} context keyword match${contextMatches === 1 ? "" : "es"}`);
+      if (knowledge?.id) {
+        add(breakdown, reasons, "knowledge", 8, `thread knowledge snapshot ${knowledge.id}`);
+        if (knowledge.claimIds?.length) add(breakdown, reasons, "knowledge", Math.min(knowledge.claimIds.length * 2, 10), `${knowledge.claimIds.length} provenance-backed claim${knowledge.claimIds.length === 1 ? "" : "s"}`);
+      }
 
       if (request.branch && agent.metadata?.branch === request.branch) add(breakdown, reasons, "branch", 20, "same branch context");
       else if (request.branch && agent.metadata?.branch) add(breakdown, reasons, "branch", -12, `branch differs (${agent.metadata.branch})`);
@@ -119,7 +151,7 @@ export class AgentRouter {
 
       if (["idle", "available", "unknown"].includes(status)) add(breakdown, reasons, "availability", 12, "available");
       else if (["running", "active", "approval_waiting"].includes(status)) add(breakdown, reasons, "availability", -18, "currently busy; fork only");
-      if (agent.ephemeral) add(breakdown, reasons, "durability", -8, "ephemeral session");
+      if (agent.ephemeral) add(breakdown, reasons, "durability", -8, "ephemeral thread");
 
       const contextTimestamp = agent.metadata?.contextUpdatedAt ?? agent.lastTaskAt;
       if (contextTimestamp) {
@@ -129,7 +161,7 @@ export class AgentRouter {
       }
 
       const score = Object.values(breakdown).reduce((sum, value) => sum + value, 0);
-      return { agent: { ...agent, status }, score, breakdown, reasons, blockers, eligible, requirementMatrix: matrix };
+      return { agent: { ...agent, status, lifecycle }, score, breakdown, reasons, blockers, eligible, requirementMatrix: matrix, knowledge, contextHealth };
     }).sort((left, right) => right.score - left.score || String(right.agent.updatedAt ?? "").localeCompare(String(left.agent.updatedAt ?? "")));
   }
 
@@ -140,9 +172,23 @@ export class AgentRouter {
     const best = eligible[0] ?? null;
     const selected = best && best.score >= minimumScore;
     const reuseCount = Number(best?.agent?.metadata?.reuseCount ?? 0);
-    const maxReuseCount = request.maxReuseCount ?? 12;
+    const maxReuseCount = request.maxReuseCount ?? request.threadBudget?.policy?.maxReuseCount ?? 12;
+    const writerConflict = Boolean(best && !best.requirementMatrix.execution.writerAvailable);
+    const busy = Boolean(best && !["idle", "available", "unknown"].includes(best.agent.status));
     const rolloverRequired = Boolean(selected && request.reuseExisting && reuseCount >= maxReuseCount);
-    const decision = selected ? (request.reuseExisting && !rolloverRequired ? "reuse" : "fork") : "spawn";
+    const budgetState = request.threadBudgetStateByAgent?.[best?.agent?.id]
+      ?? request.threadBudgetState
+      ?? { canCreateProject: true, canCreateRole: true, canForkLineage: true };
+    const canCreate = budgetState.canCreateProject && budgetState.canCreateRole;
+    const needsFork = selected && !(request.reuseExisting && !rolloverRequired && !writerConflict && !busy);
+    const canFork = canCreate && budgetState.canForkLineage;
+    let decision;
+    if (selected && !needsFork) decision = "reuse";
+    else if (selected && canFork) decision = "fork";
+    else if (selected) decision = "wait";
+    else if (canCreate) decision = "spawn";
+    else if (isEphemeralTask(request)) decision = "ephemeral";
+    else decision = "wait";
     const certainty = confidence(best, eligible[1], minimumScore);
     return {
       provenance: {
@@ -158,6 +204,12 @@ export class AgentRouter {
           provider: request.provider ?? null,
           model: request.model ?? null,
           branch: request.branch ?? null,
+          executionContract: request.executionContract ? {
+            fingerprint: request.executionContract.fingerprint,
+            sandbox: request.executionContract.sandbox,
+            workspaceMode: request.executionContract.workspaceMode,
+          } : null,
+          threadKnowledgeSnapshotIds: Object.values(request.threadKnowledge ?? {}).map((snapshot) => snapshot.id).filter(Boolean),
         },
       },
       decision,
@@ -167,9 +219,12 @@ export class AgentRouter {
       scoreBreakdown: best?.breakdown ?? {},
       confidence: certainty,
       reasons: selected
-        ? [...best.reasons, ...(rolloverRequired ? [`reuse history reached ${reuseCount}/${maxReuseCount}; fork for a fresh context window`] : [])]
-        : [...(best?.reasons ?? []), "no candidate met the routing threshold"],
+        ? [...best.reasons, ...(rolloverRequired ? [`reuse history reached ${reuseCount}/${maxReuseCount}; fresh context window required`] : []), ...(writerConflict || busy ? ["active writer ownership prevents direct reuse"] : []), ...(decision === "wait" ? ["thread budget prevents a fork; wait for the existing lease"] : [])]
+        : [...(best?.reasons ?? []), "no candidate met the routing threshold", ...(decision === "ephemeral" ? ["durable thread budget is full; use an ephemeral worker"] : decision === "wait" ? ["durable thread budget is full"] : [])],
       rolloverRequired,
+      ephemeral: decision === "ephemeral",
+      budget: request.threadBudget ?? null,
+      budgetState,
       blockers: best?.blockers ?? (ranked.length ? ["no candidate satisfies every required capability and tool"] : ["no registered agents"]),
       selectedRequirementMatrix: selected ? best.requirementMatrix : null,
       candidates: ranked.slice(0, request.limit ?? 5).map((entry) => ({
@@ -186,6 +241,10 @@ export class AgentRouter {
         blockers: entry.blockers,
         eligible: entry.eligible,
         requirementMatrix: entry.requirementMatrix,
+        knowledgeSnapshotId: entry.knowledge?.id ?? null,
+        knowledgeClaimIds: entry.knowledge?.claimIds ?? [],
+        lifecycleStatus: entry.agent.lifecycle?.status ?? null,
+        contextHealth: entry.contextHealth,
       })),
     };
   }

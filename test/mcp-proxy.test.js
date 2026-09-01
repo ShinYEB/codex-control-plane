@@ -17,11 +17,11 @@ test("MCP proxy attaches the native requester thread to dashboard opens", async 
   proxy.start();
   input.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo" } } })}\n`);
   assert.deepEqual(await response, { jsonrpc: "2.0", id: 1, result: { ok: true } });
-  assert.equal(observed.params.arguments.requesterThreadId, "control_thread");
+  assert.equal(observed.params._meta["codex/origin"].threadId, "control_thread");
   proxy.close();
 });
 
-test("MCP proxy preserves an explicit requester identity", async () => {
+test("MCP proxy keeps caller identity input separate from authoritative host origin", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
   let observed;
@@ -36,5 +36,30 @@ test("MCP proxy preserves an explicit requester identity", async () => {
   input.write(`${JSON.stringify({ id: 2, method: "tools/call", params: { name: "show_agent_dashboard", arguments: { requesterThreadId: "explicit_thread" } } })}\n`);
   await response;
   assert.equal(observed.arguments.requesterThreadId, "explicit_thread");
+  assert.equal(observed._meta["codex/origin"].threadId, "ambient_thread");
+  proxy.close();
+});
+
+test("MCP proxy attaches Control Plane origin identity to dispatch and result reads", async () => {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const observed = [];
+  const proxy = new McpDaemonProxy({
+    input,
+    output,
+    requesterThreadId: "control_origin",
+    requesterTurnId: "turn_origin",
+    client: { call: async (_method, params) => { observed.push(params); return {}; } },
+  });
+  proxy.start();
+  const first = new Promise((resolve) => output.once("data", resolve));
+  input.write(`${JSON.stringify({ id: 3, method: "tools/call", params: { name: "dispatch_control_request", arguments: { objective: "work", cwd: "/repo" } } })}\n`);
+  await first;
+  const second = new Promise((resolve) => output.once("data", resolve));
+  input.write(`${JSON.stringify({ id: 4, method: "tools/call", params: { name: "drain_control_results", arguments: { cwd: "/repo" } } })}\n`);
+  await second;
+  assert.equal(observed[0]._meta["codex/origin"].threadId, "control_origin");
+  assert.equal(observed[0]._meta["codex/origin"].turnId, "turn_origin");
+  assert.equal(observed[1]._meta["codex/origin"].threadId, "control_origin");
   proxy.close();
 });

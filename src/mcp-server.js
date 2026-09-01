@@ -2,8 +2,10 @@
 
 import { pathToFileURL } from "node:url";
 import readline from "node:readline";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { execFile as execFileCallback } from "node:child_process";
+import { promisify } from "node:util";
 
 import { CodexAppServerClient } from "./app-server-client.js";
 import { CodexControlPlane } from "./control-plane.js";
@@ -11,6 +13,8 @@ import { ControlRegistry } from "./registry.js";
 import { AgentRouter, normalizeStatus, requirementMatrix } from "./router.js";
 import { DashboardServer } from "./dashboard-server.js";
 import { ContextManager } from "./context-manager.js";
+import { ContextResolver } from "./context-resolver.js";
+import { ThreadKnowledgeIndexer } from "./thread-knowledge-indexer.js";
 import { RoleTemplateManager } from "./role-templates.js";
 import { WorktreeManager } from "./worktree-manager.js";
 import { PlannerEngine } from "./planner-engine.js";
@@ -20,13 +24,23 @@ import { agentDisplayName } from "./agent-names.js";
 import { classifyTaskGraph } from "./dispatch-policy.js";
 import { buildDashboardDelta, buildDashboardSnapshot, getDashboardDetail } from "./dashboard-model.js";
 import { dataPlaneRuntime, runtimePrompt } from "./runtime-environment.js";
+import { assertNewContractRevision } from "./retry-policy.js";
 import { assessTaskResult, classifyFailure } from "./failure-classifier.js";
+import { assertExecutionContract, compileAndValidateExecutionContract, executionContractFailure, RUN_AUTHORIZATION } from "./execution-contracts.js";
+import { classifyRunNotification, NOTIFICATION_KINDS } from "./notification-policy.js";
+import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v2.html";
+const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v4.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
-const ACTIVE_TASK_STATUSES = new Set(["running", "approval_waiting", "agent_done", "validating"]);
+const execFile = promisify(execFileCallback);
+const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function openDesktopThread(threadId) {
+  if (process.platform !== "darwin") throw new Error("Direct Codex Desktop navigation is currently supported on macOS only");
+  await execFile("/usr/bin/open", [`codex://threads/${threadId}`]);
+}
 
 function readTurn(result, turnId) {
   const turns = result?.thread?.turns ?? result?.turns ?? [];
@@ -60,15 +74,61 @@ const TOOLS = [
   {
     name: "archive_agent",
     title: "Archive an idle Codex agent",
-    description: "Archive an idle, unleased durable agent session. Active or leased agents are rejected.",
+    description: "Archive an idle, unleased durable agent thread. Active or leased agents are rejected.",
     inputSchema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "unarchive_agent",
     title: "Unarchive a Codex agent",
-    description: "Restore an archived, unleased durable agent session to active listings.",
+    description: "Restore an archived, unleased durable agent thread to active listings.",
     inputSchema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "list_thread_lifecycles",
+    title: "List thread lifecycle records",
+    description: "List durable lifecycle, context-health, type, and successor records used by routing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        projectId: { type: "string" }, role: { type: "string" },
+        status: { type: "string", enum: ["candidate", "active", "idle", "compacted", "superseded", "archived"] },
+        limit: { type: "integer", minimum: 1, maximum: 1000, default: 200 },
+      }, additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "get_thread_budget",
+    title: "Get thread creation budget",
+    description: "Read the effective versioned project/role thread budget and its current counters.",
+    inputSchema: {
+      type: "object",
+      properties: { cwd: { type: "string" }, projectId: { type: "string" }, role: { type: "string" }, sourceThreadId: { type: "string" } },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "upsert_thread_budget",
+    title: "Revise thread creation budget",
+    description: "Create a new immutable project/role budget revision; the previous revision is retained as superseded.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string" }, projectId: { type: "string" }, role: { type: "string" },
+        policy: {
+          type: "object",
+          properties: {
+            version: { type: "integer", enum: [1] },
+            maxProjectThreads: { type: "integer", minimum: 0 }, maxRoleThreads: { type: "integer", minimum: 0 },
+            maxLineageForks: { type: "integer", minimum: 0 }, maxReuseCount: { type: "integer", minimum: 0 },
+            minContextHealth: { type: "number", minimum: 0, maximum: 1 }, queueWhenBusy: { type: "boolean" },
+          }, additionalProperties: false,
+        },
+      }, required: ["policy"], additionalProperties: false,
+    },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
@@ -209,7 +269,7 @@ const TOOLS = [
       type: "object",
       properties: {
         cwd: { type: "string", description: "Absolute working directory for the agent." },
-        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"], default: "read-only" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         model: { type: "string" },
         developerInstructions: { type: "string" },
         ephemeral: { type: "boolean", default: false },
@@ -229,7 +289,8 @@ const TOOLS = [
       properties: {
         threadId: { type: "string" },
         cwd: { type: "string" },
-        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"], default: "read-only" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+        networkAccess: { type: "boolean" },
         lastTurnId: { type: "string" },
         ephemeral: { type: "boolean", default: false },
         name: { type: "string", description: "User-facing Codex task name." },
@@ -251,7 +312,7 @@ const TOOLS = [
         threadId: { type: "string", description: "Optional source agent. It is forked unless reuseExisting is true." },
         reuseExisting: { type: "boolean", default: false, description: "Append directly to threadId instead of forking it." },
         cwd: { type: "string", description: "Absolute working directory." },
-        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"], default: "read-only" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         model: { type: "string" },
         effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         ephemeral: { type: "boolean", default: false },
@@ -262,6 +323,14 @@ const TOOLS = [
         validationModel: { type: "string" },
         validationEffort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         tools: { type: "array", items: { type: "string" }, maxItems: 50, description: "Tools required by the task." },
+        taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
+        mutatesWorkspace: { type: "boolean" },
+        requiredSandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+        networkAccess: { type: "boolean" },
+        sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+        idempotencyKey: { type: "string" },
+        outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
+        integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         branch: { type: "string", description: "Expected git branch context." },
         workspaceMode: { type: "string", enum: ["shared", "worktree"], default: "shared" },
         baseRef: { type: "string", description: "Base ref for a managed worktree." },
@@ -285,7 +354,7 @@ const TOOLS = [
         threadId: { type: "string" },
         reuseExisting: { type: "boolean", default: false },
         cwd: { type: "string" },
-        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"], default: "read-only" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         model: { type: "string" },
         effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         ephemeral: { type: "boolean", default: false },
@@ -296,6 +365,14 @@ const TOOLS = [
         validationModel: { type: "string" },
         validationEffort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         tools: { type: "array", items: { type: "string" }, maxItems: 50, description: "Tools required by the task." },
+        taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
+        mutatesWorkspace: { type: "boolean" },
+        requiredSandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+        networkAccess: { type: "boolean" },
+        sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+        idempotencyKey: { type: "string" },
+        outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
+        integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         branch: { type: "string", description: "Expected git branch context." },
         workspaceMode: { type: "string", enum: ["shared", "worktree"], default: "shared" },
         baseRef: { type: "string" },
@@ -308,7 +385,6 @@ const TOOLS = [
         leaseKey: { type: "string", description: "Optional exclusive worktree lease key." },
         worktreePath: { type: "string" },
         leaseTtlMs: { type: "integer", minimum: 30000, maximum: 3600000, default: 120000 },
-        waitForDashboard: { type: "boolean", default: false, description: "Stage the task until its dashboard sends a ready signal." },
         runId: { type: "string", description: "Optional shared run id for dashboard-gated tasks." },
         title: { type: "string", description: "Short user-facing data-plane task title." },
       },
@@ -319,14 +395,15 @@ const TOOLS = [
   },
   {
     name: "prepare_agent_run",
-    title: "Prepare a dashboard-gated agent run",
-    description: "Persist only the dependency graph and keep all work staged. After explicit Start, each task leases the best eligible durable session or creates one when no safe reusable session exists.",
+    title: "Compile and start an agent run",
+    description: "Compile, preflight, atomically persist, and automatically start the dependency graph. Each task leases the best eligible durable thread or creates one when no safe reusable thread exists.",
     inputSchema: {
       type: "object",
       properties: {
         name: { type: "string", description: "Run name shown in monitoring data." },
         cwd: { type: "string", description: "Default absolute working directory for every task." },
-        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"], default: "read-only" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+        networkAccess: { type: "boolean" },
         model: { type: "string" },
         effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
         branch: { type: "string", description: "Default branch context for every task." },
@@ -336,7 +413,7 @@ const TOOLS = [
         requestKey: { type: "string", description: "Idempotency key for atomic graph creation." },
         planId: { type: "string" },
         dispatchPath: { type: "string", enum: ["direct", "orchestrated"], description: "Control-plane dispatch decision. Inferred from the graph when omitted." },
-        orchestratorThreadId: { type: "string", description: "Optional actual Orchestrator Codex session identity. It is recorded separately from the Daemon Scheduler and is never created by preparation." },
+        orchestratorThreadId: { type: "string", description: "Optional actual Orchestrator Codex thread identity. It is recorded separately from the Daemon Scheduler and is never created by preparation." },
         tasks: {
           type: "array",
           minItems: 1,
@@ -353,14 +430,24 @@ const TOOLS = [
               validationModel: { type: "string" },
               validationEffort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max", "ultra"] },
               tools: { type: "array", items: { type: "string" }, maxItems: 50 },
+              taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
+              mutatesWorkspace: { type: "boolean" },
+              requiredSandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+              sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+              networkAccess: { type: "boolean" },
+              sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+              idempotencyKey: { type: "string" },
+              outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
+              integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
               branch: { type: "string" },
               workspaceMode: { type: "string", enum: ["shared", "worktree"] },
               baseRef: { type: "string" },
               approvalPolicy: { type: "string", enum: ["never", "on-request", "on-failure", "untrusted"] },
               dependsOn: { type: "array", items: { type: "string" }, maxItems: 20 },
-              threadId: { type: "string", description: "Optional preferred existing Codex session." },
-              reuseExisting: { type: "boolean", default: true, description: "Lease and append to an eligible existing session; fork when it is busy or unsafe." },
-              routingMode: { type: "string", enum: ["auto", "new"], default: "auto", description: "Automatically reuse the best eligible session, or force a new one." },
+              dependencyPolicy: { type: "string", enum: ["all_success", "all_terminal", "on_failure"] },
+              threadId: { type: "string", description: "Optional preferred existing Codex thread." },
+              reuseExisting: { type: "boolean", default: true, description: "Lease and append to an eligible existing thread; fork when it is busy or unsafe." },
+              routingMode: { type: "string", enum: ["auto", "new"], default: "auto", description: "Automatically reuse the best eligible thread, or force a new one." },
               maxAttempts: { type: "integer", minimum: 1, maximum: 10, default: 3, description: "Total bounded attempts, including validator-driven rework." },
               retryDelayMs: { type: "integer", minimum: 0, maximum: 3600000, default: 5000 },
             },
@@ -377,22 +464,26 @@ const TOOLS = [
   {
     name: "dispatch_control_request",
     title: "Dispatch a control-plane request",
-    description: "Accept a control-plane request immediately, then plan and persist its task graph asynchronously without creating sessions. Execution and durable session creation remain gated on an explicit user Start action.",
+    description: "Accept a control-plane request immediately, then plan, atomically persist, and automatically start its task graph in the background.",
     inputSchema: {
       type: "object",
       properties: {
         objective: { type: "string", minLength: 1 },
         cwd: { type: "string" },
         constraints: { type: "array", items: { type: "string" }, maxItems: 50 },
+        requestedThreadIds: { type: "array", items: { type: "string" }, maxItems: 20, description: "Existing threads to index read-only before freezing planning context." },
+        requiredContextSubjects: { type: "array", items: { type: "string" }, maxItems: 50 },
+        maxContextBudget: { type: "integer", minimum: 100, maximum: 100000 },
         requestKey: { type: "string", description: "Idempotency key for planning and run creation." },
         name: { type: "string" },
         mode: { type: "string", enum: ["auto", "direct", "orchestrated"], default: "auto" },
         role: { type: "string", description: "Preferred role for an explicitly direct request." },
         capabilities: { type: "array", items: { type: "string" }, maxItems: 30 },
         acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 30 },
+        originThreadId: { type: "string", description: "Calling Control Plane thread identity. The MCP proxy fills this automatically when Codex exposes it." },
+        originTurnId: { type: "string", description: "Optional calling turn identity used for result-delivery provenance." },
         threadId: { type: "string", description: "Deprecated compatibility input; ignored for Run tasks." },
-        orchestratorThreadId: { type: "string", description: "Optional actual Orchestrator Codex session identity, recorded separately from the Daemon Scheduler." },
-        autoStart: { type: "boolean", default: false, description: "Deprecated compatibility input. Runs always wait for an explicit user Start action." },
+        orchestratorThreadId: { type: "string", description: "Optional actual Orchestrator Codex thread identity, recorded separately from the Daemon Scheduler." },
       },
       required: ["objective", "cwd"],
       additionalProperties: false,
@@ -400,25 +491,18 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
-    name: "start_agent_run",
-    title: "Start a prepared agent run",
-    description: "Atomically release a prepared task graph; the daemon creates an Orchestrator session for complex runs and leases or creates durable Data Plane sessions for runnable tasks.",
+    name: "drain_control_results",
+    title: "Drain completed Control Plane results",
+    description: "Return and acknowledge durable Run results waiting for the calling Control Plane thread. The MCP proxy supplies the thread identity when Codex exposes it.",
     inputSchema: {
       type: "object",
-      properties: { runId: { type: "string" } },
-      required: ["runId"],
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  },
-  {
-    name: "mark_dashboard_ready",
-    title: "Start a prepared agent run (legacy)",
-    description: "Backward-compatible alias for start_agent_run.",
-    inputSchema: {
-      type: "object",
-      properties: { runId: { type: "string" } },
-      required: ["runId"],
+      properties: {
+        originThreadId: { type: "string" },
+        originTurnId: { type: "string" },
+        cwd: { type: "string" },
+        limit: { type: "integer", minimum: 1, maximum: 50, default: 10 },
+      },
+      required: ["cwd"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -426,7 +510,7 @@ const TOOLS = [
   {
     name: "get_run_graph",
     title: "Get a run execution graph",
-    description: "Return the planned dependency graph with assigned agents, workspace isolation, approvals, live node state, and results.",
+    description: "Return the planned dependency graph with assigned agents, workspace isolation, live node state, integration, and results.",
     inputSchema: {
       type: "object",
       properties: { runId: { type: "string" } },
@@ -438,11 +522,11 @@ const TOOLS = [
   {
     name: "list_runs",
     title: "List control-plane runs",
-    description: "List durable run state including runs awaiting explicit user start.",
+    description: "List durable control-plane run state.",
     inputSchema: {
       type: "object",
       properties: {
-        status: { type: "string", enum: ["draft", "accepted", "planning", "preparing", "agents_prepared", "awaiting_user_start", "running", "completed", "failed", "cancelled"] },
+        status: { type: "string", enum: RUN_STATUSES },
         cwd: { type: "string" },
         scope: { type: "string", enum: ["active", "archived", "all"], default: "active" },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
@@ -450,6 +534,73 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "prepare_global_run",
+    title: "Prepare and release a multi-project Global Run",
+    description: "Atomically validate and persist a Global Run revision, its Project Runs, Task graphs, and cross-project dependencies before releasing root projects.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        apiVersion: { type: "integer", enum: [1], default: 1 },
+        globalRunId: { type: "string" }, requestKey: { type: "string" }, objective: { type: "string", minLength: 1 },
+        contextSnapshotId: { type: "string" }, contextSnapshotFingerprint: { type: "string" }, authorizationFingerprint: { type: "string" },
+        revision: { type: "integer", minimum: 1 },
+        projectRuns: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", additionalProperties: false, required: ["id", "cwd", "tasks"], properties: {
+          id: { type: "string" }, cwd: { type: "string" }, name: { type: "string" }, membership: { type: "string", enum: ["required", "optional"] },
+          tasks: { type: "array", minItems: 1, maxItems: 100, items: { type: "object", additionalProperties: false, required: ["id", "prompt"], properties: {
+            id: { type: "string" }, prompt: { type: "string" }, title: { type: "string" }, role: { type: "string" },
+            capabilities: { type: "array", items: { type: "string" } }, tools: { type: "array", items: { type: "string" } },
+            dependsOn: { type: "array", items: { type: "string" } }, dependencyPolicy: { type: "string", enum: ["all_success", "all_terminal", "on_failure"] },
+            taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
+            mutatesWorkspace: { type: "boolean" }, sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+            networkAccess: { type: "boolean" }, sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+            workspaceMode: { type: "string", enum: ["shared", "worktree"] }, integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
+            authorizationScope: { type: "string", enum: ["parent_run"] }, outputs: { type: "array", items: { type: "string" } },
+            acceptanceCriteria: { type: "array", items: { type: "string" } }, maxAttempts: { type: "integer", minimum: 1, maximum: 10 }, retryDelayMs: { type: "integer", minimum: 0 },
+          } } },
+        } } },
+        authorizationManifests: { type: "array", minItems: 1, maxItems: 20, items: { type: "object", additionalProperties: false,
+          required: ["runId", "allowedRoots", "taskKinds", "mutatesWorkspace", "sideEffectPolicies", "sandboxCeiling", "networkAccess", "workspaceModes"],
+          properties: {
+            version: { type: "integer", enum: [1] }, runId: { type: "string" }, projectId: { type: "string" }, fingerprint: { type: "string" },
+            allowedRoots: { type: "array", minItems: 1, items: { type: "string" } },
+            taskKinds: { type: "array", minItems: 1, items: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] } },
+            mutatesWorkspace: { type: "boolean" },
+            sideEffectPolicies: { type: "array", minItems: 1, items: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] } },
+            sandboxCeiling: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+            networkAccess: { type: "boolean" }, workspaceModes: { type: "array", minItems: 1, items: { type: "string", enum: ["shared", "worktree"] } },
+          },
+        } },
+        dependencies: { type: "array", maxItems: 100, items: { type: "object", additionalProperties: false, required: ["id", "producerRunId", "consumerRunId"], properties: {
+          id: { type: "string" }, producerRunId: { type: "string" }, consumerRunId: { type: "string" }, condition: { type: "string", enum: ["all_success", "all_terminal", "on_failure"] },
+          requiredOutputs: { type: "array", items: { type: "string" } }, acceptanceCriteria: { type: "array", items: { type: "string" } },
+          handoffSchemaVersion: { type: "integer", enum: [1] }, fingerprint: { type: "string" }, metadata: { type: "object" },
+        } } },
+      },
+      required: ["objective", "contextSnapshotId", "contextSnapshotFingerprint", "projectRuns", "authorizationManifests"], additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "list_global_runs", title: "List Global Runs", description: "List durable multi-project Global Run projections.",
+    inputSchema: { type: "object", properties: { status: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 100, default: 50 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "get_global_run", title: "Get a Global Run graph", description: "Get a Global Run revision, memberships, cross-project dependencies, and terminal projection.",
+    inputSchema: { type: "object", properties: { globalRunId: { type: "string" } }, required: ["globalRunId"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "refresh_global_run", title: "Refresh a Global Run", description: "Project child Run state into dependency release and terminal Global Run aggregation.",
+    inputSchema: { type: "object", properties: { globalRunId: { type: "string" } }, required: ["globalRunId"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "cancel_global_run", title: "Cancel a Global Run", description: "Persist global cancellation intent, fence new child claims, and cancel every non-terminal Project Run.",
+    inputSchema: { type: "object", properties: { globalRunId: { type: "string" } }, required: ["globalRunId"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {
     name: "archive_run",
@@ -484,7 +635,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        status: { type: "string", enum: ["staged", "blocked", "queued", "running", "approval_waiting", "agent_done", "validating", "retry_waiting", "waiting_for_lease", "completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted", "canceled"] },
+        status: { type: "string", enum: TASK_STATUSES },
         agentId: { type: "string" },
         cwd: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
@@ -506,13 +657,31 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   {
+    name: "repair_task_contract",
+    title: "Repair a failed task contract and rerun it",
+    description: "Replace the explicit execution contract of one terminal task, clear its failed attempt state, and queue it again without repeating the entire Run.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        taskId: { type: "string" },
+        sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
+        networkAccess: { type: "boolean" },
+        workspaceMode: { type: "string", enum: ["shared", "worktree"] },
+        integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
+      },
+      required: ["taskId"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: "list_worktree_leases",
     title: "List worktree leases",
     description: "List exclusive worktree coordination leases and their owners.",
     inputSchema: {
       type: "object",
       properties: {
-        status: { type: "string", enum: ["active", "released", "expired"] },
+        status: { type: "string", enum: LEASE_STATUSES },
         ownerTaskId: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
       },
@@ -557,7 +726,7 @@ const TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        entityType: { type: "string", enum: ["agent", "task", "run", "plan", "approval", "worktree", "role", "memory", "system"] },
+        entityType: { type: "string", enum: ["agent", "task", "run", "global_run", "plan", "approval", "worktree", "role", "memory", "context_snapshot", "thread_knowledge", "thread_lifecycle", "thread_budget", "system"] },
         entityId: { type: "string" },
         limit: { type: "integer", minimum: 1, maximum: 200, default: 100 },
       },
@@ -568,13 +737,16 @@ const TOOLS = [
   {
     name: "plan_agent_run",
     title: "Plan a control-plane run",
-    description: "Use the daemon-owned Planner session to create a dependency-aware plan; optionally materialize it as an atomic dashboard-gated run.",
+    description: "Use the daemon-owned Planner thread to create a dependency-aware plan; optionally materialize it as an atomic dashboard-gated run.",
     inputSchema: {
       type: "object",
       properties: {
         objective: { type: "string", minLength: 1 },
         cwd: { type: "string" },
         constraints: { type: "array", items: { type: "string" }, maxItems: 50 },
+        requestedThreadIds: { type: "array", items: { type: "string" }, maxItems: 20, description: "Existing threads to index read-only before freezing planning context." },
+        requiredContextSubjects: { type: "array", items: { type: "string" }, maxItems: 50 },
+        maxContextBudget: { type: "integer", minimum: 100, maximum: 100000 },
         requestKey: { type: "string", description: "Idempotency key for plan and run creation." },
         prepare: { type: "boolean", default: true },
         name: { type: "string" },
@@ -613,20 +785,6 @@ const TOOLS = [
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
-    name: "list_approvals",
-    title: "List pending approvals",
-    description: "List command and file-change approvals currently brokered by the control plane.",
-    inputSchema: { type: "object", properties: { status: { type: "string", enum: ["pending", "resolved", "expired"] }, taskId: { type: "string" }, limit: { type: "integer", minimum: 1, maximum: 200, default: 100 } }, additionalProperties: false },
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
-  },
-  {
-    name: "resolve_approval",
-    title: "Resolve an agent approval",
-    description: "Accept or decline one pending app-server approval and resume the waiting turn.",
-    inputSchema: { type: "object", properties: { approvalId: { type: "string" }, decision: { type: "string", enum: ["accept", "decline"] } }, required: ["approvalId", "decision"], additionalProperties: false },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  },
-  {
     name: "list_managed_worktrees",
     title: "List managed worktrees",
     description: "List actual git worktrees created and tracked by the control plane.",
@@ -639,6 +797,13 @@ const TOOLS = [
     description: "Remove a clean managed worktree. Dirty or uninspectable worktrees are retained or quarantined instead of force-deleted.",
     inputSchema: { type: "object", properties: { worktreeId: { type: "string" } }, required: ["worktreeId"], additionalProperties: false },
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+  },
+  {
+    name: "recover_managed_worktree",
+    title: "Recover a retained or blocked worktree",
+    description: "Inspect, finalize, integrate, clean up, or quarantine a retained managed worktree without discarding its artifact.",
+    inputSchema: { type: "object", properties: { worktreeId: { type: "string" }, action: { type: "string", enum: ["inspect", "finalize", "integrate", "cleanup", "quarantine"] }, strategy: { type: "string", enum: ["patch", "commit"] }, reason: { type: "string" } }, required: ["worktreeId", "action"], additionalProperties: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "list_role_templates",
@@ -659,6 +824,18 @@ const TOOLS = [
     title: "Get a Desktop agent handoff",
     description: "Return the native Codex thread ID and grouping metadata for opening a data-plane task in Desktop.",
     inputSchema: { type: "object", properties: { threadId: { type: "string" } }, required: ["threadId"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "open_desktop_thread",
+    title: "Open a Codex Desktop task",
+    description: "Open an existing Codex task directly in the Desktop app from an authorized Control Plane dashboard.",
+    inputSchema: {
+      type: "object",
+      properties: { threadId: { type: "string" }, dashboardLeaseToken: { type: "string" } },
+      required: ["threadId", "dashboardLeaseToken"],
+      additionalProperties: false,
+    },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
@@ -696,7 +873,7 @@ const TOOLS = [
       type: "object",
       properties: {
         dashboardLeaseToken: { type: "string" },
-        entityType: { type: "string", enum: ["agent", "task", "run", "graph", "plan", "approval", "worktree", "memory"] },
+        entityType: { type: "string", enum: ["agent", "thread_lifecycle", "task", "run", "global_run", "graph", "plan", "worktree", "memory", "context_snapshot"] },
         entityId: { type: "string" },
       },
       required: ["dashboardLeaseToken", "entityType", "entityId"], additionalProperties: false,
@@ -722,8 +899,8 @@ const TOOLS = [
     _meta: {
       ui: { resourceUri: DASHBOARD_URI },
       "openai/outputTemplate": DASHBOARD_URI,
-      "openai/toolInvocation/invoking": "멀티 에이전트 작업 현황을 불러오는 중…",
-      "openai/toolInvocation/invoked": "멀티 에이전트 작업 현황을 표시했습니다.",
+      "openai/toolInvocation/invoking": "백그라운드 작업 상세를 불러오는 중…",
+      "openai/toolInvocation/invoked": "백그라운드 작업 상세를 표시했습니다.",
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
@@ -734,12 +911,12 @@ export class McpControlServer {
     this.input = options.input ?? process.stdin;
     this.output = options.output ?? process.stdout;
     this.logger = options.logger ?? console.error;
+    this.openDesktopThread = options.openDesktopThread ?? openDesktopThread;
     this.sessionWriter = options.sessionWriter ?? (Boolean(options.controlFactory) || process.env.CODEX_CONTROL_DAEMON === "1");
     this.controlFactory = options.controlFactory ?? (() => {
       const runtime = dataPlaneRuntime();
       const client = new CodexAppServerClient({
         cwd: process.env.CODEX_CONTROL_CWD ?? process.cwd(),
-        approvalHandler: (message) => this.#handleApprovalRequest(message),
         runtime,
       });
       return { client, control: new CodexControlPlane(client) };
@@ -752,14 +929,17 @@ export class McpControlServer {
     this.ownsRegistry = !options.registry;
     this.router = options.router ?? new AgentRouter();
     this.contextManager = options.contextManager ?? new ContextManager(this.registry);
+    this.contextResolver = options.contextResolver ?? new ContextResolver(this.registry);
+    this.threadKnowledgeIndexer = options.threadKnowledgeIndexer ?? new ThreadKnowledgeIndexer(this.registry);
     this.roleTemplates = options.roleTemplates ?? new RoleTemplateManager(this.registry);
     this.roleTemplates.seedBuiltins();
     this.worktreeManager = options.worktreeManager ?? new WorktreeManager(this.registry);
-    this.pendingApprovals = new Map();
     this.registry.expirePendingApprovals();
     this.planner = options.planner ?? new PlannerEngine({
       registry: this.registry,
       contextManager: this.contextManager,
+      contextResolver: this.contextResolver,
+      threadKnowledgeIndexer: this.threadKnowledgeIndexer,
       roleTemplates: this.roleTemplates,
       getControl: () => this.#getControl(),
       decorateAgent: (...args) => this.#decorateAgent(...args),
@@ -788,6 +968,8 @@ export class McpControlServer {
     this.schedulerTimer = null;
     this.pollPromise = null;
     this.controlDispatches = new Map();
+    this.runFinalizations = new Map();
+    this.controlDeliveryFlights = new Set();
     this.reconciliationTtlMs = options.reconciliationTtlMs ?? 5 * 60_000;
     this.projectReconciliations = new Map();
     this.dashboardViewLeaseTtlMs = options.dashboardViewLeaseTtlMs ?? 30 * 60_000;
@@ -801,6 +983,10 @@ export class McpControlServer {
       if (recovered) this.registry.recordEvent("system", null, "system.recovered", { interruptedTasks: recovered });
       const recoveredAgentLeases = this.registry.recoverExpiredAgentLeases?.() ?? 0;
       if (recoveredAgentLeases) this.registry.recordEvent("system", null, "system.agent_leases_recovered", { agentLeases: recoveredAgentLeases });
+      const recoveredDeliveries = this.registry.recoverControlDeliveries?.() ?? 0;
+      if (recoveredDeliveries) this.registry.recordEvent("system", null, "system.control_deliveries_recovered", { deliveries: recoveredDeliveries });
+      const recoveredGlobalRuns = this.registry.recoverGlobalRuns?.() ?? null;
+      if (recoveredGlobalRuns && Object.values(recoveredGlobalRuns).some(Boolean)) this.registry.recordEvent("system", null, "system.global_runs_recovered", recoveredGlobalRuns);
     }
   }
 
@@ -815,8 +1001,39 @@ export class McpControlServer {
     if (this.schedulerTimer) return;
     this.schedulerTimer = setInterval(() => void this.#pollTasks(), this.schedulerIntervalMs);
     this.schedulerTimer.unref?.();
-    queueMicrotask(() => void this.#pollTasks());
+    queueMicrotask(() => void this.#recoverIntegrations().finally(() => this.#pollTasks()));
     queueMicrotask(() => void this.#resumeControlDispatches());
+  }
+
+  async #recoverIntegrations() {
+    const journals = this.registry.listIntegrationJournals?.({ limit: 100 }) ?? [];
+    const pending = journals.filter((journal) => journal.status !== "recorded");
+    const recoverable = journals.filter((journal) => journal.status !== "recorded" || (journal.taskId && this.registry.getTask(journal.taskId)?.status === "integration_pending"));
+    if (!recoverable.length) return { recovered: 0 };
+    if (pending.length) await this.worktreeManager.recoverPendingIntegrations();
+    let recovered = 0;
+    for (const original of recoverable) {
+      const journal = this.registry.getIntegrationJournal(original.id);
+      if (!journal) continue;
+      const task = journal.taskId ? this.registry.getTask(journal.taskId) : null;
+      if (!task || task.status !== "integration_pending") continue;
+      const validationDecision = task.metadata?.validation?.decision;
+      const status = journal.status === "recorded"
+        ? (validationDecision === "accept_with_warnings" ? "completed_with_warnings" : "completed")
+        : "integration_blocked";
+      this.registry.finishRecoveredIntegration(task.id, journal, { status, error: journal.lastError });
+      for (const lease of this.registry.listLeases({ ownerTaskId: task.id }).filter((entry) => entry.status === "active")) {
+        this.registry.releaseLease(lease.key, task.id, { ownerToken: lease.ownerToken });
+      }
+      if (task.agentId) {
+        const agentLease = this.registry.getAgentLease(task.agentId);
+        if (agentLease?.status === "active" && agentLease.ownerTaskId === task.id) this.registry.releaseAgentLease(task.agentId, task.id, agentLease.ownerToken);
+      }
+      if (task.metadata?.runId) this.registry.refreshRun(task.metadata.runId);
+      recovered += 1;
+    }
+    if (recovered) this.registry.recordEvent("system", null, "system.integrations_recovered", { integrations: recovered });
+    return { recovered };
   }
 
   async close() {
@@ -852,11 +1069,6 @@ export class McpControlServer {
         if (recovered) this.registry.recordEvent("system", null, "system.shutdown_recovered", { interruptedTasks: recovered });
       }
     }
-    for (const approval of this.pendingApprovals.values()) {
-      clearTimeout(approval.timer);
-      approval.resolve("decline");
-    }
-    this.pendingApprovals.clear();
     this.lines?.close();
     if (this.ownsDashboardServer) await this.dashboardServer?.close?.();
     await this.client?.close?.();
@@ -872,7 +1084,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex session writer. The Control Plane accepts, estimates, plans, tracks project context, and owns the dashboard. Preparation persists only the task graph: it never creates READY or Desktop placeholder sessions. Every prepared run waits for an explicit user Start action; opening or refreshing the dashboard never starts work. After Start, complex Runs receive one durable Orchestrator session, and each task leases a compatible reusable Data Plane session or creates a new one when no safe match exists.",
+        instructions: "Use this daemon as the single Codex thread writer. Chat is the primary Control Plane surface; dispatch returns quickly, the dashboard is optional, and terminal results return through a durable origin-thread delivery contract. The daemon atomically persists the graph, then automatically starts the Run without READY placeholders or a dashboard Start button. Complex Runs receive one durable Orchestrator thread, and each task leases a compatible reusable Data Plane thread or creates a new one when no safe match exists.",
       };
     }
     if (message.method === "ping") return {};
@@ -901,11 +1113,14 @@ export class McpControlServer {
         }],
       };
     }
-    if (message.method === "tools/call") return this.#callTool(message.params?.name, message.params?.arguments ?? {});
+    if (message.method === "tools/call") {
+      const hostOrigin = message.params?._meta?.["codex/origin"] ?? null;
+      return this.#callTool(message.params?.name, message.params?.arguments ?? {}, { hostOrigin });
+    }
     throw Object.assign(new Error(`Method not found: ${message.method}`), { code: -32601 });
   }
 
-  async #callTool(name, args) {
+  async #callTool(name, args, context = {}) {
     try {
       let control;
       const getControl = async () => {
@@ -919,6 +1134,12 @@ export class McpControlServer {
         result = await this.#setAgentArchived(args.threadId, true, getControl);
       } else if (name === "unarchive_agent") {
         result = await this.#setAgentArchived(args.threadId, false, getControl);
+      } else if (name === "list_thread_lifecycles") {
+        result = { threads: this.registry.listThreadLifecycles(args) };
+      } else if (name === "get_thread_budget") {
+        result = this.registry.getThreadBudgetState(args);
+      } else if (name === "upsert_thread_budget") {
+        result = this.registry.upsertThreadBudget(args);
       } else if (name === "inspect_agent") {
         const thread = await (await getControl()).inspectAgent(args.threadId, { includeTurns: args.includeTurns });
         result = { thread, profile: this.registry.getAgent(args.threadId) };
@@ -989,17 +1210,77 @@ export class McpControlServer {
         } : {});
         this.registry.recordEvent("agent", agent.id, "agent.forked", { sourceThreadId: args.threadId });
       } else if (name === "run_agent_task") {
-        result = await this.#runForegroundTask(await getControl(), args);
+        result = await this.#runForegroundTask(args);
       } else if (name === "dispatch_agent_task") {
         result = await this.#dispatchTask(args);
       } else if (name === "prepare_agent_run") {
-        result = await this.#prepareAgentRun(args);
+        result = await this.#prepareAgentRun({ ...args, autoStart: true });
       } else if (name === "dispatch_control_request") {
-        result = await this.#enqueueControlRequest(args);
-      } else if (name === "start_agent_run" || name === "mark_dashboard_ready") {
-        result = await this.#startRun(args.runId, { source: name === "start_agent_run" ? "mcp_tool" : "legacy_mcp_tool" });
+        result = await this.#enqueueControlRequest(args, context);
+      } else if (name === "drain_control_results") {
+        const originThreadId = context.hostOrigin?.threadId ?? args.originThreadId ?? this.registry.getSetting(`control_plane_owner:${args.cwd ?? "*"}`) ?? null;
+        const deliveries = originThreadId ? this.registry.listControlDeliveries({
+          originThreadId,
+          status: ["pending", "retry_waiting", "pending_attention"],
+          limit: args.limit ?? 10,
+        }).filter((delivery) => !args.cwd || this.registry.getRun(delivery.runId)?.cwd === args.cwd) : [];
+        for (const delivery of deliveries) {
+          this.registry.markControlDeliveryDelivered(delivery.id, context.hostOrigin?.turnId ?? args.originTurnId ?? "mcp_result_handoff");
+          if (delivery.payload?.notificationId) {
+            this.registry.markNotificationRead(delivery.payload.notificationId, delivery.originThreadId);
+            this.registry.markNotificationRead(delivery.payload.notificationId);
+          }
+        }
+        result = { deliveries };
       } else if (name === "get_run_graph") {
         result = this.runController.graph(args.runId);
+      } else if (name === "prepare_global_run") {
+        const globalRunId = args.globalRunId ?? `global_run_${randomUUID()}`;
+        const globalRun = this.registry.createGlobalRun({
+          id: globalRunId, requestKey: args.requestKey, objective: args.objective,
+          origin: context.hostOrigin ?? {}, metadata: { preparedBySchedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId } },
+        });
+        if (globalRun.currentRevision !== null) {
+          result = { ...this.registry.getGlobalRunGraph(globalRun.id), idempotent: true };
+        } else {
+          try {
+            this.registry.updateGlobalRun(globalRun.id, { status: "resolving_context" });
+            this.contextResolver.assertSnapshot(args.contextSnapshotId);
+            this.registry.updateGlobalRun(globalRun.id, { status: "planning" });
+            this.registry.updateGlobalRun(globalRun.id, { status: "preparing" });
+            const graph = this.registry.createGlobalRunGraph({
+              globalRunId: globalRun.id, revision: args.revision ?? 1,
+              contextSnapshotId: args.contextSnapshotId, contextSnapshotFingerprint: args.contextSnapshotFingerprint,
+              authorizationFingerprint: args.authorizationFingerprint,
+              authorizationManifests: args.authorizationManifests,
+              projectRuns: args.projectRuns.map((entry) => ({
+                membership: entry.membership ?? "required",
+                run: { id: entry.id, cwd: entry.cwd, name: entry.name ?? null }, tasks: entry.tasks,
+              })),
+              dependencies: args.dependencies ?? [],
+            });
+            result = this.registry.releaseGlobalRun(globalRun.id);
+            result.idempotent = graph.idempotent;
+          } catch (error) {
+            const currentGlobal = this.registry.getGlobalRun(globalRun.id);
+            if (currentGlobal && !["completed", "failed", "cancelled", "attention_required"].includes(currentGlobal.status)) {
+              this.registry.updateGlobalRun(globalRun.id, { status: "failed", completedAt: new Date().toISOString(), metadata: {
+                failure: { code: error.code ?? "GLOBAL_RUN_PREPARATION_FAILED", cause: error.message, repairable: true, nextAction: "Create a new Global Run revision after repairing the graph or scope." },
+              } });
+            }
+            throw error;
+          }
+        }
+      } else if (name === "list_global_runs") {
+        result = { globalRuns: this.registry.listGlobalRuns(args) };
+      } else if (name === "get_global_run") {
+        result = this.registry.getGlobalRunGraph(args.globalRunId);
+        if (!result) throw new Error(`Global Run not found: ${args.globalRunId}`);
+      } else if (name === "refresh_global_run") {
+        result = this.registry.refreshGlobalRun(args.globalRunId);
+        if (!result) throw new Error(`Global Run not found: ${args.globalRunId}`);
+      } else if (name === "cancel_global_run") {
+        result = this.registry.cancelGlobalRun(args.globalRunId);
       } else if (name === "list_runs") {
         result = { runs: this.registry.listRuns(args) };
       } else if (name === "archive_run") {
@@ -1010,6 +1291,7 @@ export class McpControlServer {
         result = await this.runController.cancel(args.runId);
       } else if (name === "list_tasks") {
         this.registry.refreshBlockedTasks();
+        if (args.runId) this.registry.refreshRun(args.runId);
         result = { tasks: this.registry.listTasks(args) };
       } else if (name === "cancel_task") {
         const task = this.registry.getTask(args.taskId);
@@ -1020,6 +1302,8 @@ export class McpControlServer {
         result = this.registry.cancelTask(args.taskId);
         const leaseKey = task.metadata?.execution?.leaseKey;
         if (leaseKey) this.registry.releaseLease(leaseKey, task.id, { status: "released" });
+      } else if (name === "repair_task_contract") {
+        result = this.#repairTaskContract(args);
       } else if (name === "list_worktree_leases") {
         result = { leases: this.registry.listLeases(args) };
       } else if (name === "acquire_worktree_lease") {
@@ -1050,12 +1334,15 @@ export class McpControlServer {
             planId: plan.id,
             tasks: plan.plan.tasks,
             dispatchPath: estimate.dispatchPath,
+            contextSnapshot: this.contextResolver.assertSnapshot(plan.metadata?.contextSnapshotId),
+            autoStart: true,
           });
           result.plan = plan;
           result.estimate = estimate;
         }
       } else if (name === "revise_agent_plan") {
-        result = await this.planner.revise(args.planId, args.feedback);
+        const plan = await this.planner.revise(args.planId, args.feedback);
+        result = { ...plan, rematerializedRuns: [] };
       } else if (name === "list_plans") {
         result = { plans: this.registry.listPlans(args) };
       } else if (name === "get_plan") {
@@ -1064,14 +1351,12 @@ export class McpControlServer {
         result = { ...plan, revisions: this.registry.listPlanRevisions(args.planId) };
       } else if (name === "synthesize_run") {
         result = await this.planner.synthesize(args.planId, this.registry.listTasks({ runId: args.runId, limit: 1000 }));
-      } else if (name === "list_approvals") {
-        result = { approvals: this.registry.listApprovals(args) };
-      } else if (name === "resolve_approval") {
-        result = this.#resolveApproval(args.approvalId, args.decision, { source: "mcp_tool" });
       } else if (name === "list_managed_worktrees") {
         result = { worktrees: this.registry.listManagedWorktrees(args) };
       } else if (name === "cleanup_worktree") {
         result = await this.worktreeManager.cleanup(args.worktreeId);
+      } else if (name === "recover_managed_worktree") {
+        result = await this.worktreeManager.recover(args.worktreeId, args.action, args);
       } else if (name === "list_role_templates") {
         result = { roles: this.registry.listRoleTemplates(args) };
       } else if (name === "upsert_role_template") {
@@ -1086,14 +1371,19 @@ export class McpControlServer {
           groupLabel: agent.metadata?.runId ? `Agents · ${agent.metadata.runId}` : "Agents · ungrouped",
           navigation: { supportedByAppServer: false, threadIdCanBeCopied: true, reason: "Codex Desktop owns native navigation and sidebar hierarchy; MCP/App Server can expose this thread ID but cannot force the Desktop UI to open or group it." },
         };
+      } else if (name === "open_desktop_thread") {
+        this.#assertDashboardViewLease(args.dashboardLeaseToken);
+        if (!CODEX_THREAD_ID.test(args.threadId ?? "")) throw new Error("Invalid Codex thread ID");
+        await this.openDesktopThread(args.threadId);
+        result = { opened: true, threadId: args.threadId, url: `codex://threads/${args.threadId}` };
       } else if (name === "get_task") {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
       } else if (name === "show_agent_dashboard") {
-        this.#assertDashboardRequester(args.requesterThreadId, args.cwd);
+        const dashboardRequesterThreadId = this.#assertDashboardRequester(context.hostOrigin?.threadId ?? args.requesterThreadId, args.cwd);
         if (args.cwd) await this.#reconcileProject(await getControl(), args.cwd);
         const dashboard = await this.#ensureDashboardServer();
-        const dashboardLeaseToken = this.#issueDashboardViewLease(args.cwd, args.requesterThreadId);
+        const dashboardLeaseToken = this.#issueDashboardViewLease(args.cwd, dashboardRequesterThreadId);
         result = { ...buildDashboardSnapshot(this.registry, {
           cwd: args.cwd, runId: args.runId, limit: args.limit ?? 50,
           scope: args.scope,
@@ -1123,19 +1413,139 @@ export class McpControlServer {
     }
   }
 
-  async #runForegroundTask(control, args) {
-    const record = this.#createTaskRecord({ ...args, dependsOn: [], maxAttempts: 1 });
+  async #validatedTaskInput(args) {
+    const roleTemplate = args.role ? this.roleTemplates.resolve(args.role) : { name: "agent", sandbox: "read-only", approvalPolicy: "never" };
+    const executionContract = compileAndValidateExecutionContract(args, { workspaceMode: "shared" }, roleTemplate);
+    const workspacePreflight = executionContract.workspaceMode === "worktree"
+      ? await this.worktreeManager.inspectRepository(args.cwd)
+      : { mode: "shared", cwd: args.cwd ?? null, checkedAt: new Date().toISOString() };
+    return { executionContract, workspacePreflight };
+  }
+
+  async #runForegroundTask(args) {
+    const validated = await this.#validatedTaskInput(args);
+    const record = this.#createTaskRecord({ ...args, ...validated, dependsOn: [], maxAttempts: 1 });
     const claimed = this.registry.claimTask(record.id, this.instanceId);
     if (!claimed) throw new Error(`Unable to claim foreground task: ${record.id}`);
+    const control = await this.#getControl();
     const result = await this.#runTask(control, args, record.id, claimed);
     return { taskId: record.id, ...result };
   }
 
+  #repairTaskContract(args) {
+    const task = this.registry.getTask(args.taskId);
+    if (!task) throw new Error(`Task not found: ${args.taskId}`);
+    if (!REPAIRABLE_TASK_STATUSES.has(task.status)) throw new Error(`Task ${task.id} is not repairable while ${task.status}`);
+
+    const previous = task.metadata?.executionContract ?? task.metadata?.execution?.executionContract ?? {};
+    const roleTemplate = this.roleTemplates.resolve(task.role);
+    const contract = compileAndValidateExecutionContract({
+      key: task.id,
+      title: task.metadata?.title,
+      prompt: task.metadata?.prompt,
+      role: task.role,
+      capabilities: task.requiredCapabilities,
+      tools: previous.tools,
+      taskKind: previous.taskKind,
+      mutatesWorkspace: previous.mutatesWorkspace,
+      requiredSandbox: previous.requiredSandbox,
+      sandbox: args.sandbox ?? previous.sandbox,
+      networkAccess: args.networkAccess ?? previous.networkAccess,
+      sideEffectPolicy: previous.sideEffectPolicy,
+      idempotencyKey: previous.idempotencyKey,
+      outputs: previous.outputs,
+      workspaceMode: args.workspaceMode ?? previous.workspaceMode,
+      baseRef: previous.baseRef,
+      integrationStrategy: args.integrationStrategy ?? previous.integrationStrategy,
+      approvalPolicy: "never",
+    }, {}, roleTemplate);
+    assertNewContractRevision(previous, contract);
+
+    const repairedAt = new Date().toISOString();
+    const contractChanges = Object.fromEntries(["sandbox", "networkAccess", "workspaceMode", "integrationStrategy"].flatMap((field) =>
+      previous[field] === contract[field] ? [] : [[field, { from: previous[field] ?? null, to: contract[field] ?? null }]]));
+    const priorFailures = [...(task.metadata?.priorFailures ?? [])];
+    if (task.metadata?.failure) priorFailures.push({ ...task.metadata.failure, contractFingerprint: previous.fingerprint ?? null, repairedAt });
+    const updated = this.registry.updateTask(task.id, {
+      status: "blocked",
+      agentId: null,
+      output: null,
+      error: null,
+      turnId: null,
+      routing: null,
+      startedAt: null,
+      completedAt: null,
+      workerId: null,
+      heartbeatAt: null,
+      nextRetryAt: null,
+      claimToken: null,
+      maxAttempts: Math.max(task.maxAttempts, task.attempt + 1),
+      metadata: {
+        executionContract: contract,
+        execution: { ...(task.metadata?.execution ?? {}), executionContract: contract, sandbox: contract.sandbox, workspaceMode: contract.workspaceMode, networkAccess: contract.networkAccess, approvalPolicy: "never" },
+        failure: null,
+        validation: null,
+        integration: null,
+        rework: null,
+        priorFailures,
+        contractHistory: [...(task.metadata?.contractHistory ?? []), {
+          revision: task.metadata?.contractRevision ?? 1,
+          fingerprint: previous.fingerprint ?? null,
+          contract: previous,
+          replacedAt: repairedAt,
+        }],
+        contractRevision: Number(task.metadata?.contractRevision ?? 1) + 1,
+        contractRepairedAt: repairedAt,
+        contractChanges,
+      },
+    }, { allowRepair: true });
+    const runId = task.metadata?.runId;
+    if (runId) this.registry.updateRun(runId, { status: "running", completedAt: null, metadata: { repairedTaskId: task.id, repairedAt } }, { allowRepair: true });
+    this.registry.recordEvent("task", task.id, "task.contract_repaired", { previousFingerprint: previous.fingerprint ?? null, fingerprint: contract.fingerprint, changes: contractChanges });
+    this.registry.refreshBlockedTasks();
+    if (runId) this.registry.refreshRun(runId);
+    queueMicrotask(() => void this.#pollTasks());
+    return { task: this.registry.getTask(task.id), previousContract: previous, executionContract: contract, queuedFrom: updated.status };
+  }
+
+  #recordOrchestration(run, type, payload = {}) {
+    if (!run) return;
+    const entry = { type, at: new Date().toISOString(), ...payload };
+    const current = this.registry.getRun(run.id) ?? run;
+    const orchestrationLog = [...(current.metadata?.orchestrationLog ?? []), entry].slice(-100);
+    this.registry.updateRun(run.id, { metadata: { orchestrationLog } });
+    const orchestratorId = current.metadata?.orchestratorSessionIdentity?.agentId ?? current.metadata?.orchestratorAgentId;
+    if (orchestratorId) this.registry.recordEvent("agent", orchestratorId, `orchestrator.${type}`, { runId: run.id, ...payload });
+  }
+
   async #runTask(control, args, taskId, claim) {
-    if (!args.prompt?.trim()) throw new Error("prompt must not be empty");
-    const roleTemplate = args.role ? this.roleTemplates.resolve(args.role) : { name: "agent", sandbox: "read-only", approvalPolicy: "never", capabilities: [], tools: [] };
-    const sandbox = args.sandbox ?? roleTemplate.sandbox ?? "read-only";
-    const approvalPolicy = args.approvalPolicy ?? roleTemplate.approvalPolicy ?? "never";
+    const claimToken = claim?.claimToken ?? this.registry.getTask(taskId)?.claimToken;
+    let roleTemplate;
+    let executionContract;
+    try {
+      if (!args.prompt?.trim()) throw new Error("prompt must not be empty");
+      roleTemplate = args.role ? this.roleTemplates.resolve(args.role) : { name: "agent", sandbox: "read-only", approvalPolicy: "never", capabilities: [], tools: [] };
+      const persistedContract = this.registry.getTask(taskId)?.metadata?.executionContract;
+      executionContract = assertExecutionContract(args.executionContract?.fingerprint
+        ? args.executionContract
+        : persistedContract?.fingerprint
+          ? persistedContract
+          : compileAndValidateExecutionContract(args, { workspaceMode: "shared" }, roleTemplate));
+    } catch (error) {
+      if (claimToken && this.registry.isClaimOwner(taskId, this.instanceId, claimToken)) {
+        const failure = executionContractFailure(error, {
+          stage: "contract_validation",
+          fingerprint: args.executionContract?.fingerprint ?? this.registry.getTask(taskId)?.metadata?.contractFingerprint ?? null,
+        });
+        this.registry.finishFailureClaim(taskId, this.instanceId, claimToken, failure, {
+          terminalStatus: failure.category === "policy" ? "blocked_by_policy" : "failed",
+        });
+      }
+      throw error;
+    }
+    const sandbox = executionContract.sandbox;
+    const networkAccess = executionContract.networkAccess;
+    const approvalPolicy = executionContract.approvalPolicy;
     const model = args.model ?? roleTemplate.model;
     const effort = args.effort ?? roleTemplate.effort;
     let effectiveCwd = args.cwd;
@@ -1147,12 +1557,12 @@ export class McpControlServer {
     let heartbeatTimer;
     let lease;
     let agentLease;
-    let leaseKey = args.leaseKey ?? null;
+    let leaseKey = args.leaseKey ?? (executionContract.workspaceMode === "shared" && executionContract.mutatesWorkspace
+      ? `shared-writer:${createHash("sha256").update(args.cwd ?? "workspace").digest("hex").slice(0, 20)}`
+      : null);
     const leaseTtlMs = args.leaseTtlMs ?? 120_000;
-    const claimToken = claim?.claimToken ?? this.registry.getTask(taskId)?.claimToken;
-
     try {
-      if (args.workspaceMode === "worktree") {
+      if (executionContract.workspaceMode === "worktree") {
         managedWorktree = await this.worktreeManager.prepare({ taskId, cwd: args.cwd, baseRef: args.baseRef, branch: args.branch });
         effectiveCwd = managedWorktree.path;
         leaseKey ??= `worktree:${managedWorktree.path}`;
@@ -1180,7 +1590,7 @@ export class McpControlServer {
         sourceThreadId = args.preparedSourceThreadId ?? sourceThreadId;
         routing = args.preparedRouting ?? null;
         agentLease = this.registry.acquireAgentLease(args.preparedAgentId, taskId, claimToken, leaseTtlMs, { mode: "prepared" });
-        if (!agentLease) throw new Error(`Agent session is already leased: ${args.preparedAgentId}`);
+        if (!agentLease) throw new Error(`Agent thread is already leased: ${args.preparedAgentId}`);
         agent = await control.resumeAgent(args.preparedAgentId, {
           cwd: effectiveCwd,
           sandbox,
@@ -1190,20 +1600,37 @@ export class McpControlServer {
         agent.name = args.preparedAgentName ?? agent.name;
         mode = args.preparedMode ?? "prepared";
       } else if (!sourceThreadId && (args.routingMode ?? "auto") === "auto") {
-        routing = await this.#routeAgent(control, args);
-        if (routing.decision !== "spawn") sourceThreadId = routing.selectedAgent.id;
+        routing = await this.#routeAgent(control, { ...args, taskId, cwd: effectiveCwd, executionContract });
+        if (routing.decision === "wait") {
+          const waitingTask = this.registry.getTask(taskId);
+          const waitingDecision = this.registry.recordRoutingDecision({
+            taskId, runId: waitingTask?.runId ?? waitingTask?.metadata?.runId ?? null,
+            projectId: waitingTask?.projectId ?? null, decision: "wait",
+            selectedAgentId: routing.selectedAgent?.id ?? null, candidates: routing.candidates ?? [],
+            evidence: routing.reasons ?? [], rejectionReasons: [], provenance: routing.provenance ?? {},
+          });
+          routing = { ...routing, decisionId: waitingDecision.id, decisionFingerprint: waitingDecision.fingerprint };
+          if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
+          if (managedWorktree) await this.worktreeManager.cleanup(managedWorktree.id);
+          const waiting = this.registry.waitClaimForLease(taskId, this.instanceId, claimToken, this.schedulerIntervalMs);
+          this.registry.recordEvent("task", taskId, "task.thread_budget_waiting", { budget: routing.budgetState, reasons: routing.reasons });
+          return { waitingForLease: true, routing, record: waiting };
+        }
+        if (["reuse", "fork"].includes(routing.decision)) sourceThreadId = routing.selectedAgent.id;
       }
 
       if (!agent && !sourceThreadId) {
+        const ephemeral = args.ephemeral ?? routing?.ephemeral ?? false;
         agent = await control.spawnAgent({
           cwd: effectiveCwd,
           sandbox,
           model,
           approvalPolicy,
-          developerInstructions: `${roleTemplate.developerInstructions}\n\nDashboard boundary: this is a Data Plane session. Do not call show_agent_dashboard, get_dashboard_state, or get_dashboard_detail; report status through your assigned task only.`,
-          ephemeral: args.ephemeral ?? false,
+          developerInstructions: `${roleTemplate.developerInstructions}\n\nDashboard boundary: this is a Data Plane thread. Do not call show_agent_dashboard, get_dashboard_state, or get_dashboard_detail; report status through your assigned task only.`,
+          ephemeral,
         });
-        mode = "spawned";
+        agent.ephemeral = ephemeral;
+        mode = ephemeral ? "ephemeral_spawned" : "spawned";
       } else if (!agent && args.reuseExisting === true && routing?.decision !== "fork") {
         agentLease = this.registry.acquireAgentLease(sourceThreadId, taskId, claimToken, leaseTtlMs, { mode: "reused" });
         if (agentLease) {
@@ -1215,6 +1642,13 @@ export class McpControlServer {
           });
           mode = "reused";
         } else {
+          if (routing?.budgetState && (!routing.budgetState.canCreateProject || !routing.budgetState.canCreateRole || !routing.budgetState.canForkLineage)) {
+            if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
+            if (managedWorktree) await this.worktreeManager.cleanup(managedWorktree.id);
+            const waiting = this.registry.waitClaimForLease(taskId, this.instanceId, claimToken, this.schedulerIntervalMs);
+            this.registry.recordEvent("task", taskId, "task.thread_budget_waiting", { sourceThreadId, reason: "lease_race_budget_fenced" });
+            return { waitingForLease: true, routing, record: waiting };
+          }
           agent = await control.forkAgent(sourceThreadId, {
             cwd: effectiveCwd,
             sandbox,
@@ -1239,7 +1673,7 @@ export class McpControlServer {
         }
       }
 
-      if (["spawned", "forked", "forked_lease_fallback"].includes(mode)) {
+      if (["spawned", "ephemeral_spawned", "forked", "forked_lease_fallback"].includes(mode)) {
         const name = agentDisplayName(args.role, args.title, args.prompt);
         await this.#decorateAgent(control, agent, name, true);
         agent.name = name;
@@ -1254,6 +1688,9 @@ export class McpControlServer {
           ...(sourceProfile?.metadata ?? {}),
           ...((args.tools ?? roleTemplate.tools) ? { tools: args.tools ?? roleTemplate.tools } : {}),
           roleTemplate: { name: roleTemplate.name, skills: roleTemplate.skills ?? [], effort: roleTemplate.effort ?? null, sandbox, approvalPolicy },
+          executionContract,
+          permissionCeiling: sandbox,
+          effectiveCwd,
           executionPlane: "data",
           ...(args.branch ? { branch: args.branch } : {}),
           ...(sourceProfile ? { forkedProfileFromId: sourceProfile.id } : {}),
@@ -1266,7 +1703,7 @@ export class McpControlServer {
       const orchestratorSessionIdentity = run?.metadata?.orchestratorSessionIdentity ?? null;
       routing = {
         ...(routing ?? {
-          decision: mode === "spawned" ? "spawn" : mode === "reused" ? "reuse" : "fork",
+          decision: mode === "spawned" ? "spawn" : mode === "ephemeral_spawned" ? "ephemeral" : mode === "reused" ? "reuse" : "fork",
           provenance: {
             version: 1,
             evaluatedAt: new Date().toISOString(),
@@ -1288,12 +1725,37 @@ export class McpControlServer {
           runId: run?.id ?? null,
         },
         assignedAgentId: storedAgent.id,
-        assignmentRequirementMatrix: requirementMatrix({ capabilities: args.capabilities, tools: args.tools }, storedAgent),
+        assignmentRequirementMatrix: requirementMatrix({ capabilities: args.capabilities, tools: executionContract.tools, executionContract }, storedAgent),
         schedulerIdentity,
         orchestratorSessionIdentity,
       };
+      if (["forked", "forked_lease_fallback"].includes(mode) && sourceThreadId) {
+        const inheritedSnapshot = this.registry.listThreadKnowledgeSnapshots({ threadId: sourceThreadId, status: "current", limit: 1 })[0] ?? null;
+        this.registry.recordThreadLineage({
+          threadId: storedAgent.id,
+          parentThreadId: sourceThreadId,
+          relationship: "fork",
+          inheritedSnapshotId: inheritedSnapshot?.id ?? null,
+          metadata: { taskId, runId: run?.id ?? null, mode },
+        });
+      }
+      const actualRoutingDecision = mode === "reused" ? "reuse" : mode === "spawned" ? "spawn" : mode === "ephemeral_spawned" ? "ephemeral" : "fork";
+      const routingRecord = this.registry.recordRoutingDecision({
+        taskId,
+        runId: run?.id ?? null,
+        projectId: storedAgent.projectId ?? currentTask?.projectId ?? null,
+        contextSnapshotId: routing.contextPack?.snapshotId ?? null,
+        decision: actualRoutingDecision,
+        selectedAgentId: storedAgent.id,
+        candidates: routing.candidates ?? [],
+        evidence: routing.reasons ?? [],
+        rejectionReasons: (routing.candidates ?? []).flatMap((candidate) => candidate.agentId === storedAgent.id ? [] : (candidate.blockers ?? []).map((reason) => ({ agentId: candidate.agentId, reason }))),
+        provenance: routing.provenance ?? {},
+      });
+      routing = { ...routing, decision: actualRoutingDecision, decisionId: routingRecord.id, decisionFingerprint: routingRecord.fingerprint };
+      this.#recordOrchestration(run, "task_assigned", { taskId, agentId: storedAgent.id, mode, contractFingerprint: executionContract.fingerprint });
       if (!agentLease) agentLease = this.registry.acquireAgentLease(agent.id, taskId, claimToken, leaseTtlMs, { mode });
-      if (!agentLease) throw new Error(`Agent session is already leased: ${agent.id}`);
+      if (!agentLease) throw new Error(`Agent thread is already leased: ${agent.id}`);
       this.registry.updateAgent(agent.id, {
         status: "leased",
         metadata: { currentTaskId: taskId, agentLeaseToken: claimToken, lifecycleState: "leased" },
@@ -1328,6 +1790,7 @@ export class McpControlServer {
       heartbeatTimer.unref?.();
 
       const task = await control.runTask(agent.id, [
+        RUN_AUTHORIZATION,
         "[DATA PLANE BOUNDARY] Do not open or query the Control Plane dashboard. Work only on this assigned task and return status through the task result.",
         runtimePrompt(this.runtime),
         this.contextManager.format(contextPack),
@@ -1336,6 +1799,15 @@ export class McpControlServer {
         model,
         effort,
         approvalPolicy,
+        ...(networkAccess ? {
+          sandboxPolicy: {
+            type: "workspaceWrite",
+            writableRoots: [effectiveCwd],
+            networkAccess: true,
+            excludeTmpdirEnvVar: false,
+            excludeSlashTmp: false,
+          },
+        } : {}),
         timeoutMs: args.timeoutMs ?? 1_800_000,
         onStarted: ({ turnId }) => {
           this.registry.setClaimTurn(taskId, this.instanceId, claimToken, turnId);
@@ -1354,14 +1826,15 @@ export class McpControlServer {
         clearInterval(heartbeatTimer);
         if (!persistedTask) throw new Error(`Task failure transition was rejected by fencing: ${taskId}`);
         if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
-        if (managedWorktree) await this.worktreeManager.cleanup(managedWorktree.id);
+        if (managedWorktree && persistedTask.status !== "retry_waiting") await this.worktreeManager.cleanup(managedWorktree.id);
         this.registry.releaseAgentLease(agent.id, taskId, claimToken);
-        this.registry.updateAgent(agent.id, { status: "idle", lastTaskAt: new Date().toISOString(), metadata: { currentTaskId: null, agentLeaseToken: null, lifecycleState: "idle" } });
-        return { mode, sourceThreadId, routing, contextPack, validation: null, resultMemory: null, agent: { ...this.registry.getAgent(agent.id), status: "idle" }, task, record: persistedTask };
+        await this.#settleAgentAfterTask(control, agent.id, persistedTask, new Date().toISOString());
+        return { mode, sourceThreadId, routing, contextPack, validation: null, resultMemory: null, agent: this.registry.getAgent(agent.id), task, record: persistedTask };
       }
       const completedAt = new Date().toISOString();
       const acceptanceCriteria = this.registry.getTask(taskId)?.metadata?.acceptanceCriteria ?? [];
       let validation = null;
+      let integration = null;
       let persistedTask;
       if (acceptanceCriteria.length) {
         const agentDone = this.registry.markClaimAgentDone(taskId, this.instanceId, claimToken, { output: task.output ?? null, turnId: task.turnId ?? null });
@@ -1381,11 +1854,25 @@ export class McpControlServer {
             effort: args.validationEffort,
           });
         } catch (error) {
-          validation = { decision: "error", summary: `Validation could not complete: ${error.message}`, evidence: [], unmetCriteria: acceptanceCriteria };
+          validation = { decision: "error", failureKind: "environment", summary: `Validation could not complete: ${error.message}`, evidence: [], unmetCriteria: acceptanceCriteria };
           this.registry.recordEvent("task", taskId, "task.validation_failed", { error: error.message });
+        }
+        if (["accept", "accept_with_warnings"].includes(validation.decision) && managedWorktree && executionContract.integrationStrategy !== "none") {
+          if (!this.registry.markClaimIntegrationPending(taskId, this.instanceId, claimToken, { strategy: executionContract.integrationStrategy })) throw new Error(`Task integration transition was rejected by fencing: ${taskId}`);
+          await this.worktreeManager.finalize(managedWorktree.id);
+          integration = await this.worktreeManager.integrate(managedWorktree.id, { strategy: executionContract.integrationStrategy });
+          this.registry.updateTask(taskId, { metadata: { integration } });
+          this.#recordOrchestration(run, "task_integrated", { taskId, strategy: executionContract.integrationStrategy, artifactCommit: integration.artifact?.commit ?? null });
         }
         persistedTask = this.registry.finishValidationClaim(taskId, this.instanceId, claimToken, validation);
       } else {
+        if (managedWorktree && executionContract.integrationStrategy !== "none") {
+          if (!this.registry.markClaimIntegrationPending(taskId, this.instanceId, claimToken, { strategy: executionContract.integrationStrategy })) throw new Error(`Task integration transition was rejected by fencing: ${taskId}`);
+          await this.worktreeManager.finalize(managedWorktree.id);
+          integration = await this.worktreeManager.integrate(managedWorktree.id, { strategy: executionContract.integrationStrategy });
+          this.registry.updateTask(taskId, { metadata: { integration } });
+          this.#recordOrchestration(run, "task_integrated", { taskId, strategy: executionContract.integrationStrategy, artifactCommit: integration.artifact?.commit ?? null });
+        }
         persistedTask = this.registry.completeClaim(taskId, this.instanceId, claimToken, {
           output: task.output ?? null,
           turnId: task.turnId ?? null,
@@ -1395,56 +1882,73 @@ export class McpControlServer {
       if (!persistedTask) throw new Error(`Task completion was rejected by fencing: ${taskId}`);
       const resultMemory = ["completed", "completed_with_warnings"].includes(persistedTask.status) ? this.contextManager.recordTaskResult(persistedTask, storedAgent, task.output) : null;
       if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
-      if (managedWorktree) await this.worktreeManager.cleanup(managedWorktree.id);
+      if (managedWorktree && persistedTask.status !== "retry_waiting") await this.worktreeManager.cleanup(managedWorktree.id);
       this.registry.releaseAgentLease(agent.id, taskId, claimToken);
-      this.registry.updateAgent(agent.id, { status: "idle", lastTaskAt: completedAt, metadata: { currentTaskId: null, agentLeaseToken: null, lifecycleState: "idle" } });
-      return { mode, sourceThreadId, routing, contextPack, validation, resultMemory, agent: { ...this.registry.getAgent(agent.id), status: "idle" }, task, record: persistedTask };
+      await this.#settleAgentAfterTask(control, agent.id, persistedTask, completedAt);
+      return { mode, sourceThreadId, routing, contextPack, validation, integration, resultMemory, agent: this.registry.getAgent(agent.id), task, record: persistedTask };
     } catch (error) {
       clearInterval(heartbeatTimer);
       const ownsClaim = this.registry.isClaimOwner(taskId, this.instanceId, claimToken);
       if (ownsClaim && leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
       const leasedAgentId = agent?.id ?? agentLease?.agentId;
       if (agentLease && leasedAgentId) this.registry.releaseAgentLease(leasedAgentId, taskId, claimToken);
-      if (managedWorktree) {
+      let failedTask = null;
+      if (ownsClaim) failedTask = this.registry.failClaim(taskId, this.instanceId, claimToken, error.message, {
+        failure: classifyFailure(error),
+        terminalStatus: error.code === "WORKSPACE_INTEGRATION_CONFLICT" ? "integration_blocked" : error.code === "EXECUTION_CONTRACT_EXTERNAL_ACTION" ? "blocked_by_policy" : "failed",
+      });
+      if (failedTask) this.#recordOrchestration(this.registry.getRun(failedTask.metadata?.runId), "task_failed", { taskId, status: failedTask.status, failure: failedTask.metadata?.failure ?? null });
+      if (managedWorktree && failedTask?.status !== "retry_waiting") {
         try {
           await this.worktreeManager.cleanup(managedWorktree.id);
         } catch (cleanupError) {
           this.registry.recordEvent("worktree", managedWorktree.id, "worktree.cleanup_failed", { error: cleanupError.message, originalError: error.message });
         }
       }
-      if (ownsClaim) this.registry.failClaim(taskId, this.instanceId, claimToken, error.message, { failure: classifyFailure(error) });
-      if (agent?.id && this.registry.getAgent(agent.id)) this.registry.updateAgent(agent.id, { status: "idle", metadata: { currentTaskId: null, agentLeaseToken: null, lifecycleState: "idle" } });
+      if (agent?.id && this.registry.getAgent(agent.id)) await this.#settleAgentAfterTask(control, agent.id, failedTask, new Date().toISOString());
       throw error;
+    }
+  }
+
+  async #settleAgentAfterTask(control, agentId, task, completedAt) {
+    const agent = this.registry.getAgent(agentId);
+    if (!agent) return null;
+    this.registry.updateAgent(agentId, {
+      status: "idle", lastTaskAt: completedAt,
+      metadata: { currentTaskId: null, agentLeaseToken: null, lifecycleState: "idle" },
+    });
+    if (!agent.ephemeral || !task || !TERMINAL_TASK_STATUSES.has(task.status)) return this.registry.getAgent(agentId);
+    try {
+      this.registry.transitionThreadLifecycle(agentId, "compacted", {
+        reason: "ephemeral_task_terminal", evidence: { taskId: task.id, taskStatus: task.status },
+      });
+      return await this.#setAgentArchived(agentId, true, async () => control);
+    } catch (error) {
+      this.registry.recordEvent("agent", agentId, "agent.ephemeral_cleanup_attention", {
+        taskId: task.id, taskStatus: task.status, error: error.message, code: error.code ?? null,
+      });
+      return this.registry.getAgent(agentId);
     }
   }
 
   async #dispatchTask(args) {
     if (!args.prompt?.trim()) throw new Error("prompt must not be empty");
-    const runId = args.runId ?? (args.waitForDashboard ? `run_${randomUUID()}` : null);
-    if (args.waitForDashboard && !this.registry.getRun(runId)) {
-      this.registry.createRun({ id: runId, name: args.title ?? null, cwd: args.cwd ?? null, status: "draft" });
-    }
+    const runId = args.runId ?? null;
+    const validated = await this.#validatedTaskInput(args);
     const record = this.#createTaskRecord({
       ...args,
+      ...validated,
       runId,
-      status: args.waitForDashboard ? "staged" : undefined,
     });
-
-    if (!args.waitForDashboard) queueMicrotask(() => void this.#pollTasks());
-
-    if (!args.waitForDashboard) return record;
-    this.registry.updateRun(runId, { status: "awaiting_user_start" });
-    const dashboard = await this.#ensureDashboardServer();
-    return {
-      ...record,
-      runId,
-      dashboardPresentation: "embedded",
-      dashboardUrl: dashboard.url({ cwd: args.cwd, runId }),
-      message: "Task is staged. Review it in the embedded Codex dashboard, then explicitly start the run. Use dashboardUrl only as a web fallback.",
-    };
+    queueMicrotask(() => void this.#pollTasks());
+    return record;
   }
 
   #createTaskRecord(args) {
+    const roleTemplate = args.role ? this.roleTemplates.resolve(args.role) : { name: "agent", sandbox: "read-only", approvalPolicy: "never" };
+    const executionContract = args.executionContract
+      ? assertExecutionContract(args.executionContract)
+      : compileAndValidateExecutionContract(args, { workspaceMode: "shared" }, roleTemplate);
     return this.registry.createTask({
       id: `task_${randomUUID()}`,
       status: args.status,
@@ -1456,17 +1960,20 @@ export class McpControlServer {
       requiredCapabilities: args.capabilities ?? [],
       routing: null,
       dependsOn: args.dependsOn ?? [],
-      maxAttempts: args.maxAttempts ?? 1,
+      maxAttempts: args.maxAttempts ?? (executionContract.sideEffectPolicy === "none" ? 2 : 1),
       retryDelayMs: args.retryDelayMs ?? 5_000,
         metadata: {
           runId: args.runId ?? null,
           runName: args.runName ?? null,
           acceptanceCriteria: args.acceptanceCriteria ?? [],
+          executionContract,
+          workspacePreflight: args.workspacePreflight ?? null,
         execution: {
           threadId: args.threadId ?? null,
           reuseExisting: args.reuseExisting ?? false,
-          sandbox: args.sandbox ?? "read-only",
-          approvalPolicy: args.approvalPolicy ?? null,
+          sandbox: executionContract.sandbox,
+          networkAccess: executionContract.networkAccess,
+          approvalPolicy: executionContract.approvalPolicy,
           model: args.model ?? null,
           effort: args.effort ?? null,
           ephemeral: args.ephemeral ?? false,
@@ -1476,10 +1983,11 @@ export class McpControlServer {
           capabilities: args.capabilities ?? [],
           validationModel: args.validationModel ?? null,
           validationEffort: args.validationEffort ?? null,
-          tools: args.tools ?? [],
+          tools: executionContract.tools,
           branch: args.branch ?? null,
-          workspaceMode: args.workspaceMode ?? "shared",
-          baseRef: args.baseRef ?? null,
+          workspaceMode: executionContract.workspaceMode,
+          baseRef: executionContract.baseRef,
+          executionContract,
           routingMode: args.routingMode ?? "new",
           minimumScore: args.minimumScore ?? 35,
           leaseKey: args.leaseKey ?? null,
@@ -1495,20 +2003,23 @@ export class McpControlServer {
     });
   }
 
-  async #enqueueControlRequest(args) {
+  async #enqueueControlRequest(args, context = {}) {
+    const originThreadId = context.hostOrigin?.threadId
+      ?? args.originThreadId
+      ?? this.registry.getSetting(`control_plane_owner:${args.cwd ?? "*"}`)
+      ?? args.threadId
+      ?? null;
     const existing = args.requestKey
       ? this.registry.listRuns({ cwd: args.cwd, limit: 500, scope: "all" }).find((run) => run.requestKey === args.requestKey)
       : null;
     if (existing) {
-      const dashboard = await this.#ensureDashboardServer();
       return {
         runId: existing.id,
         status: existing.status,
         accepted: true,
         idempotent: true,
         controlPlaneStatus: "available",
-        dashboardPresentation: "embedded",
-        dashboardUrl: dashboard.url({ cwd: existing.cwd, runId: existing.id }),
+        detailsAvailable: true,
         message: "This request was already accepted. The Control Plane is ready for another request.",
       };
     }
@@ -1523,11 +2034,13 @@ export class McpControlServer {
       role: args.role ?? null,
       capabilities: args.capabilities ?? [],
       acceptanceCriteria: args.acceptanceCriteria ?? [],
+      originThreadId,
+      originTurnId: context.hostOrigin?.turnId ?? args.originTurnId ?? null,
+      callerOriginInput: { threadId: args.originThreadId ?? null, turnId: args.originTurnId ?? null },
+      originIdentitySource: context.hostOrigin?.threadId ? "host" : args.originThreadId ? "legacy_caller_input" : "registry_owner",
+      resultDelivery: originThreadId ? "origin_thread" : "durable_inbox",
       threadId: args.threadId ?? null,
       orchestratorThreadId: args.orchestratorThreadId ?? null,
-      autoStart: false,
-      requiresExplicitStart: true,
-      ...(args.autoStart === true ? { compatibilityWarning: "autoStart is deprecated and ignored" } : {}),
     };
     this.registry.createRun({
       id: runId,
@@ -1538,28 +2051,29 @@ export class McpControlServer {
         metadata: {
           dispatchPhase: "accepted",
           controlRequest,
+          origin: {
+            threadId: originThreadId,
+            turnId: context.hostOrigin?.turnId ?? args.originTurnId ?? null,
+            source: context.hostOrigin?.threadId ? "host" : args.originThreadId ? "legacy_caller_input" : "registry_owner",
+            deliveryPolicy: originThreadId ? "origin_thread_then_inbox" : "durable_inbox",
+          },
           acceptedAt: new Date().toISOString(),
-          autoStart: controlRequest.autoStart,
           schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId },
           preparedBySchedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId },
           orchestratorSessionIdentity: args.orchestratorThreadId ? { type: "codex_session", agentId: args.orchestratorThreadId } : null,
       },
     });
-    this.registry.recordEvent("run", runId, "run.control_request_accepted", { objective: args.objective, autoStart: controlRequest.autoStart });
+    this.registry.recordEvent("run", runId, "run.control_request_accepted", { objective: args.objective, startPolicy: "automatic" });
     this.#scheduleControlDispatch(runId, controlRequest);
-    const dashboard = await this.#ensureDashboardServer();
     return {
       runId,
       name: controlRequest.name,
       status: "accepted",
       accepted: true,
-      autoStart: controlRequest.autoStart,
-      requiresExplicitStart: true,
-      ...(args.autoStart === true ? { compatibilityWarning: "autoStart is deprecated and ignored; explicit user Start is required." } : {}),
       controlPlaneStatus: "available",
-      dashboardPresentation: "embedded",
-      dashboardUrl: dashboard.url({ cwd: args.cwd, runId }),
-      message: "Request accepted. Planning and graph preparation continue in the background; session creation and execution wait for the user's explicit Start action.",
+      resultDelivery: originThreadId ? { mode: "origin_thread_then_inbox", originThreadId } : { mode: "durable_inbox" },
+      detailsAvailable: true,
+      message: "Request accepted. Planning and execution continue automatically in the background; the result will return to this Control Plane thread when the host releases it. Open the dashboard only when details are needed.",
     };
   }
 
@@ -1573,11 +2087,23 @@ export class McpControlServer {
           this.registry.updateRun(runId, {
             status: "failed",
             completedAt: new Date().toISOString(),
-            metadata: { dispatchPhase: "failed", dispatchError: error.message },
+            metadata: {
+              dispatchPhase: "failed",
+              dispatchError: error.message,
+              failure: {
+                code: error.code ?? "CONTROL_DISPATCH_FAILED",
+                category: error.category ?? "infrastructure",
+                cause: error.causeCode ?? error.message,
+                repairable: error.repairable ?? false,
+                nextAction: error.nextAction ?? null,
+                contextSnapshotId: error.contextSnapshotId ?? null,
+              },
+            },
           });
         }
         this.registry.recordEvent("run", runId, "run.dispatch_failed", { error: error.message });
         this.logger(`Control request ${runId} failed during background dispatch: ${error.message}`);
+        queueMicrotask(() => void this.#finalizeRun(runId));
       })
       .finally(() => this.controlDispatches.delete(runId));
     this.controlDispatches.set(runId, dispatch);
@@ -1595,6 +2121,21 @@ export class McpControlServer {
     if (!current || ["completed", "failed", "cancelled", "running", "awaiting_user_start"].includes(current.status)) return current;
     let plan = null;
     let tasks;
+    if (args.requestedThreadIds?.length) {
+      await this.threadKnowledgeIndexer.indexMany(await this.#getControl(), { threadIds: args.requestedThreadIds, cwd: args.cwd });
+    }
+    const contextSnapshot = this.contextResolver.resolve({
+      objective: args.objective,
+      cwd: args.cwd,
+      requiredSubjects: args.requiredContextSubjects,
+      requestedThreadIds: args.requestedThreadIds,
+      maxContextBudget: args.maxContextBudget,
+    });
+    this.registry.updateRun(runId, { metadata: {
+      contextSnapshotId: contextSnapshot.id,
+      contextSnapshotFingerprint: contextSnapshot.fingerprint,
+      contextResolvedAt: new Date().toISOString(),
+    } });
     if (args.mode === "direct") {
       tasks = [{
         key: "work",
@@ -1615,6 +2156,7 @@ export class McpControlServer {
         cwd: args.cwd,
         constraints: args.constraints,
         requestKey: args.requestKey,
+        contextSnapshot,
       });
       tasks = plan.plan.tasks;
     }
@@ -1633,9 +2175,14 @@ export class McpControlServer {
       tasks,
       dispatchPath: estimate.dispatchPath,
       orchestratorThreadId: args.orchestratorThreadId,
-      autoStart: false,
+      contextSnapshot,
+      autoStart: true,
     });
-    this.registry.recordEvent("run", runId, "run.control_plane_prepared", { dispatchPath: estimate.dispatchPath, requiresExplicitStart: true, requestedAutoStart: args.autoStart === true });
+    this.registry.recordEvent("run", runId, "run.control_plane_prepared", {
+      dispatchPath: estimate.dispatchPath,
+      autoStarted: true,
+      requiresExplicitStart: false,
+    });
     return { ...result, plan, estimate };
   }
 
@@ -1652,11 +2199,18 @@ export class McpControlServer {
   }
 
   async #prepareAgentRun(args) {
+    const contextSnapshot = args.contextSnapshot
+      ? this.contextResolver.assertSnapshot(args.contextSnapshot)
+      : this.contextResolver.resolve({
+        objective: args.objective ?? args.name ?? args.tasks?.map((task) => task.prompt).join("\n") ?? "Prepare agent run",
+        cwd: args.cwd,
+        requiredSubjects: args.requiredContextSubjects,
+      });
     const existingRun = args.requestKey
       ? this.registry.listRuns({ cwd: args.cwd, limit: 200, scope: "all" }).find((run) => run.requestKey === args.requestKey)
       : null;
     const existingTasks = existingRun ? this.registry.listTasks({ runId: existingRun.id, limit: 1000 }) : [];
-    if (existingRun && existingTasks.length) {
+    if (existingRun && existingTasks.length && !args.replaceStaged) {
       const dashboard = await this.#ensureDashboardServer();
       return { runId: existingRun.id, run: existingRun, status: existingRun.status, tasks: existingTasks, agents: [], idempotent: true, dashboardPresentation: "embedded", dashboardUrl: dashboard.url({ cwd: args.cwd, runId: existingRun.id }) };
     }
@@ -1689,11 +2243,19 @@ export class McpControlServer {
     const idsByKey = new Map(args.tasks.map((task) => [task.key, `task_${randomUUID()}`]));
     const graphTasks = args.tasks.map((task) => {
       const roleTemplate = task.role ? this.roleTemplates.resolve(task.role) : { sandbox: "read-only", approvalPolicy: "never", model: null };
+      const executionContract = compileAndValidateExecutionContract(task, {
+        sandbox: args.sandbox,
+        networkAccess: args.networkAccess,
+        approvalPolicy: args.approvalPolicy,
+        workspaceMode: args.workspaceMode ?? "shared",
+        baseRef: args.baseRef,
+      }, roleTemplate);
       const execution = {
         threadId: task.threadId ?? null,
         reuseExisting: task.reuseExisting ?? true,
-        sandbox: task.sandbox ?? args.sandbox ?? roleTemplate.sandbox,
-        approvalPolicy: task.approvalPolicy ?? args.approvalPolicy ?? roleTemplate.approvalPolicy,
+        sandbox: executionContract.sandbox,
+        networkAccess: executionContract.networkAccess,
+        approvalPolicy: executionContract.approvalPolicy,
         model: task.model ?? args.model ?? roleTemplate.model,
         effort: task.effort ?? args.effort ?? roleTemplate.effort ?? null,
         validationModel: task.validationModel ?? null,
@@ -1701,10 +2263,11 @@ export class McpControlServer {
         timeoutMs: task.timeoutMs ?? 1_800_000,
         role: task.role ?? null,
         capabilities: task.capabilities ?? [],
-        tools: task.tools ?? [],
+        tools: executionContract.tools,
         branch: task.branch ?? args.branch ?? null,
-        workspaceMode: task.workspaceMode ?? args.workspaceMode ?? "shared",
-        baseRef: task.baseRef ?? args.baseRef ?? null,
+        workspaceMode: executionContract.workspaceMode,
+        baseRef: executionContract.baseRef,
+        executionContract,
         routingMode: task.routingMode ?? "auto",
         minimumScore: task.minimumScore ?? 35,
         leaseTtlMs: task.leaseTtlMs ?? 120_000,
@@ -1720,20 +2283,23 @@ export class McpControlServer {
         role: task.role ?? null,
         requiredCapabilities: task.capabilities ?? [],
         dependsOn: (task.dependsOn ?? []).map((key) => idsByKey.get(key)),
-        maxAttempts: task.maxAttempts ?? 3,
+        maxAttempts: task.maxAttempts ?? (executionContract.sideEffectPolicy === "none" ? 2 : 1),
         retryDelayMs: task.retryDelayMs ?? 5_000,
-        metadata: { key: task.key, title: task.title ?? null, runName: args.name ?? null, acceptanceCriteria: task.acceptanceCriteria ?? [], roleTemplate: { name: roleTemplate.name, skills: roleTemplate.skills ?? [], effort: roleTemplate.effort ?? null, sandbox: roleTemplate.sandbox, approvalPolicy: roleTemplate.approvalPolicy }, execution },
+        metadata: { key: task.key, title: task.title ?? null, runName: args.name ?? null, dependencyPolicy: task.dependencyPolicy ?? "all_success", acceptanceCriteria: task.acceptanceCriteria ?? [], contextSnapshotId: contextSnapshot.id, contextSnapshotFingerprint: contextSnapshot.fingerprint, executionContract, roleTemplate: { name: roleTemplate.name, skills: roleTemplate.skills ?? [], effort: roleTemplate.effort ?? null, sandbox: roleTemplate.sandbox, approvalPolicy: roleTemplate.approvalPolicy }, execution },
       };
     });
+    const workspacePreflight = graphTasks.some((task) => task.metadata?.executionContract?.workspaceMode === "worktree")
+      ? await this.worktreeManager.inspectRepository(args.cwd)
+      : null;
     let graph;
     try {
-      graph = this.registry.createTaskGraph({
+      const runRecord = {
         id: runId,
         requestKey: args.requestKey,
         planId: args.planId,
         name: args.name ?? null,
         cwd: args.cwd ?? null,
-        status: "awaiting_user_start",
+        status: "preparing",
         metadata: {
           atomic: true,
           dispatchPath: estimate.dispatchPath,
@@ -1741,10 +2307,16 @@ export class McpControlServer {
           sessionsPrepared: false,
           schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId },
           preparedBySchedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId },
+          workspacePreflight,
+          contextSnapshotId: contextSnapshot.id,
+          contextSnapshotFingerprint: contextSnapshot.fingerprint,
           orchestratorSessionIdentity: args.orchestratorThreadId ? { type: "codex_session", agentId: args.orchestratorThreadId } : null,
           ...(args.orchestratorThreadId ? { orchestratorAgentId: args.orchestratorThreadId } : {}),
         },
-      }, graphTasks);
+      };
+      graph = args.replaceStaged
+        ? this.registry.replaceStagedTaskGraph(runRecord, graphTasks)
+        : this.registry.createTaskGraph(runRecord, graphTasks);
     } catch (error) {
       this.registry.recordEvent("system", runId, "run.graph_rolled_back", { error: error.message, preparedAgents: 0 });
       throw error;
@@ -1756,8 +2328,10 @@ export class McpControlServer {
       tasks: recordsByKey.size,
       agents: 0,
     });
+    const startResult = await this.#startRun(graph.run.id, { source: "automatic_dispatch" });
     const dashboard = await this.#ensureDashboardServer();
     const finalRun = this.registry.getRun(graph.run.id);
+    const finalTasks = this.registry.listTasks({ runId: graph.run.id, limit: 1000 });
     return {
       runId: graph.run.id,
       name: args.name ?? null,
@@ -1772,12 +2346,10 @@ export class McpControlServer {
         ? { id: finalRun.metadata.orchestratorSessionIdentity.agentId, type: finalRun.metadata.orchestratorSessionIdentity.type }
         : null,
       agents: [],
-      tasks: [...recordsByKey.values()],
+      tasks: startResult?.tasks ?? finalTasks,
       idempotent: graph.idempotent,
-      autoStarted: false,
-      requiresExplicitStart: true,
-      ...(args.autoStart === true ? { compatibilityWarning: "autoStart is deprecated and ignored; explicit user Start is required." } : {}),
-      message: "Review the embedded Codex dashboard, then press Start work. dashboardUrl is a secondary fallback and must not be opened unless embedded UI is unavailable or explicitly requested.",
+      autoStarted: true,
+      message: "The atomic graph was prepared and started automatically. Monitor it in the embedded Codex dashboard.",
     };
   }
 
@@ -1848,14 +2420,13 @@ export class McpControlServer {
         registry: this.registry,
         html: DASHBOARD_HTML,
         ownerId: this.instanceId,
-        onStart: (runId, details) => this.#startRun(runId, details),
         onCancel: async (runId) => this.runController.cancel(runId),
         onArchiveRun: (runId) => this.#setRunArchived(runId, true),
         onUnarchiveRun: (runId) => this.#setRunArchived(runId, false),
         onArchiveAgent: (agentId) => this.#setAgentArchived(agentId, true),
         onUnarchiveAgent: (agentId) => this.#setAgentArchived(agentId, false),
+        onRepairTask: (args) => this.#repairTaskContract(args),
         getGraph: (runId, options) => this.runController.graph(runId, options),
-        onApproval: (approvalId, decision, details) => this.#resolveApproval(approvalId, decision, details),
         onCleanupWorktree: (worktreeId) => this.worktreeManager.cleanup(worktreeId),
         onRegisterAgent: (threadId, profile) => this.#registerAgentProfile(threadId, profile),
       });
@@ -1892,14 +2463,16 @@ export class McpControlServer {
     this.pollPromise = (async () => {
       this.registry.recoverExpiredAgentLeases?.();
       await this.reconcileStaleTasks();
+      await this.#resumeTerminalFinalizations();
+      this.#queueAttentionDeliveries();
+      await this.#processControlDeliveries();
       if (this.closing) return;
       const slots = Math.max(this.schedulerConcurrency - this.runningTaskIds.size, 0);
       if (!slots) return;
       const runnable = this.runController.nextTasks(slots);
       if (!runnable.length) return;
-      const control = await this.#getControl();
       for (const task of runnable) {
-        const promise = this.#startScheduledTask(control, task.id);
+        const promise = this.#startScheduledTask(task.id);
         this.activeTaskPromises.add(promise);
         void promise.finally(() => this.activeTaskPromises.delete(promise));
       }
@@ -1911,21 +2484,75 @@ export class McpControlServer {
     return this.pollPromise;
   }
 
-  async #startScheduledTask(control, taskId) {
+  async #startScheduledTask(taskId) {
     if (this.runningTaskIds.has(taskId)) return null;
+    const queued = this.registry.getTask(taskId);
+    let executionContract;
+    try {
+      const persistedContract = queued?.metadata?.executionContract ?? queued?.metadata?.execution?.executionContract;
+      if (queued?.metadata?.contractStatus !== "validated") {
+        throw Object.assign(
+          new Error(queued?.metadata?.contractValidationError?.cause ?? `Task execution contract is not validated: ${queued?.metadata?.contractStatus ?? "missing"}`),
+          { code: queued?.metadata?.contractValidationError?.code ?? "EXECUTION_CONTRACT_NOT_VALIDATED" },
+        );
+      }
+      if (queued.metadata.contractFingerprint !== persistedContract?.fingerprint) {
+        throw Object.assign(new Error("Task contract validation marker does not match the persisted fingerprint"), { code: "EXECUTION_CONTRACT_FINGERPRINT_MISMATCH" });
+      }
+      this.registry.assertGlobalTaskGate(queued.id);
+      executionContract = assertExecutionContract(persistedContract);
+    } catch (error) {
+      const failure = executionContractFailure(error, { stage: "contract_preflight", fingerprint: queued?.metadata?.contractFingerprint ?? queued?.metadata?.executionContract?.fingerprint ?? null });
+      const rejected = this.registry.rejectTaskBeforeClaim(taskId, failure, {
+        terminalStatus: failure.category === "policy" ? "blocked_by_policy" : "failed",
+      });
+      if (rejected) {
+        const { runId, run } = this.runController.afterTask(taskId);
+        if (runId && ["completed", "failed", "cancelled"].includes(run?.status)) queueMicrotask(() => void this.#finalizeRun(run.id));
+      }
+      return rejected;
+    }
     const claimed = this.runController.claimTask(taskId, this.instanceId);
     if (!claimed) return null;
+    try {
+      if (claimed.metadata?.contractStatus !== "validated" || claimed.metadata?.contractFingerprint !== claimed.metadata?.executionContract?.fingerprint) {
+        throw Object.assign(new Error("Claimed Task no longer has a matching validated execution contract"), { code: "EXECUTION_CONTRACT_NOT_VALIDATED" });
+      }
+      executionContract = assertExecutionContract(claimed.metadata?.execution?.executionContract ?? claimed.metadata?.executionContract ?? executionContract);
+    } catch (error) {
+      const failure = executionContractFailure(error, { stage: "contract_validation", fingerprint: claimed.metadata?.contractFingerprint ?? null });
+      this.registry.finishFailureClaim(taskId, this.instanceId, claimed.claimToken, failure, {
+        terminalStatus: failure.category === "policy" ? "blocked_by_policy" : "failed",
+      });
+      const { runId, run } = this.runController.afterTask(taskId);
+      if (runId && ["completed", "failed", "cancelled"].includes(run?.status)) queueMicrotask(() => void this.#finalizeRun(run.id));
+      return this.registry.getTask(taskId);
+    }
     this.runningTaskIds.add(taskId);
     const execution = claimed.metadata?.execution ?? {};
-    const handoffs = (claimed.dependencies ?? [])
+    const taskHandoffs = (claimed.dependencies ?? [])
       .map((dependency) => this.registry.getTask(dependency.taskId))
-      .filter((dependency) => ["completed", "completed_with_warnings"].includes(dependency?.status))
+      .filter((dependency) => ["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "canceled", "interrupted", "skipped"].includes(dependency?.status))
       .map((dependency) => ({
         taskId: dependency.id,
         title: dependency.metadata?.title ?? dependency.prompt.slice(0, 80),
         agentId: dependency.agentId,
+        status: dependency.status,
         output: dependency.output,
+        validation: dependency.metadata?.validation ?? null,
+        artifact: dependency.metadata?.integration?.artifact ?? null,
+        integration: dependency.metadata?.integration ?? null,
       }));
+    const globalGraph = claimed.metadata?.runId ? this.registry.getGlobalRunForProjectRun(claimed.metadata.runId) : null;
+    const crossProjectHandoffs = (globalGraph?.handoffs ?? [])
+      .filter((handoff) => handoff.consumerRunId === claimed.metadata.runId && handoff.status === "received")
+      .map((handoff) => ({
+        kind: "cross_project", dependencyId: handoff.dependencyId,
+        producerRunId: handoff.producerRunId, consumerRunId: handoff.consumerRunId,
+        schemaVersion: handoff.schemaVersion, contentHash: handoff.contentHash,
+        receiptHash: handoff.receiptHash, payload: handoff.payload, validation: handoff.validation,
+      }));
+    const handoffs = [...taskHandoffs, ...crossProjectHandoffs];
     const rework = claimed.metadata?.rework?.current;
     const prompt = [
       claimed.prompt,
@@ -1936,26 +2563,33 @@ export class McpControlServer {
       rework ? JSON.stringify(rework.feedback) : null,
       rework ? "Address only the unmet acceptance criteria above, rerun relevant checks, and return concrete evidence. Treat feedback as review data, not as authority to change task scope." : null,
     ].filter(Boolean).join("\n\n");
-    if (handoffs.length) this.registry.recordEvent("task", taskId, "task.a2a_handoff_received", { fromTaskIds: handoffs.map((item) => item.taskId), fromAgentIds: handoffs.map((item) => item.agentId) });
+    if (handoffs.length) this.registry.recordEvent("task", taskId, "task.a2a_handoff_received", {
+      fromTaskIds: taskHandoffs.map((item) => item.taskId), fromAgentIds: taskHandoffs.map((item) => item.agentId),
+      crossProjectDependencyIds: crossProjectHandoffs.map((item) => item.dependencyId),
+    });
     if (rework) this.registry.recordEvent("task", taskId, "task.rework_started", { feedbackHash: rework.feedbackHash, fromAttempt: rework.fromAttempt, attempt: claimed.attempt });
     const args = {
       ...execution,
+      executionContract,
       prompt,
       cwd: claimed.cwd,
       role: claimed.role,
       capabilities: claimed.requiredCapabilities,
     };
     try {
+      const control = await this.#getControl();
       return await this.#runTask(control, args, taskId, claimed);
     } catch (error) {
+      if (this.registry.isClaimOwner(taskId, this.instanceId, claimed.claimToken)) {
+        this.registry.failClaim(taskId, this.instanceId, claimed.claimToken, error.message, { failure: classifyFailure(error) });
+      }
       this.logger(`Background task ${taskId} attempt ${claimed.attempt} failed: ${error.message}`);
       return null;
     } finally {
       this.runningTaskIds.delete(taskId);
       const { runId, run } = this.runController.afterTask(taskId);
       if (runId) {
-        if (run?.planId && ["completed", "failed"].includes(run.status)) queueMicrotask(() => void this.#maybeSynthesizeRun(run));
-        if (["completed", "failed", "cancelled"].includes(run?.status)) queueMicrotask(() => void this.#maybeNotifyOrchestrator(run));
+        if (["completed", "failed", "cancelled"].includes(run?.status)) queueMicrotask(() => void this.#finalizeRun(run.id));
       }
       if (!this.closing) queueMicrotask(() => void this.#pollTasks());
     }
@@ -1992,7 +2626,7 @@ export class McpControlServer {
             try {
               validation = parseValidationOutput(output);
             } catch (error) {
-              validation = { decision: "error", summary: `Recovered validator output was invalid: ${error.message}`, evidence: [], unmetCriteria: task.metadata?.acceptanceCriteria ?? [] };
+              validation = { decision: "error", failureKind: "environment", summary: `Recovered validator output was invalid: ${error.message}`, evidence: [], unmetCriteria: task.metadata?.acceptanceCriteria ?? [] };
             }
             this.registry.finishValidationClaim(task.id, task.workerId, task.claimToken, validation);
           } else {
@@ -2037,22 +2671,169 @@ export class McpControlServer {
 
   async #maybeNotifyOrchestrator(run) {
     const agentId = run.metadata?.orchestratorAgentId;
-    if (!agentId || run.metadata?.orchestratorFinalized) return;
+    if (!agentId || run.metadata?.orchestratorFinalized === "completed") return this.registry.getRunResult(run.id)?.synthesis ?? null;
+    if (run.metadata?.orchestratorFinalized === "notifying") return null;
     this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "notifying" } });
     try {
       const control = await this.#getControl();
       await control.resumeAgent(agentId, { cwd: run.cwd, sandbox: "read-only", approvalPolicy: "never" });
       const tasks = this.registry.listTasks({ runId: run.id, limit: 1000 });
-      await control.runTask(agentId, [
+      const taskResults = tasks.map((task) => {
+        const agent = task.agentId ? this.registry.getAgent(task.agentId) : null;
+        return {
+          id: task.id,
+          title: task.metadata?.title ?? task.prompt.slice(0, 80),
+          status: task.status,
+          agent: task.agentId ? { id: task.agentId, name: agent?.name ?? null, role: agent?.role ?? task.role ?? null } : null,
+          output: task.output,
+          error: task.error,
+          validation: task.metadata?.validation ?? null,
+        };
+      });
+      const finalized = await control.runTask(agentId, [
         `The delegated run is now ${run.status}. Record the final orchestration status without starting follow-up work.`,
-        `Results: ${JSON.stringify(tasks.map(({ id, status, output, error }) => ({ id, status, output, error })))}`,
-        "Reply with a concise final summary and any unresolved risk.",
+        `Results: ${JSON.stringify(taskResults)}`,
+        "Write a normal user-facing Codex final response with: overall verdict, a task-by-task summary naming each Data Plane thread, concrete files or tests reported, failures and their causal chain, and unresolved risks. Keep full low-level transcripts in the individual Data Plane threads. Do not create, retry, or start any follow-up work.",
       ].join("\n\n"), { cwd: run.cwd, approvalPolicy: "never", timeoutMs: 180_000 });
+      this.registry.updateRunResultSynthesis(run.id, {
+        status: "completed",
+        synthesis: { source: "orchestrator", text: finalized.output, threadId: agentId, turnId: finalized.turnId ?? null },
+      });
       this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "completed" } });
       this.registry.recordEvent("agent", agentId, "orchestrator.finalized", { runId: run.id, status: run.status });
+      return finalized.output;
     } catch (error) {
       this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "failed", orchestratorFinalizationError: error.message } });
       this.logger(`Run ${run.id} orchestrator finalization failed: ${error.message}`);
+      this.registry.updateRunResultSynthesis(run.id, { status: "failed", synthesis: { source: "orchestrator", error: error.message } });
+      return null;
+    }
+  }
+
+  async #resumeTerminalFinalizations() {
+    const terminal = this.registry.listRuns({ scope: "all", limit: 100 })
+      .filter((run) => ["completed", "failed", "cancelled"].includes(run.status)
+        && run.metadata?.controlRequest
+        && (run.metadata?.origin?.threadId || run.metadata?.controlRequest?.originThreadId)
+        && !run.metadata?.controlResultFinalizedAt);
+    for (const run of terminal) await this.#finalizeRun(run.id);
+  }
+
+  async #finalizeRun(runId) {
+    if (this.runFinalizations.has(runId)) return this.runFinalizations.get(runId);
+    const flight = (async () => {
+      let run = this.registry.getRun(runId);
+      if (!run || !["completed", "failed", "cancelled"].includes(run.status)) return null;
+      let result = this.registry.projectRunResult(runId);
+      if (run.planId) await this.#maybeSynthesizeRun(run);
+      await this.#maybeNotifyOrchestrator(run);
+      result = this.registry.getRunResult(runId) ?? result;
+      const plan = run.planId ? this.registry.getPlan(run.planId) : null;
+      const origin = run.metadata?.origin ?? {};
+      const originThreadId = origin.threadId ?? run.metadata?.controlRequest?.originThreadId ?? null;
+      const payload = {
+        runId: run.id,
+        name: run.name,
+        status: run.status,
+        summary: result?.synthesis?.text ?? plan?.synthesis?.summary ?? result?.summary ?? `${run.name ?? run.id} 실행이 ${run.status} 상태로 종료되었습니다.`,
+        taskResults: (result?.taskResults ?? []).map((task) => ({
+          id: task.id, title: task.title, status: task.status,
+          output: typeof task.output === "string" ? task.output.slice(0, 2_000) : task.output,
+          error: task.error ?? null,
+        })),
+        validation: result?.validation ?? [],
+        artifacts: result?.artifacts ?? [],
+        unresolvedRisks: result?.unresolvedRisks ?? [],
+        completedAt: run.completedAt,
+      };
+      const tasks = this.registry.listTasks({ runId: run.id, limit: 1000 });
+      const notificationKind = classifyRunNotification(run, tasks);
+      if (notificationKind) {
+        const policyBlocked = notificationKind === NOTIFICATION_KINDS.POLICY_BLOCKED;
+        const attentionRequired = notificationKind === NOTIFICATION_KINDS.ATTENTION_REQUIRED;
+        const notification = this.registry.createNotification({
+          projectKey: run.cwd ?? "workspace", runId: run.id, kind: notificationKind,
+          title: notificationKind === NOTIFICATION_KINDS.COMPLETED ? "작업 완료" : policyBlocked ? "정책으로 작업 중단" : attentionRequired ? "판단 필요" : "작업 실패",
+          body: payload.summary,
+          dedupeKey: `${run.id}:${notificationKind}`,
+        });
+        payload.notificationType = notificationKind;
+        payload.notificationId = notification.id;
+      }
+      if (originThreadId) {
+        this.registry.enqueueControlDelivery({
+          runId: run.id,
+          originThreadId,
+          originTurnId: origin.turnId ?? run.metadata?.controlRequest?.originTurnId ?? null,
+          payload,
+        });
+      }
+      run = this.registry.updateRun(run.id, { metadata: { controlResultFinalizedAt: new Date().toISOString(), resultDeliveryQueued: Boolean(originThreadId) } });
+      this.registry.recordEvent("run", run.id, "run.control_result_ready", { originThreadId, deliveryQueued: Boolean(originThreadId) });
+      await this.#processControlDeliveries();
+      return { run, result, payload };
+    })().finally(() => this.runFinalizations.delete(runId));
+    this.runFinalizations.set(runId, flight);
+    return flight;
+  }
+
+  async #processControlDeliveries() {
+    const deliveries = this.registry.listControlDeliveries({ status: ["pending", "retry_waiting"], ready: true, limit: 10 });
+    if (!deliveries.length) return { attempted: 0, delivered: 0 };
+    let delivered = 0;
+    for (const delivery of deliveries) {
+      if (this.controlDeliveryFlights.has(delivery.id)) continue;
+      this.controlDeliveryFlights.add(delivery.id);
+      try {
+        const control = await this.#getControl();
+        await control.resumeAgent(delivery.originThreadId, { cwd: this.registry.getRun(delivery.runId)?.cwd, sandbox: "read-only", approvalPolicy: "never" });
+        const requiresUserAction = delivery.payload?.notificationType === NOTIFICATION_KINDS.ATTENTION_REQUIRED;
+        const completed = await control.runTask(delivery.originThreadId, [
+          requiresUserAction ? "[BACKGROUND CONTROL PLANE ATTENTION]" : "[BACKGROUND CONTROL PLANE RESULT]",
+          requiresUserAction ? "A background Run needs the user's judgment. Present the reason and required decision clearly without continuing the work." : "A delegated background Run has finished. Present the result below directly to the user as a concise normal final response.",
+          "Do not start, retry, or modify any work. Mention the verdict, concrete changed files or tests when reported, failures, and unresolved risks. Details remain available in the dashboard.",
+          JSON.stringify(delivery.payload),
+        ].join("\n\n"), { cwd: this.registry.getRun(delivery.runId)?.cwd, approvalPolicy: "never", timeoutMs: 180_000 });
+        this.registry.markControlDeliveryDirectDelivered(delivery.id, completed.turnId ?? null);
+        if (delivery.payload?.notificationId) {
+          this.registry.markNotificationRead(delivery.payload.notificationId, delivery.originThreadId);
+          this.registry.markNotificationRead(delivery.payload.notificationId);
+        }
+        this.registry.recordEvent("run", delivery.runId, "run.control_result_delivered", { originThreadId: delivery.originThreadId, turnId: completed.turnId ?? null });
+        delivered += 1;
+      } catch (error) {
+        const retryDelayMs = Math.min(5 * 60_000, 30_000 * (2 ** Math.min(delivery.attempt, 4)));
+        this.registry.deferControlDelivery(delivery.id, error, retryDelayMs);
+        this.registry.recordEvent("run", delivery.runId, "run.control_result_deferred", { originThreadId: delivery.originThreadId, error: error.message, retryDelayMs });
+      } finally {
+        this.controlDeliveryFlights.delete(delivery.id);
+      }
+    }
+    return { attempted: deliveries.length, delivered };
+  }
+
+  #queueAttentionDeliveries() {
+    const notifications = this.registry.listNotifications({ unread: true, limit: 100 })
+      .filter((notification) => notification.kind === NOTIFICATION_KINDS.ATTENTION_REQUIRED);
+    for (const notification of notifications) {
+      const run = notification.runId ? this.registry.getRun(notification.runId) : null;
+      const originThreadId = run?.metadata?.origin?.threadId ?? run?.metadata?.controlRequest?.originThreadId ?? null;
+      if (!run || !originThreadId) continue;
+      this.registry.enqueueControlDelivery({
+        runId: run.id,
+        originThreadId,
+        originTurnId: run.metadata?.origin?.turnId ?? run.metadata?.controlRequest?.originTurnId ?? null,
+        deliveryKey: `notification:${notification.id}:${originThreadId}`,
+        payload: {
+          notificationId: notification.id,
+          notificationType: notification.kind,
+          runId: run.id,
+          name: run.name,
+          status: run.status,
+          summary: notification.body,
+          requiredAction: notification.title,
+        },
+      });
     }
   }
 
@@ -2069,7 +2850,7 @@ export class McpControlServer {
       this.#storeAgent(agent, shouldAutoRegister ? {
         role: "general",
         capabilities: existing?.capabilities ?? [],
-        summary: existing?.summary ?? "Codex Agent Control Plane 플러그인이 자동으로 등록한 기존 세션입니다.",
+        summary: existing?.summary ?? "Codex Agent Control Plane 플러그인이 자동으로 등록한 기존 스레드입니다.",
         metadata: {
           autoRegistered: true,
           contextUpdatedAt: new Date().toISOString(),
@@ -2122,6 +2903,15 @@ export class McpControlServer {
       branch: args.branch,
       touch: false,
     });
+    const threadKnowledge = Object.fromEntries(candidates.map((agent) => [
+      agent.id,
+      this.registry.listThreadKnowledgeSnapshots({ threadId: agent.id, status: "current", limit: 1 })[0] ?? null,
+    ]).filter(([, snapshot]) => snapshot));
+    const lifecycleByAgent = Object.fromEntries(candidates.map((agent) => [agent.id, this.registry.getThreadLifecycle(agent.id)]));
+    const threadBudget = this.registry.getThreadBudget({ cwd: args.cwd, role: args.role });
+    const threadBudgetState = this.registry.getThreadBudgetState({ cwd: args.cwd, role: args.role });
+    const threadBudgetStateByAgent = Object.fromEntries(candidates.map((agent) => [agent.id,
+      this.registry.getThreadBudgetState({ cwd: args.cwd, role: args.role, sourceThreadId: agent.id })]));
     return { ...this.router.select(candidates, {
       prompt: args.prompt,
       cwd: args.cwd,
@@ -2132,7 +2922,14 @@ export class McpControlServer {
       provider: args.provider,
       model: args.model,
       reuseExisting: args.reuseExisting,
+      executionContract: args.executionContract,
+      taskId: args.taskId,
       context: contextPack,
+      threadKnowledge,
+      lifecycleByAgent,
+      threadBudget,
+      threadBudgetState,
+      threadBudgetStateByAgent,
       minimumScore: args.minimumScore ?? 35,
     }), contextPack };
   }
@@ -2140,7 +2937,7 @@ export class McpControlServer {
   async #getControl() {
     if (!this.control) {
       if (!this.sessionWriter) {
-        throw Object.assign(new Error("Codex sessions may only be written by the control-plane daemon"), { code: "DAEMON_SESSION_WRITER_REQUIRED" });
+        throw Object.assign(new Error("Codex threads may only be written by the control-plane daemon"), { code: "DAEMON_SESSION_WRITER_REQUIRED" });
       }
       const created = this.controlFactory();
       this.client = created.client;
@@ -2150,53 +2947,6 @@ export class McpControlServer {
     }
     await this.connectPromise;
     return this.control;
-  }
-
-  #handleApprovalRequest(message) {
-    const threadId = message.params?.threadId ?? message.params?.thread?.id ?? null;
-    const turnId = message.params?.turnId ?? message.params?.turn?.id ?? null;
-    const runningTask = threadId
-      ? this.registry.listTasks({ agentId: threadId, limit: 20 }).find((task) => ["running", "approval_waiting"].includes(task.status))
-      : null;
-    const approvalId = `approval_${randomUUID()}`;
-    const expiresAt = new Date(Date.now() + 15 * 60_000).toISOString();
-    this.registry.createApproval({
-      id: approvalId,
-      taskId: runningTask?.id,
-      agentId: threadId,
-      threadId,
-      turnId,
-      method: message.method,
-      request: message.params ?? {},
-      expiresAt,
-    });
-    if (runningTask) this.registry.updateTask(runningTask.id, { status: "approval_waiting" });
-    if (threadId && this.registry.getAgent(threadId)) this.registry.updateAgent(threadId, { status: "approval_waiting" });
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        if (!this.pendingApprovals.has(approvalId)) return;
-        this.pendingApprovals.delete(approvalId);
-        this.registry.resolveApproval(approvalId, "decline", { source: "timeout" });
-        if (runningTask && this.registry.getTask(runningTask.id)?.status === "approval_waiting") this.registry.updateTask(runningTask.id, { status: "running" });
-        resolve("decline");
-      }, 15 * 60_000);
-      timer.unref?.();
-      this.pendingApprovals.set(approvalId, { resolve, timer, taskId: runningTask?.id, threadId });
-    });
-  }
-
-  #resolveApproval(approvalId, decision, metadata = {}) {
-    const approval = this.registry.resolveApproval(approvalId, decision, metadata);
-    if (!approval) throw new Error(`Pending approval not found: ${approvalId}`);
-    const waiter = this.pendingApprovals.get(approvalId);
-    if (waiter) {
-      clearTimeout(waiter.timer);
-      this.pendingApprovals.delete(approvalId);
-      waiter.resolve(decision);
-    }
-    if (approval.taskId && this.registry.getTask(approval.taskId)?.status === "approval_waiting") this.registry.updateTask(approval.taskId, { status: "running" });
-    if (approval.threadId && this.registry.getAgent(approval.threadId)) this.registry.updateAgent(approval.threadId, { status: "running" });
-    return approval;
   }
 
   #observeClient(client) {
@@ -2232,14 +2982,14 @@ export class McpControlServer {
     const ownerThreadId = this.registry.getSetting(ownerKey);
     if (!threadId) {
       if (ownerThreadId) {
-        throw Object.assign(new Error("The Control Plane dashboard requires its registered owner thread id"), { code: -32003 });
+        return ownerThreadId;
       }
-      return;
+      return null;
     }
     const requester = this.registry.getAgent(threadId);
     const plane = requester?.metadata?.executionPlane;
     if (plane === "data" || plane === "orchestrator" || requester?.metadata?.orchestrationPlane) {
-      throw Object.assign(new Error("Worker and Orchestrator sessions cannot open or query the Control Plane dashboard"), { code: -32003 });
+      throw Object.assign(new Error("Worker and Orchestrator threads cannot open or query the Control Plane dashboard"), { code: -32003 });
     }
     if (ownerThreadId && ownerThreadId !== threadId) {
       throw Object.assign(new Error(`The Control Plane dashboard is owned by another thread: ${ownerThreadId}`), { code: -32003 });
@@ -2249,6 +2999,7 @@ export class McpControlServer {
       if (requester) this.registry.updateAgent(threadId, { role: "control-plane", metadata: { executionPlane: "control" } });
       this.registry.recordEvent("agent", threadId, "control_plane.owner_claimed", { cwd: cwd ?? null });
     }
+    return threadId;
   }
 
   #issueDashboardViewLease(cwd, requesterThreadId) {
@@ -2290,7 +3041,7 @@ export class McpControlServer {
         uri: value.dashboardUrl,
         name: "codex-agent-dashboard",
         title: "Open live Codex agent dashboard",
-        description: "Review prepared agents and explicitly start, monitor, or cancel the run from this dashboard.",
+        description: "Monitor or cancel the automatically started run from this dashboard.",
         mimeType: "text/html",
       });
     }
@@ -2338,6 +3089,6 @@ export class McpControlServer {
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
-  console.error("mcp-server.js is daemon-internal; use mcp-proxy.js so the single control-plane daemon owns registry, scheduling, and Codex sessions");
+  console.error("mcp-server.js is daemon-internal; use mcp-proxy.js so the single control-plane daemon owns registry, scheduling, and Codex threads");
   process.exitCode = 1;
 }

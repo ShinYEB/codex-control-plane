@@ -5,12 +5,18 @@ export function classifyFailure(error, stage = "execution") {
   let type = stage === "validation" ? "validation" : "worker";
   let retryable = Boolean(error?.retryable);
 
-  if (/timed? out|timeout/.test(value)) {
+  if (/execution_contract|execution contract|read-only|read only|insufficient sandbox|cannot (?:write|modify|edit)|missing required (?:tool|capability)/.test(value)) {
+    type = "configuration";
+    retryable = false;
+  } else if (/timed? out|timeout/.test(value)) {
     type = "timeout";
     retryable = true;
   } else if (/thread_active_writer|active writer|already has an active writer|lease|fenc/.test(value)) {
     type = "coordination";
     retryable = true;
+  } else if (/eperm|environment|runtime unavailable|node: command not found/.test(value)) {
+    type = "environment";
+    retryable = false;
   } else if (/econn|socket|app-server exited|not connected|spawn|enoent/.test(value)) {
     type = "infrastructure";
     retryable = true;
@@ -36,12 +42,18 @@ export function classifyFailure(error, stage = "execution") {
     retryable = true;
   }
 
+  const category = type === "approval" ? "policy"
+    : ["configuration", "workspace", "routing"].includes(type) ? "configuration"
+    : ["environment", "infrastructure"].includes(type) ? "environment"
+    : ["coordination", "timeout", "interrupted"].includes(type) ? "coordination"
+    : type === "validation" ? "validation"
+    : "product";
   const nextAction = ["infrastructure", "coordination", "timeout"].includes(type)
     ? "retry"
     : ["validation", "test", "command", "worker"].includes(type)
       ? "rework"
       : "manual_intervention";
-  return { type, stage, cause: message, retryable, nextAction, code, message, at: new Date().toISOString() };
+  return { type, category, stage, cause: message, retryable, nextAction, code, message, at: new Date().toISOString() };
 }
 
 function itemType(item) {
@@ -89,6 +101,7 @@ export function assessTaskResult(result = {}) {
 
   const items = [...(turn.items ?? []), ...(result.executionItems ?? [])];
   const seen = new Set();
+  let successfulTestCommand = false;
   for (const item of items) {
     const identity = item?.id ?? item;
     if (seen.has(identity)) continue;
@@ -97,8 +110,11 @@ export function assessTaskResult(result = {}) {
     if (!type.includes("commandexecution") && !type.includes("command")) continue;
     const exitCode = commandExitCode(item);
     const itemStatus = String(item?.status?.type ?? item?.status ?? "").toLowerCase();
-    if ((exitCode === null || exitCode === 0) && !["failed", "error"].includes(itemStatus)) continue;
     const command = commandText(item);
+    if ((exitCode === null || exitCode === 0) && !["failed", "error"].includes(itemStatus)) {
+      if (exitCode === 0 && isTestCommand(command)) successfulTestCommand = true;
+      continue;
+    }
     const failure = classifyFailure(new Error(`${command || "Command"} exited with code ${exitCode ?? "unknown"}`), "execution");
     failure.type = isTestCommand(command) ? "test" : "command";
     failure.retryable = true;
@@ -113,8 +129,9 @@ export function assessTaskResult(result = {}) {
   if (explicit) return classifyFailure(explicit, "execution");
   const output = String(result.output ?? "");
   const exitMatch = output.match(/\b(?:exit code|exit status|exited with(?: code)?)\s*[:=]?\s*([1-9]\d*)\b/i);
-  const failedTests = output.match(/(?:^|\n)\s*(?:#\s*)?(?:fail|failed|failures)\s*[:=]?\s*([1-9]\d*)\b/im)
-    ?? output.match(/(?:^|\n)[^\n]*\b([1-9]\d*)\s+(?:tests?\s+)?failed\b/im);
+  const failedTests = successfulTestCommand ? null
+    : output.match(/(?:^|\n)\s*(?:#\s*)?(?:fail|failed|failures)\s*[:=]\s*([1-9]\d*)\s*(?:$|\n)/im)
+      ?? output.match(/(?:^|\n)\s*([1-9]\d*)\s+tests?\s+failed(?:[.!]?\s*)?(?:$|\n)/im);
   if (exitMatch || failedTests) {
     const failure = classifyFailure(exitMatch ? `Command exited with code ${exitMatch[1]}` : `${failedTests[1]} tests failed`, "execution");
     failure.type = failedTests ? "test" : "command";

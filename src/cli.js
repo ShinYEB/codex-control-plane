@@ -34,7 +34,7 @@ Usage:
   codex-control ask --prompt TEXT [--cwd PATH] [--sandbox MODE]
 
 All commands are sent to the single local control-plane daemon, which is the only
-process allowed to write Codex sessions. All output is JSON.`;
+process allowed to write Codex threads. All output is JSON.`;
 }
 
 async function callTool(client, name, args = {}) {
