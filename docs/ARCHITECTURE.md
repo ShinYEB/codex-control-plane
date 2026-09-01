@@ -18,7 +18,7 @@
 
 Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지한다. 의도, 영속 context, 계획, 정책, 관찰을 소유하지만 긴 구현 turn을 직접 수행하지 않는다. 의미 있는 작업 단위는 durable Codex 스레드에 위임하여 전체 대화, 명령, 결과를 나중에도 읽을 수 있게 한다. 용어는 [TERMINOLOGY.md](./TERMINOLOGY.md)를 따른다. 스레드는 영구 대화이고 세션은 스레드에 일시적으로 붙는 runtime이다.
 
-계획은 데이터이지 권한이 아니다. worker 스레드를 만들기 전에 deterministic compiler가 Planner Task를 명시적 실행 계약으로 변환한다. 역할 이름은 전문성을 설명할 뿐 filesystem, network, side effect 권한을 부여하지 않는다.
+계획은 데이터이지 권한이 아니다. worker 스레드를 만들기 전에 repository product contract와 사용자 결정을 같은 subject로 해소하고, deterministic compiler가 Planner Task를 명시적 실행 계약으로 변환한다. 역할 이름은 전문성을 설명할 뿐 filesystem, network, side effect 권한을 부여하지 않는다.
 
 ## Plane별 책임
 
@@ -73,12 +73,15 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 9. **Dashboard independence:** dashboard를 열고 새로 고치거나 닫는 동작은 작업을 시작하거나 완료하지 않는다.
 10. **No automatic external authority:** `external`, `destructive` side effect는 별도 사용자 요청이 필요하며 Task repair나 dashboard action으로 승인할 수 없다.
 11. **One result authority:** dashboard, direct delivery와 drain fallback은 같은 durable Result projection을 사용한다. Orchestrator prose는 terminal 상태나 결과 정본을 덮어쓰지 않는다.
+12. **No unresolved contract execution:** 권한·계약·workspace에 active 충돌이 있으면 Planner, Task, Agent, lease, worktree, attempt 생성 전에 차단한다.
 
 ## 기본 요청 흐름
 
 ```text
 Control Plane request
   -> persist Run(accepted)
+  -> sync repository product contract + user decisions
+  -> resolve immutable Context Snapshot or stop on conflict
   -> Planner creates and validates graph
   -> atomically persist Run + staged Tasks + dependencies
   -> automatic release to queued/blocked
@@ -94,7 +97,7 @@ Control Plane request
 
 ## 실행 계약
 
-모든 Task는 `taskKind`, `mutatesWorkspace`, `requiredSandbox`, `sandbox`, `networkAccess`, `approvalPolicy`, `authorizationScope`, `sideEffectPolicy`, `idempotencyKey`, `workspaceMode`, `baseRef`, `integrationStrategy`, `outputs`, stable fingerprint를 기록한다. `authorizationScope`는 구조적으로 `parent_run`에 고정된다. Task prose는 모순을 찾는 lint 입력일 뿐 권한의 정본이 아니다. Side effect는 관찰(`none`), 제품 내부 daemon/process 수명주기(`local-runtime`), 프로젝트 파일(`workspace`), 원격·외부 시스템(`external`), 복구하기 어려운 변경(`destructive`)으로 구분한다. planning 중 계약을 compile하므로 잘못된 계획은 graph 준비 전에 수정한다. 자세한 규칙은 [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md)를 따른다.
+모든 Task는 `taskKind`, `mutatesWorkspace`, `requiredSandbox`, `sandbox`, `networkAccess`, `executionCapabilities`, `approvalPolicy`, `authorizationScope`, `sideEffectPolicy`, `idempotencyKey`, `workspaceMode`, `baseRef`, `integrationStrategy`, `outputs`, stable fingerprint를 기록한다. `authorizationScope`는 구조적으로 `parent_run`에 고정된다. `executionCapabilities`는 프로젝트 변경과 임시 파일, 프로세스, localhost, 브라우저, 외부 네트워크를 분리한다. Task prose는 모순을 찾는 lint 입력일 뿐 권한의 정본이 아니다. Side effect는 관찰(`none`), 제품 내부 daemon/process 수명주기(`local-runtime`), 프로젝트 파일(`workspace`), 원격·외부 시스템(`external`), 복구하기 어려운 변경(`destructive`)으로 구분한다. planning 중 계약을 compile하므로 잘못된 계획은 graph 준비 전에 수정한다. 자세한 규칙은 [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md)를 따른다.
 
 ### Runtime generation과 재설치 계약
 

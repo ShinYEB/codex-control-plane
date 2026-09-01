@@ -26,7 +26,7 @@ import { buildDashboardDelta, buildDashboardSnapshot, getDashboardDetail } from 
 import { dataPlaneRuntime, runtimePrompt } from "./runtime-environment.js";
 import { assertNewContractRevision } from "./retry-policy.js";
 import { assessTaskResult, classifyFailure } from "./failure-classifier.js";
-import { assertExecutionContract, compileAndValidateExecutionContract, executionContractFailure, RUN_AUTHORIZATION } from "./execution-contracts.js";
+import { assertExecutionContract, compileAndValidateExecutionContract, executionContractFailure, EXECUTION_CAPABILITIES, RUN_AUTHORIZATION } from "./execution-contracts.js";
 import { classifyRunNotification, NOTIFICATION_KINDS } from "./notification-policy.js";
 import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
 
@@ -36,6 +36,7 @@ const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v4.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const execFile = promisify(execFileCallback);
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EXECUTION_CAPABILITIES_SCHEMA = { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES }, maxItems: EXECUTION_CAPABILITIES.length };
 
 async function openDesktopThread(threadId) {
   if (process.platform !== "darwin") throw new Error("Direct Codex Desktop navigation is currently supported on macOS only");
@@ -328,6 +329,7 @@ const TOOLS = [
         requiredSandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         networkAccess: { type: "boolean" },
         sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+        executionCapabilities: EXECUTION_CAPABILITIES_SCHEMA,
         idempotencyKey: { type: "string" },
         outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
         integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
@@ -370,6 +372,7 @@ const TOOLS = [
         requiredSandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         networkAccess: { type: "boolean" },
         sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+        executionCapabilities: EXECUTION_CAPABILITIES_SCHEMA,
         idempotencyKey: { type: "string" },
         outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
         integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
@@ -436,6 +439,7 @@ const TOOLS = [
               sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
               networkAccess: { type: "boolean" },
               sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+              executionCapabilities: EXECUTION_CAPABILITIES_SCHEMA,
               idempotencyKey: { type: "string" },
               outputs: { type: "array", items: { type: "string" }, maxItems: 20 },
               integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
@@ -555,6 +559,7 @@ const TOOLS = [
             taskKind: { type: "string", enum: ["analysis", "implementation", "test", "review", "integration", "release"] },
             mutatesWorkspace: { type: "boolean" }, sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
             networkAccess: { type: "boolean" }, sideEffectPolicy: { type: "string", enum: ["none", "local-runtime", "workspace", "external", "destructive"] },
+            executionCapabilities: EXECUTION_CAPABILITIES_SCHEMA,
             workspaceMode: { type: "string", enum: ["shared", "worktree"] }, integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
             authorizationScope: { type: "string", enum: ["parent_run"] }, outputs: { type: "array", items: { type: "string" } },
             acceptanceCriteria: { type: "array", items: { type: "string" } }, maxAttempts: { type: "integer", minimum: 1, maximum: 10 }, retryDelayMs: { type: "integer", minimum: 0 },
@@ -666,6 +671,7 @@ const TOOLS = [
         taskId: { type: "string" },
         sandbox: { type: "string", enum: ["read-only", "workspace-write", "danger-full-access"] },
         networkAccess: { type: "boolean" },
+        executionCapabilities: EXECUTION_CAPABILITIES_SCHEMA,
         workspaceMode: { type: "string", enum: ["shared", "worktree"] },
         integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
       },
@@ -1452,6 +1458,7 @@ export class McpControlServer {
       sandbox: args.sandbox ?? previous.sandbox,
       networkAccess: args.networkAccess ?? previous.networkAccess,
       sideEffectPolicy: previous.sideEffectPolicy,
+      executionCapabilities: args.executionCapabilities ?? previous.executionCapabilities,
       idempotencyKey: previous.idempotencyKey,
       outputs: previous.outputs,
       workspaceMode: args.workspaceMode ?? previous.workspaceMode,
@@ -1462,7 +1469,7 @@ export class McpControlServer {
     assertNewContractRevision(previous, contract);
 
     const repairedAt = new Date().toISOString();
-    const contractChanges = Object.fromEntries(["sandbox", "networkAccess", "workspaceMode", "integrationStrategy"].flatMap((field) =>
+    const contractChanges = Object.fromEntries(["sandbox", "networkAccess", "workspaceMode", "integrationStrategy", "executionCapabilities"].flatMap((field) =>
       previous[field] === contract[field] ? [] : [[field, { from: previous[field] ?? null, to: contract[field] ?? null }]]));
     const priorFailures = [...(task.metadata?.priorFailures ?? [])];
     if (task.metadata?.failure) priorFailures.push({ ...task.metadata.failure, contractFingerprint: previous.fingerprint ?? null, repairedAt });

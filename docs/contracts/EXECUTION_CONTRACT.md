@@ -2,7 +2,7 @@
 
 실행 계약은 “누가 무엇을 잘하는가”와 “무엇을 할 권한이 있는가”를 분리한다. Planner의 역할 이름과 자연어 prompt는 전문화 힌트일 뿐 권한의 근거가 아니다. worker를 시작하기 전에 deterministic compiler가 Task 입력을 versioned contract로 바꾸고 preflight한다.
 
-현재 계약 version은 `1`이며 구현 정본은 `src/execution-contracts.js`다.
+현재 계약 version은 `2`이며 구현 정본은 `src/execution-contracts.js`다. version 2는 프로젝트 변경 권한과 실행 중 필요한 로컬 runtime 권한을 분리한다.
 
 모든 신규 입력은 `compileAndValidateExecutionContract()`를 사용하고, 저장 계약의 실행·retry·repair·restart recovery는 `assertExecutionContract()`를 사용한다. Planner와 단일/백그라운드/그래프 dispatch가 서로 다른 허용 범위를 갖지 않는다.
 
@@ -10,7 +10,7 @@
 
 | 필드 | 값/의미 |
 |---|---|
-| `version` | 현재 `1` |
+| `version` | 현재 `2` |
 | `taskKind` | `analysis`, `implementation`, `test`, `review`, `integration`, `release` |
 | `mutatesWorkspace` | 프로젝트 파일을 변경할 의도가 있는지 |
 | `requiredSandbox` | Task 의도상 필요한 최소 sandbox |
@@ -25,6 +25,7 @@
 | `integrationStrategy` | `none`, `patch`, `commit` |
 | `outputs` | 기대 산출물 목록 |
 | `tools` | 실행에 필요한 도구 목록 |
+| `executionCapabilities` | workspace와 분리된 실행 능력 목록 |
 | `roleTemplate` | 적용된 역할 템플릿 이름. 권한 근거가 아님 |
 | `fingerprint` | 정렬된 계약 JSON의 SHA-256 앞 20자리 |
 
@@ -36,10 +37,27 @@
 |---|---|
 | 비변경 분석·검토 | `read-only`, `shared`, `sideEffectPolicy=none`, output `report` |
 | 구현·통합·release | `workspace-write`, `worktree`, `sideEffectPolicy=workspace`, `integrationStrategy=patch` |
-| test | 현재 기본상 mutating Task로 취급되어 `workspace-write + worktree`를 받음 |
+| 프로젝트 비변경 test | `mutatesWorkspace=false`, `shared`; 임시 파일이 필요하므로 writable runtime sandbox 사용 |
 | 로컬 daemon/process 수명주기 | 명시적 `sideEffectPolicy=local-runtime` |
 
-test가 항상 workspace를 변경하는 것으로 간주되는 현재 기본값은 의도적인 안전 여유지만, read-only 검증과 환경을 준비하는 E2E를 구분할지는 설계 점검 항목이다.
+`mutatesWorkspace=false`는 프로젝트 파일을 바꾸지 않는다는 뜻이지 운영체제 수준의 모든 쓰기와 local listener를 금지한다는 뜻이 아니다.
+
+## Execution capabilities
+
+| Capability | 의미 |
+|---|---|
+| `process-execution` | 명령이나 로컬 프로세스 실행 |
+| `temporary-filesystem-write` | 테스트용 임시 파일·디렉터리 생성 |
+| `localhost-connect` | 로컬 서비스 연결 |
+| `localhost-listen` | 테스트 서버나 socket listener 생성 |
+| `external-network` | 외부 네트워크 접근 |
+| `browser-inspection` | 실제 브라우저 렌더링·상호작용 검증 |
+| `workspace-write` | 프로젝트 파일 변경 |
+| `git-integration` | patch 또는 commit artifact 통합 |
+
+`temporary-filesystem-write`와 `localhost-listen`은 writable runtime sandbox를 요구하지만 `workspace-write`를 의미하지 않는다. `browser-inspection`은 `browser`, `chrome`, `computer-use` 중 하나가 tools에 있어야 한다. `localhost-listen`은 `process-execution`을 함께 요구한다. `external-network`와 `networkAccess`, `workspace-write`와 `mutatesWorkspace`, `git-integration`과 `integrationStrategy`는 서로 일치해야 한다.
+
+Compiler는 구조화된 `acceptanceCriteria`에서 실제 브라우저·viewport·반응형 렌더링, localhost listener, 임시 파일 요구를 보수적으로 추출한다. 선언된 tool과 sandbox가 이 요구를 충족하지 못하면 graph persistence 전에 거부한다. 자연어 prompt는 권한을 추가하지 않는다.
 
 ## Preflight invariants
 
@@ -54,6 +72,7 @@ test가 항상 workspace를 변경하는 것으로 간주되는 현재 기본값
 7. persisted contract에 fingerprint가 없거나 canonical payload와 일치하지 않는다.
 8. version, enum, boolean, array, nullable string 필드의 타입이 schema와 다르다.
 9. mutation, side-effect, workspace mode, integration strategy가 서로 모순된다.
+10. execution capability가 sandbox, tool 또는 기존 호환 필드와 모순된다.
 
 검증은 두 경계에서 실행한다.
 
@@ -112,7 +131,7 @@ Task claim SQL은 `contractStatus=validated`이고 marker fingerprint가 저장 
 
 ## Contract repair
 
-terminal Task가 권한·workspace 설정 오류로 끝나면 sandbox, network, workspace mode, integration strategy만 명시적으로 수정해 해당 Task를 다시 queue할 수 있다.
+terminal Task가 권한·workspace 설정 오류로 끝나면 sandbox, network, execution capabilities, workspace mode, integration strategy를 명시적으로 수정해 해당 Task를 다시 queue할 수 있다.
 
 - 이전 contract와 failure는 history에 보존한다.
 - 새 fingerprint와 변경 필드를 기록한다.

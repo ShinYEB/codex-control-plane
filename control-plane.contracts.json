@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "claims": [
+    {
+      "id": "run_start_policy_v2",
+      "kind": "decision",
+      "subject": "explicit_run_start",
+      "revision": 2,
+      "body": "After an atomic task graph is prepared, the daemon starts the Run automatically. Opening or refreshing the dashboard never starts work.",
+      "supersedes": ["claim_product_run_start_policy_v1"]
+    }
+  ]
+}

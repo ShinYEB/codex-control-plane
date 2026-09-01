@@ -70,6 +70,14 @@ function commandText(item) {
   return Array.isArray(value) ? value.join(" ") : String(value ?? "");
 }
 
+function commandOutput(item) {
+  const values = [
+    item?.aggregatedOutput, item?.output, item?.stderr, item?.stdout,
+    item?.result?.aggregatedOutput, item?.result?.output, item?.result?.stderr, item?.result?.stdout,
+  ];
+  return values.filter((value) => typeof value === "string" && value.trim()).join("\n");
+}
+
 function isTestCommand(command) {
   return /(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b|\bnode\s+--test\b|\b(?:pytest|vitest|jest|cargo\s+test|go\s+test|xcodebuild\s+test)\b/i.test(command);
 }
@@ -115,10 +123,14 @@ export function assessTaskResult(result = {}) {
       if (exitCode === 0 && isTestCommand(command)) successfulTestCommand = true;
       continue;
     }
-    const failure = classifyFailure(new Error(`${command || "Command"} exited with code ${exitCode ?? "unknown"}`), "execution");
-    failure.type = isTestCommand(command) ? "test" : "command";
-    failure.retryable = true;
-    failure.nextAction = "rework";
+    const diagnostic = commandOutput(item);
+    const failure = classifyFailure(new Error(`${command || "Command"} exited with code ${exitCode ?? "unknown"}${diagnostic ? `\n${diagnostic}` : ""}`), "execution");
+    if (!["configuration", "environment", "infrastructure", "coordination", "approval", "workspace"].includes(failure.type)) {
+      failure.type = isTestCommand(command) ? "test" : "command";
+      failure.category = "product";
+      failure.retryable = true;
+      failure.nextAction = "rework";
+    }
     failure.command = command || null;
     failure.exitCode = exitCode;
     failure.cause = failure.message;
@@ -134,9 +146,12 @@ export function assessTaskResult(result = {}) {
       ?? output.match(/(?:^|\n)\s*([1-9]\d*)\s+tests?\s+failed(?:[.!]?\s*)?(?:$|\n)/im);
   if (exitMatch || failedTests) {
     const failure = classifyFailure(exitMatch ? `Command exited with code ${exitMatch[1]}` : `${failedTests[1]} tests failed`, "execution");
-    failure.type = failedTests ? "test" : "command";
-    failure.retryable = true;
-    failure.nextAction = "rework";
+    if (!["configuration", "environment", "infrastructure", "coordination", "approval", "workspace"].includes(failure.type)) {
+      failure.type = failedTests ? "test" : "command";
+      failure.category = "product";
+      failure.retryable = true;
+      failure.nextAction = "rework";
+    }
     failure.exitCode = exitMatch ? Number(exitMatch[1]) : null;
     failure.cause = failure.message;
     return failure;

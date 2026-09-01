@@ -79,6 +79,20 @@ function now() {
   return new Date().toISOString();
 }
 
+function normalizedContractSubject(memory) {
+  if (memory.subject) return memory.subject;
+  if (!["decision", "constraint", "architecture"].includes(memory.kind) || !memory.title) return null;
+  return String(memory.title).trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "_").replace(/^_+|_+$/g, "") || null;
+}
+
+function memoryClaimAuthority(memory) {
+  const contractBearing = ["decision", "constraint", "architecture"].includes(memory.kind);
+  if (contractBearing && memory.source === "user" && [null, "authoritative"].includes(memory.authority)) return "user_explicit";
+  if (contractBearing && memory.source === "repository" && [null, "primary", "authoritative", "verified"].includes(memory.authority)) return "project_contract";
+  if (memory.source === "runtime" && [null, "primary", "verified"].includes(memory.authority)) return "validated_artifact";
+  return "legacy_unverified";
+}
+
 const ACTIVE_EXECUTION_STATUSES = new Set(["running", "approval_waiting", "agent_done", "validating", "integration_pending"]);
 
 function taskContractMetadata(task, timestamp = now()) {
@@ -87,7 +101,7 @@ function taskContractMetadata(task, timestamp = now()) {
   if (!contract && !ACTIVE_EXECUTION_STATUSES.has(task.status)) {
     const explicitIntent = ["taskKind", "mutatesWorkspace", "requiredSandbox", "sandbox", "networkAccess",
       "approvalPolicy", "authorizationScope", "sideEffectPolicy", "workspaceMode", "baseRef",
-      "integrationStrategy", "outputs", "tools"].some((field) => task[field] !== undefined);
+      "integrationStrategy", "outputs", "tools", "executionCapabilities"].some((field) => task[field] !== undefined);
     contract = explicitIntent
       ? compileAndValidateExecutionContract({ ...task, key: task.id })
       : compileAndValidateExecutionContract({ key: task.id, prompt: task.prompt, taskKind: "analysis", mutatesWorkspace: false }, { workspaceMode: "shared" });
@@ -2170,6 +2184,8 @@ export class ControlRegistry {
     const status = changes.status ?? existing.status;
     if (status !== existing.status) transitionRun(existing.status, status, options);
     const timestamp = now();
+    const metadata = { ...existing.metadata, ...(changes.metadata ?? {}) };
+    if (TERMINAL_RUN_STATUSES.has(status)) metadata.dispatchPhase = status;
     this.db.prepare(`
       UPDATE runs SET request_key = ?, plan_id = ?, name = ?, status = ?, cwd = ?, updated_at = ?, started_at = ?, completed_at = ?, metadata_json = ?
       WHERE id = ?
@@ -2182,7 +2198,7 @@ export class ControlRegistry {
       timestamp,
       changes.startedAt === undefined ? existing.startedAt : changes.startedAt,
       changes.completedAt === undefined ? existing.completedAt : changes.completedAt,
-      json({ ...existing.metadata, ...(changes.metadata ?? {}) }, {}),
+      json(metadata, {}),
       runId,
     );
     this.#assignProject("runs", runId, changes.cwd ?? existing.cwd, changes.projectId ?? existing.projectId ?? null);
@@ -5088,18 +5104,22 @@ export class ControlRegistry {
     }
 
     const claimId = `claim_legacy_${createHash("sha256").update(memory.id).digest("hex").slice(0, 24)}`;
-    const contentHash = createHash("sha256").update(memory.content).digest("hex");
+    const authority = memoryClaimAuthority(memory);
+    const status = authority === "legacy_unverified" ? "candidate" : "active";
+    const subject = normalizedContractSubject(memory);
+    const contentHash = contextContentHash({ kind: memory.kind ?? "note", subject, body: memory.content, scope: "project", projectId });
     const timestamp = now();
     this.db.prepare(`
       INSERT INTO context_claims (
         id, project_id, kind, subject, body, scope, authority, status, revision,
         content_hash, created_at, updated_at, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, 'project', 'legacy_unverified', 'candidate', 1, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, 'project', ?, 'candidate', 1, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         project_id = excluded.project_id,
         kind = excluded.kind,
         subject = excluded.subject,
         body = excluded.body,
+        authority = excluded.authority,
         content_hash = excluded.content_hash,
         updated_at = excluded.updated_at,
         metadata_json = excluded.metadata_json
@@ -5107,8 +5127,9 @@ export class ControlRegistry {
       claimId,
       projectId,
       memory.kind ?? "note",
-      memory.subject ?? null,
+      subject,
       memory.content,
+      authority,
       contentHash,
       memory.created_at ?? timestamp,
       timestamp,
@@ -5121,6 +5142,9 @@ export class ControlRegistry {
       ON CONFLICT(claim_id, source_kind, source_id, source_revision)
       DO UPDATE SET source_digest = excluded.source_digest
     `).run(claimId, memory.id, contentHash, timestamp);
+    if (status === "active") {
+      this.db.prepare("UPDATE context_claims SET status = 'active', updated_at = ? WHERE id = ? AND status = 'candidate'").run(timestamp, claimId);
+    }
     return normalizeContextClaim(this.db.prepare("SELECT * FROM context_claims WHERE id = ?").get(claimId));
   }
 

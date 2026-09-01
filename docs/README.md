@@ -11,19 +11,21 @@
 5. [adr/ADR-002-GLOBAL-RUN-HIERARCHY.md](./adr/ADR-002-GLOBAL-RUN-HIERARCHY.md) — 다중 프로젝트 실행 계층
 6. [adr/ADR-003-THREAD-LIFECYCLE.md](./adr/ADR-003-THREAD-LIFECYCLE.md) — 스레드 생성·재사용·압축·보관 정책
 7. [adr/ADR-004-RESULT-AUTHORITY.md](./adr/ADR-004-RESULT-AUTHORITY.md) — Orchestrator, Synthesizer와 사용자-visible 결과 정본
-8. [contracts/CONTEXT_RESOLUTION.md](./contracts/CONTEXT_RESOLUTION.md) — 지식 수집, authority, 충돌과 Context Snapshot
-9. [contracts/GLOBAL_RUNS.md](./contracts/GLOBAL_RUNS.md) — Global Run 상태, 권한, 프로젝트 간 dependency
-10. [contracts/TARGET_PERSISTENCE.md](./contracts/TARGET_PERSISTENCE.md) — 목표 schema, 원자성, migration과 호환성
-11. [contracts/STATE_MACHINES.md](./contracts/STATE_MACHINES.md) — 현재 Run, Task, Agent, Lease의 상태와 전이
-12. [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md) — 권한, sandbox, workspace, 부작용 계약
-13. [contracts/PERSISTENCE.md](./contracts/PERSISTENCE.md) — 현재 SQLite 소유권, 원자성, 멱등성, 저장 모델
-14. [contracts/RESULT_DELIVERY.md](./contracts/RESULT_DELIVERY.md) — 결과 종합, 알림, 원래 대화로의 전달
-15. [operations/FAILURE_RECOVERY.md](./operations/FAILURE_RECOVERY.md) — 실패 분류, 재시도, 재시작 복구, worktree 복구
-16. [operations/RUNTIME_LIFECYCLE.md](./operations/RUNTIME_LIFECYCLE.md) — 런타임 identity, 데몬 handover, 배포·재설치
-17. [STABILIZATION_GATE.md](./STABILIZATION_GATE.md) — 1~8단계 안정화의 최종 E2E 검증 근거
-18. [GLOBAL_ORCHESTRATION_GATE.md](./GLOBAL_ORCHESTRATION_GATE.md) — 새 설계의 구현 순서와 최종 E2E 게이트
-19. [G7_E2E_EVIDENCE.md](./G7_E2E_EVIDENCE.md) — 최종 12개 시나리오의 자동 검증 evidence
-20. [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) — 현재 설계에서 다음 점검 때 결정해야 할 항목
+8. [adr/ADR-005-AUTOMATIC-RUN-START.md](./adr/ADR-005-AUTOMATIC-RUN-START.md) — 사용자 요청 1회 승인과 graph 검증 후 자동 시작
+9. [contracts/CONTEXT_RESOLUTION.md](./contracts/CONTEXT_RESOLUTION.md) — 지식 수집, authority, 충돌과 Context Snapshot
+10. [contracts/CONTRACT_AUTHORITY.md](./contracts/CONTRACT_AUTHORITY.md) — 제품 계약 manifest, 권위, revision과 실행 전 충돌 차단
+11. [contracts/GLOBAL_RUNS.md](./contracts/GLOBAL_RUNS.md) — Global Run 상태, 권한, 프로젝트 간 dependency
+12. [contracts/TARGET_PERSISTENCE.md](./contracts/TARGET_PERSISTENCE.md) — 목표 schema, 원자성, migration과 호환성
+13. [contracts/STATE_MACHINES.md](./contracts/STATE_MACHINES.md) — 현재 Run, Task, Agent, Lease의 상태와 전이
+14. [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md) — 권한, sandbox, workspace, 부작용 계약
+15. [contracts/PERSISTENCE.md](./contracts/PERSISTENCE.md) — 현재 SQLite 소유권, 원자성, 멱등성, 저장 모델
+16. [contracts/RESULT_DELIVERY.md](./contracts/RESULT_DELIVERY.md) — 결과 종합, 알림, 원래 대화로의 전달
+17. [operations/FAILURE_RECOVERY.md](./operations/FAILURE_RECOVERY.md) — 실패 분류, 재시도, 재시작 복구, worktree 복구
+18. [operations/RUNTIME_LIFECYCLE.md](./operations/RUNTIME_LIFECYCLE.md) — 런타임 identity, 데몬 handover, 배포·재설치
+19. [STABILIZATION_GATE.md](./STABILIZATION_GATE.md) — 1~8단계 안정화의 최종 E2E 검증 근거
+20. [GLOBAL_ORCHESTRATION_GATE.md](./GLOBAL_ORCHESTRATION_GATE.md) — 새 설계의 구현 순서와 최종 E2E 게이트
+21. [G7_E2E_EVIDENCE.md](./G7_E2E_EVIDENCE.md) — 최종 12개 시나리오의 자동 검증 evidence
+22. [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) — 현재 설계에서 다음 점검 때 결정해야 할 항목
 
 ## 문서의 권위와 변경 규칙
 

@@ -26,6 +26,14 @@ test("registry persists only the four canonical notification kinds", () => {
   registry.close();
 });
 
+test("terminal Run state always owns the projected dispatch phase", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createRun({ id: "terminal_phase", cwd: "/repo", status: "planning", metadata: { dispatchPhase: "planning" } });
+  const failed = registry.updateRun("terminal_phase", { status: "failed", completedAt: new Date().toISOString() });
+  assert.equal(failed.metadata.dispatchPhase, "failed");
+  registry.close();
+});
+
 test("Control Plane result delivery is durable, idempotent, and retryable", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createRun({ id: "run_delivery", cwd: "/repo", status: "completed" });
@@ -210,6 +218,29 @@ test("new project-scoped entities persist the same canonical project id", () => 
     assert.deepEqual(registry.listPlans({ projectId: project.id }).map((entry) => entry.id), [plan.id]);
     assert.deepEqual(registry.listMemories({ projectId: project.id }).map((entry) => entry.id), [memory.id]);
     assert.equal(registry.listContextClaims({ projectId: project.id, authority: "legacy_unverified" }).length, 1);
+  } finally {
+    registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("explicit user decision memories become active provenance-backed context claims", () => {
+  const directory = mkdtempSync(join(tmpdir(), "codex-user-contract-"));
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    registry.upsertMemory({
+      id: "user_start_contract",
+      cwd: directory,
+      kind: "decision",
+      title: "Run start policy",
+      content: "Runs require an explicit user Start.",
+      source: "user",
+      authority: "authoritative",
+    });
+    const claim = registry.listContextClaims({ authority: "user_explicit" })[0];
+    assert.equal(claim.status, "active");
+    assert.equal(claim.subject, "run_start_policy");
+    assert.equal(registry.listContextClaimSources(claim.id)[0].kind, "legacy_memory");
   } finally {
     registry.close();
     rmSync(directory, { recursive: true, force: true });

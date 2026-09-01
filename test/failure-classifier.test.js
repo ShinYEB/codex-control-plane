@@ -25,6 +25,24 @@ test("result assessment rejects completed turns with real command or test failur
   assert.equal(assessTaskResult({ turn: { status: "completed" }, output: "tests: 12 passed" }), null);
 });
 
+test("sandbox EPERM in test output is classified as environment instead of product", () => {
+  const failure = assessTaskResult({
+    turn: { status: "completed" },
+    executionItems: [{
+      id: "cmd_eperm",
+      type: "commandExecution",
+      command: "node --test",
+      status: "failed",
+      exitCode: 1,
+      aggregatedOutput: "Error: EPERM: operation not permitted, mkdtemp '/tmp/control-plane-test-'",
+    }],
+  });
+  assert.equal(failure.type, "environment");
+  assert.equal(failure.category, "environment");
+  assert.equal(failure.retryable, false);
+  assert.equal(failure.nextAction, "manual_intervention");
+});
+
 test("successful test execution is not overturned by identifiers in narrative output", () => {
   const result = assessTaskResult({
     turn: { status: "completed" },

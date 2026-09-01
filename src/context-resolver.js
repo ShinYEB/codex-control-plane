@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { authorityRank } from "./context-claims.js";
+import { syncProductContractManifest } from "./product-contracts.js";
 
-export const CONTEXT_RESOLVER_VERSION = "context-resolver/v1";
+export const CONTEXT_RESOLVER_VERSION = "context-resolver/v2";
 
 function stable(value) {
   if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
@@ -61,13 +62,22 @@ export class ContextResolver {
         if (error.code !== "PROJECT_PATH_UNRESOLVED") throw error;
       }
     }
-    const requiredSubjects = [...new Set(options.requiredSubjects ?? [])].map(String).sort();
+    const productContracts = options.cwd ? syncProductContractManifest(this.registry, options.cwd) : null;
+    const requiredSubjects = [...new Set([
+      ...(options.requiredSubjects ?? []),
+      ...(productContracts?.manifest.claims.map((claim) => claim.subject) ?? []),
+    ])].map(String).sort();
     const excludedClaimIds = [...new Set(options.excludedClaimIds ?? [])].map(String).sort();
     const requestedThreadIds = [...new Set(options.requestedThreadIds ?? [])].map(String).sort();
     const requestedThreads = requestedThreadIds.map((threadId) => {
       const knowledge = this.registry.listThreadKnowledgeSnapshots({ threadId, status: "current", limit: 1 })[0] ?? null;
       return { threadId, snapshotId: knowledge?.id ?? null, sourceDigest: knowledge?.sourceDigest ?? null, status: knowledge?.status ?? "missing", topics: knowledge?.topics ?? [] };
     });
+    const all = this.registry.listContextClaims({ statuses: ["active", "disputed"], limit: 10_000 });
+    const claimCatalogFingerprint = hash(all
+      .filter((claim) => claim.scope === "global" || (project?.id && claim.projectId === project.id))
+      .map((claim) => ({ id: claim.id, contentHash: claim.contentHash, revision: claim.revision, authority: claim.authority, status: claim.status }))
+      .sort((left, right) => left.id.localeCompare(right.id)));
     const requestedScope = {
       projectId: project?.id ?? null,
       cwd: project?.canonicalRoot ?? options.cwd ?? null,
@@ -75,6 +85,8 @@ export class ContextResolver {
       excludedClaimIds,
       requestedThreads,
       maxContextBudget: options.maxContextBudget ?? this.defaultBudget,
+      productContractFingerprint: productContracts?.fingerprint ?? null,
+      claimCatalogFingerprint,
     };
     const objectiveHash = hash(options.objective.trim());
     const requestedScopeHash = hash(requestedScope);
@@ -88,7 +100,6 @@ export class ContextResolver {
       resolverVersion: this.version, revision, metadata: { requestedScope, objective: options.objective.trim() },
     });
 
-    const all = this.registry.listContextClaims({ statuses: ["active", "disputed"], limit: 10_000 });
     const candidates = all.filter((claim) => claim.scope === "global" || (project?.id && claim.projectId === project.id));
     const excludedSet = new Set(excludedClaimIds);
     const objectiveTokens = tokens(`${options.objective} ${requiredSubjects.join(" ")}`);
@@ -116,13 +127,22 @@ export class ContextResolver {
       if (new Set(group.map((item) => item.claim.contentHash)).size < 2) continue;
       const highestRank = Math.max(...group.map((item) => authorityRank(item.claim.authority)));
       const top = group.filter((item) => authorityRank(item.claim.authority) === highestRank);
-      if (new Set(top.map((item) => item.claim.contentHash)).size < 2) continue;
       const category = conflictCategory(top[0].claim);
       const blocking = ["authorization", "contract", "workspace"].includes(category)
         || (category === "factual" && requiredSubjects.includes(top[0].claim.subject));
-      const claimIds = top.map((item) => item.claim.id).sort();
-      const fingerprint = hash({ projectId: top[0].claim.projectId, scope: top[0].claim.scope, subject: top[0].claim.subject, category, claimIds, hashes: top.map((item) => item.claim.contentHash).sort() });
-      conflicts.push({ projectId: top[0].claim.projectId, subject: top[0].claim.subject, scope: top[0].claim.scope, category, blocking, status: "unresolved", claimIds, fingerprint });
+      const claimIds = group.map((item) => item.claim.id).sort();
+      const fingerprint = hash({ projectId: top[0].claim.projectId, scope: top[0].claim.scope, subject: top[0].claim.subject, category, claimIds, hashes: group.map((item) => item.claim.contentHash).sort() });
+      conflicts.push({
+        projectId: top[0].claim.projectId,
+        subject: top[0].claim.subject,
+        scope: top[0].claim.scope,
+        category,
+        blocking,
+        status: "unresolved",
+        claimIds,
+        winningClaimId: top.length === 1 ? top[0].claim.id : null,
+        fingerprint,
+      });
       if (blocking) for (const claimId of claimIds) conflictClaimIds.add(claimId);
     }
 

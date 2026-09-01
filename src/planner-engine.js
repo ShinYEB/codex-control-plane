@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { agentDisplayName } from "./agent-names.js";
 import { ContextResolver } from "./context-resolver.js";
 import { ThreadKnowledgeIndexer } from "./thread-knowledge-indexer.js";
-import { compileAndValidateExecutionContract, RUN_AUTHORIZATION_SCOPES, SIDE_EFFECT_POLICIES } from "./execution-contracts.js";
+import { compileAndValidateExecutionContract, EXECUTION_CAPABILITIES, RUN_AUTHORIZATION_SCOPES, SIDE_EFFECT_POLICIES } from "./execution-contracts.js";
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -18,7 +18,7 @@ const PLAN_SCHEMA = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["key", "title", "prompt", "role", "capabilities", "tools", "dependsOn", "dependencyPolicy", "workspaceMode", "acceptanceCriteria", "taskKind", "mutatesWorkspace", "networkAccess", "sideEffectPolicy", "authorizationScope", "outputs", "integrationStrategy"],
+        required: ["key", "title", "prompt", "role", "capabilities", "tools", "dependsOn", "dependencyPolicy", "workspaceMode", "acceptanceCriteria", "taskKind", "mutatesWorkspace", "networkAccess", "sideEffectPolicy", "authorizationScope", "executionCapabilities", "outputs", "integrationStrategy"],
         properties: {
           key: { type: "string" },
           title: { type: "string" },
@@ -35,6 +35,7 @@ const PLAN_SCHEMA = {
           networkAccess: { type: "boolean" },
           sideEffectPolicy: { type: "string", enum: SIDE_EFFECT_POLICIES },
           authorizationScope: { type: "string", enum: RUN_AUTHORIZATION_SCOPES },
+          executionCapabilities: { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES } },
           outputs: { type: "array", items: { type: "string" } },
           integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         },
@@ -176,7 +177,7 @@ export class PlannerEngine {
       "Use worktree workspace mode for concurrent file-writing tasks. Follow-up work must never start automatically.",
       "The user Start gate applies exactly once to the parent Run. Every dependency task, validator, retry, and rework must execute under that existing authorization and must never request another, additional, separate, or second Start.",
       "Set authorizationScope to parent_run for every task. This structured field is the authoritative authorization contract; task prose must not contradict it.",
-      "Declare taskKind, mutatesWorkspace, networkAccess, sideEffectPolicy, outputs, integrationStrategy, and dependencyPolicy explicitly. sideEffectPolicy=none means observation or computation only; local-runtime means lifecycle changes limited to this product's local daemon/process/socket; workspace means project file changes; external means changing remote services or other external systems; destructive means difficult-to-recover deletion or overwrite. Reading local process, socket, MCP, or health state is none. Normal automatic startup of this product's local daemon is local-runtime, never external. External and destructive tasks are outside automatic Run dispatch.",
+      "Declare taskKind, mutatesWorkspace, networkAccess, sideEffectPolicy, executionCapabilities, outputs, integrationStrategy, and dependencyPolicy explicitly. executionCapabilities separates process-execution, temporary-filesystem-write, localhost-connect, localhost-listen, external-network, browser-inspection, workspace-write, and git-integration. A test that does not modify project files may still require temporary-filesystem-write or localhost-listen and therefore a writable runtime sandbox. Browser acceptance criteria require browser-inspection and a browser-capable tool. sideEffectPolicy=none means observation or computation only; local-runtime means lifecycle changes limited to this product's local daemon/process/socket; workspace means project file changes; external means changing remote services or other external systems; destructive means difficult-to-recover deletion or overwrite. Reading local process, socket, MCP, or health state is none. Normal automatic startup of this product's local daemon is local-runtime, never external. External and destructive tasks are outside automatic Run dispatch.",
       "Use all_terminal for always-run cleanup/reporting and on_failure for fallback work. Role names describe specialization and never grant permissions.",
     ].filter(Boolean).join("\n\n");
     let materialized;

@@ -23,9 +23,61 @@ test("preflight rejects contradictory and external automatic contracts", () => {
 test("local runtime lifecycle is distinct from external system mutation", () => {
   const observation = compileExecutionContract({ key: "health", taskKind: "test", mutatesWorkspace: false, sideEffectPolicy: "none" });
   const daemonStart = compileExecutionContract({ key: "daemon", taskKind: "test", mutatesWorkspace: false, sideEffectPolicy: "local-runtime" });
-  assert.equal(observation.sandbox, "read-only");
+  assert.equal(observation.sandbox, "workspace-write");
+  assert.equal(observation.mutatesWorkspace, false);
+  assert.deepEqual(observation.executionCapabilities, ["process-execution", "temporary-filesystem-write"]);
   assert.equal(daemonStart.sideEffectPolicy, "local-runtime");
   assert.throws(() => compileExecutionContract({ key: "invalid", sideEffectPolicy: "local_process" }), /Unsupported side-effect policy/);
+});
+
+test("runtime capabilities are independent from project mutation and drive sandbox preflight", () => {
+  const serverTest = compileExecutionContract({
+    key: "server-test",
+    taskKind: "test",
+    mutatesWorkspace: false,
+    executionCapabilities: ["process-execution", "temporary-filesystem-write", "localhost-listen"],
+  });
+  assert.equal(serverTest.sandbox, "workspace-write");
+  assert.equal(serverTest.mutatesWorkspace, false);
+  assert.equal(serverTest.workspaceMode, "shared");
+  const inferredServer = compileExecutionContract({
+    key: "inferred-server",
+    taskKind: "review",
+    mutatesWorkspace: false,
+    acceptanceCriteria: ["Start a local server and verify its 127.0.0.1 listener."],
+  });
+  assert.equal(inferredServer.sandbox, "workspace-write");
+  assert.ok(inferredServer.executionCapabilities.includes("localhost-listen"));
+  assert.throws(() => compileExecutionContract({
+    key: "blocked-server-test",
+    taskKind: "test",
+    mutatesWorkspace: false,
+    sandbox: "read-only",
+    executionCapabilities: ["process-execution", "temporary-filesystem-write", "localhost-listen"],
+  }), /requires workspace-write/);
+});
+
+test("browser acceptance requires an explicit browser-capable tool", () => {
+  assert.throws(() => compileExecutionContract({
+    key: "visual",
+    taskKind: "review",
+    tools: ["shell"],
+    executionCapabilities: ["process-execution", "browser-inspection"],
+  }), /browser-capable tool/);
+  const visual = compileExecutionContract({
+    key: "visual",
+    taskKind: "review",
+    tools: ["browser"],
+    executionCapabilities: ["browser-inspection"],
+  });
+  assert.ok(visual.executionCapabilities.includes("browser-inspection"));
+  assert.throws(() => compileExecutionContract({
+    key: "responsive-acceptance",
+    taskKind: "review",
+    tools: ["shell"],
+    acceptanceCriteria: ["Verify the responsive layout in an actual browser viewport."],
+    executionCapabilities: ["process-execution"],
+  }), /browser-capable tool/);
 });
 
 test("task execution contracts only inherit the parent Run authorization", () => {

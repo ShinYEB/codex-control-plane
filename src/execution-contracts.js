@@ -5,17 +5,28 @@ export const RUN_AUTHORIZATION = "[RUN AUTHORIZATION] The user's Control Plane r
 export const TASK_KINDS = ["analysis", "implementation", "test", "review", "integration", "release"];
 export const SIDE_EFFECT_POLICIES = ["none", "local-runtime", "workspace", "external", "destructive"];
 export const RUN_AUTHORIZATION_SCOPES = ["parent_run"];
-export const EXECUTION_CONTRACT_VERSION = 1;
+export const EXECUTION_CONTRACT_VERSION = 2;
 export const SANDBOXES = ["read-only", "workspace-write", "danger-full-access"];
 export const APPROVAL_POLICIES = ["never", "on-request", "on-failure", "untrusted"];
 export const WORKSPACE_MODES = ["shared", "worktree"];
 export const INTEGRATION_STRATEGIES = ["none", "patch", "commit"];
+export const EXECUTION_CAPABILITIES = Object.freeze([
+  "process-execution",
+  "temporary-filesystem-write",
+  "localhost-connect",
+  "localhost-listen",
+  "external-network",
+  "browser-inspection",
+  "workspace-write",
+  "git-integration",
+]);
 export const MUTATING_TASK_KINDS = new Set(["implementation", "test", "integration", "release"]);
 const SANDBOX_LEVEL = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 };
 const CONTRACT_FIELDS = new Set([
   "version", "taskKind", "mutatesWorkspace", "requiredSandbox", "sandbox", "networkAccess",
   "approvalPolicy", "authorizationScope", "sideEffectPolicy", "idempotencyKey", "workspaceMode",
   "baseRef", "integrationStrategy", "outputs", "tools", "roleTemplate", "fingerprint",
+  "executionCapabilities",
 ]);
 const ALWAYS_MUTATING_TASK_KINDS = new Set(["implementation", "integration", "release"]);
 const NEVER_MUTATING_TASK_KINDS = new Set(["analysis", "review"]);
@@ -32,6 +43,12 @@ function assertStringArray(value, name) {
   if (!Array.isArray(value)) throw contractError(`${name} must be an array`);
   if (value.some((entry) => typeof entry !== "string" || !entry.trim())) throw contractError(`${name} must contain non-empty strings`);
   return value;
+}
+
+function assertUniqueStringArray(value, name) {
+  const entries = assertStringArray(value, name);
+  if (new Set(entries).size !== entries.length) throw contractError(`${name} must not contain duplicates`);
+  return entries;
 }
 
 function assertSupported(value, supported, label, code = "EXECUTION_CONTRACT_INVALID") {
@@ -70,11 +87,36 @@ function validateExecutionContract(contract, options = {}) {
   assertSupported(contract.integrationStrategy, INTEGRATION_STRATEGIES, "integration strategy");
   assertStringArray(contract.outputs, "outputs");
   assertStringArray(contract.tools, "tools");
+  const executionCapabilities = assertUniqueStringArray(contract.executionCapabilities, "executionCapabilities");
+  for (const capability of executionCapabilities) assertSupported(capability, EXECUTION_CAPABILITIES, "execution capability");
+  const capabilitySet = new Set(executionCapabilities);
   if (contract.baseRef !== null && typeof contract.baseRef !== "string") throw contractError("baseRef must be a string or null");
   if (contract.idempotencyKey !== null && typeof contract.idempotencyKey !== "string") throw contractError("idempotencyKey must be a string or null");
   if (contract.roleTemplate !== null && typeof contract.roleTemplate !== "string") throw contractError("roleTemplate must be a string or null");
   if (contract.networkAccess && contract.sandbox === "read-only") {
     throw contractError("Execution contract requests network access in a read-only sandbox", "EXECUTION_CONTRACT_NETWORK_SANDBOX");
+  }
+  if (contract.networkAccess !== capabilitySet.has("external-network")) {
+    throw contractError("networkAccess must match the external-network execution capability", "EXECUTION_CONTRACT_CAPABILITY_MISMATCH");
+  }
+  if (contract.mutatesWorkspace !== capabilitySet.has("workspace-write")) {
+    throw contractError("mutatesWorkspace must match the workspace-write execution capability", "EXECUTION_CONTRACT_CAPABILITY_MISMATCH");
+  }
+  if (contract.integrationStrategy !== "none" && !capabilitySet.has("git-integration")) {
+    throw contractError("Artifact integration requires the git-integration execution capability", "EXECUTION_CONTRACT_CAPABILITY_MISMATCH");
+  }
+  if (contract.integrationStrategy === "none" && capabilitySet.has("git-integration")) {
+    throw contractError("git-integration requires an artifact integration strategy", "EXECUTION_CONTRACT_CAPABILITY_MISMATCH");
+  }
+  if (capabilitySet.has("localhost-listen") && !capabilitySet.has("process-execution")) {
+    throw contractError("localhost-listen requires process-execution", "EXECUTION_CONTRACT_CAPABILITY_MISMATCH");
+  }
+  const needsWritableRuntime = ["temporary-filesystem-write", "localhost-listen"].some((capability) => capabilitySet.has(capability));
+  if (needsWritableRuntime && contract.sandbox === "read-only") {
+    throw contractError("Temporary filesystem writes and localhost listeners require a writable runtime sandbox", "EXECUTION_CONTRACT_INSUFFICIENT_RUNTIME_SANDBOX");
+  }
+  if (capabilitySet.has("browser-inspection") && !contract.tools.some((tool) => ["browser", "computer-use", "chrome"].includes(tool))) {
+    throw contractError("browser-inspection requires a browser-capable tool", "EXECUTION_CONTRACT_MISSING_TOOL");
   }
   if (["external", "destructive"].includes(contract.sideEffectPolicy)) {
     throw contractError("Execution contract requires a separate user-authorized external action", "EXECUTION_CONTRACT_EXTERNAL_ACTION");
@@ -102,6 +144,22 @@ function validateExecutionContract(contract, options = {}) {
 
 function words(value) {
   return String(value ?? "").toLowerCase();
+}
+
+export function acceptanceCapabilityRequirements(task = {}) {
+  const criteria = assertStringArray(task.acceptanceCriteria ?? [], "acceptanceCriteria").join("\n").toLowerCase();
+  const required = new Set();
+  if (/\b(browser|viewport|render(?:ing)?|screenshot|visual regression|responsive)\b|브라우저|뷰포트|렌더링|스크린샷|시각\s*회귀|반응형/.test(criteria)) {
+    required.add("browser-inspection");
+  }
+  if (/\b(localhost|127\.0\.0\.1|listen(?:er|ing)?|local server|unix socket)\b|로컬\s*(?:서버|소켓)|리스너/.test(criteria)) {
+    required.add("process-execution");
+    required.add("localhost-listen");
+  }
+  if (/\b(temp(?:orary)? (?:file|directory)|mkdtemp|tmpdir)\b|임시\s*(?:파일|디렉터리)/.test(criteria)) {
+    required.add("temporary-filesystem-write");
+  }
+  return [...required].sort();
 }
 
 /** Compatibility inference for callers that have not migrated to taskKind yet. */
@@ -132,7 +190,23 @@ export function compileExecutionContract(task = {}, defaults = {}, roleTemplate 
   const taskKind = inferTaskKind(task);
   assertOptionalBoolean(task.mutatesWorkspace, "mutatesWorkspace");
   const mutatesWorkspace = task.mutatesWorkspace ?? MUTATING_TASK_KINDS.has(taskKind);
-  const requiredSandbox = task.requiredSandbox ?? (mutatesWorkspace ? "workspace-write" : "read-only");
+  const requestedExecutionCapabilities = task.executionCapabilities === undefined
+    ? null
+    : assertUniqueStringArray(task.executionCapabilities, "executionCapabilities");
+  const inferredCapabilities = new Set(requestedExecutionCapabilities ?? []);
+  for (const capability of acceptanceCapabilityRequirements(task)) inferredCapabilities.add(capability);
+  if (mutatesWorkspace) inferredCapabilities.add("workspace-write");
+  if (task.networkAccess ?? defaults.networkAccess ?? false) inferredCapabilities.add("external-network");
+  if (taskKind === "test") {
+    inferredCapabilities.add("process-execution");
+    inferredCapabilities.add("temporary-filesystem-write");
+  }
+  if (requestedTools.some((tool) => ["shell", "node", "npm", "pnpm", "yarn"].includes(tool))) inferredCapabilities.add("process-execution");
+  if (requestedTools.some((tool) => ["browser", "computer-use", "chrome"].includes(tool))) inferredCapabilities.add("browser-inspection");
+  if ((task.integrationStrategy ?? "none") !== "none") inferredCapabilities.add("git-integration");
+  for (const capability of inferredCapabilities) assertSupported(capability, EXECUTION_CAPABILITIES, "execution capability");
+  const runtimeNeedsWrite = ["temporary-filesystem-write", "localhost-listen"].some((capability) => inferredCapabilities.has(capability));
+  const requiredSandbox = task.requiredSandbox ?? (mutatesWorkspace || runtimeNeedsWrite ? "workspace-write" : "read-only");
   assertSupported(requiredSandbox, SANDBOXES, "required sandbox");
   const sandbox = task.sandbox ?? defaults.sandbox ?? requiredSandbox;
   assertSupported(sandbox, SANDBOXES, "sandbox");
@@ -157,6 +231,7 @@ export function compileExecutionContract(task = {}, defaults = {}, roleTemplate 
   const approvalPolicy = task.approvalPolicy ?? defaults.approvalPolicy ?? "never";
   assertSupported(approvalPolicy, APPROVAL_POLICIES, "approval policy");
   const outputs = [...assertStringArray(task.outputs ?? (mutatesWorkspace ? ["workspace-change"] : ["report"]), "outputs")];
+  if (integrationStrategy !== "none") inferredCapabilities.add("git-integration");
   const contract = {
     version: EXECUTION_CONTRACT_VERSION,
     taskKind,
@@ -173,6 +248,7 @@ export function compileExecutionContract(task = {}, defaults = {}, roleTemplate 
     integrationStrategy,
     outputs,
     tools,
+    executionCapabilities: [...inferredCapabilities].sort(),
     roleTemplate: roleTemplate.name ?? null,
   };
   validateExecutionContract(contract);

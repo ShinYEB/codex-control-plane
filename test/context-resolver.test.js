@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -11,6 +11,7 @@ function activate(registry, overrides) {
   const claim = registry.createContextClaim({
     id: overrides.id, kind: overrides.kind ?? "decision", subject: overrides.subject,
     body: overrides.body, scope: overrides.scope ?? "global",
+    projectId: overrides.projectId ?? null,
     authority: overrides.authority ?? "user_explicit", status: "candidate",
   });
   registry.addContextClaimSource(claim.id, { kind: "user_turn", id: `source_${claim.id}` });
@@ -54,6 +55,49 @@ test("equal-authority contract conflict creates an invalid terminal snapshot", (
     assert.equal(snapshot.conflicts[0].category, "contract");
     assert.equal(snapshot.conflicts[0].blocking, true);
     assert.equal(snapshot.error.nextAction.length > 0, true);
+  } finally {
+    registry.close();
+  }
+});
+
+test("a lower-authority repository contract cannot execute against an explicit user decision", () => {
+  const directory = mkdtempSync(join(tmpdir(), "product-contract-conflict-"));
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    writeFileSync(join(directory, "control-plane.contracts.json"), JSON.stringify({
+      version: 1,
+      claims: [{ id: "start_v1", kind: "decision", subject: "run_start_policy", body: "Runs start automatically." }],
+    }));
+    const project = registry.resolveProject(directory);
+    activate(registry, {
+      id: "explicit_start",
+      projectId: project.id,
+      scope: "project",
+      subject: "run_start_policy",
+      body: "Runs start only after an explicit user action.",
+    });
+    assert.throws(
+      () => new ContextResolver(registry).resolve({ objective: "Modify scheduler", cwd: directory }),
+      (error) => error.code === "CONTEXT_SNAPSHOT_INVALID" && error.causeCode === "unresolved_context_conflict",
+    );
+    const snapshot = registry.listContextSnapshots()[0];
+    assert.equal(snapshot.conflicts[0].blocking, true);
+    assert.equal(snapshot.conflicts[0].claimIds.length, 2);
+  } finally {
+    registry.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("new active claims invalidate the context resolution cache", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    const resolver = new ContextResolver(registry);
+    const first = resolver.resolve({ objective: "Inspect API" });
+    activate(registry, { id: "new_contract", subject: "api-contract", body: "Use API v2" });
+    const second = resolver.resolve({ objective: "Inspect API" });
+    assert.notEqual(second.id, first.id);
+    assert.ok(second.metadata.selectedClaimIds.includes("new_contract"));
   } finally {
     registry.close();
   }
@@ -143,7 +187,16 @@ test("a building snapshot resumes deterministically after registry reopen withou
   try {
     const objective = "Analyze restart safety";
     const objectiveHash = contextSnapshotHash(objective);
-    const requestedScope = { projectId: null, cwd: null, requiredSubjects: [], excludedClaimIds: [], requestedThreads: [], maxContextBudget: 12_000 };
+    const requestedScope = {
+      projectId: null,
+      cwd: null,
+      requiredSubjects: [],
+      excludedClaimIds: [],
+      requestedThreads: [],
+      maxContextBudget: 12_000,
+      productContractFingerprint: null,
+      claimCatalogFingerprint: contextSnapshotHash([]),
+    };
     const requestedScopeHash = contextSnapshotHash(requestedScope);
     const resolutionKey = contextSnapshotHash({ objectiveHash, requestedScopeHash, resolverVersion: CONTEXT_RESOLVER_VERSION, revision: 1 });
     const first = new ControlRegistry({ path });
