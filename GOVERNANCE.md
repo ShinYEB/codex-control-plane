@@ -4,6 +4,8 @@
 
 The `main` branch of `github.com/ruvora/ruvora` is the source of truth for code, contracts, documentation, and releases.
 
+English is the authoritative project language. The future `github.com/ruvora/ruvora-ko` repository will be a Korean localization of completed RUVORA releases, not an independent code or design fork. Its release commits must identify the exact upstream RUVORA commit they translate.
+
 ## Roles
 
 - Maintainers set project direction, review contracts, manage releases, and hold merge authority.

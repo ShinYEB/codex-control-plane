@@ -1,65 +1,62 @@
-# 설계 문서 인덱스
+# Design documentation index
 
-이 디렉터리는 RUVORA `0.14.0`의 **현재 구현(as-is)** 을 설명하는 설계 기준선이다. 문서가 아직 구현하지 않은 목표를 설명할 때는 반드시 `제안` 또는 `점검 필요`라고 표시한다.
+This directory is the design baseline for the **current implementation** of RUVORA `0.14.0`. Behavior that is not implemented must be marked explicitly as `Proposed` or `Needs review`.
 
-## 읽는 순서
+## Suggested reading order
 
-1. [PRODUCT_DIRECTION.md](./PRODUCT_DIRECTION.md) — 프로젝트 시작 이유, 제품 정의, 현재 방향과 목표 구조
-2. [ARCHITECTURE.md](./ARCHITECTURE.md) — 시스템 경계, 세 Plane의 책임, 핵심 불변조건
-3. [TERMINOLOGY.md](./TERMINOLOGY.md) — 스레드, 세션, Run, Task 등 표준 용어
-4. [adr/ADR-001-CONTEXT-SOURCE-OF-TRUTH.md](./adr/ADR-001-CONTEXT-SOURCE-OF-TRUTH.md) — 맥락의 정본과 provenance
-5. [adr/ADR-002-GLOBAL-RUN-HIERARCHY.md](./adr/ADR-002-GLOBAL-RUN-HIERARCHY.md) — 다중 프로젝트 실행 계층
-6. [adr/ADR-003-THREAD-LIFECYCLE.md](./adr/ADR-003-THREAD-LIFECYCLE.md) — 스레드 생성·재사용·압축·보관 정책
-7. [adr/ADR-004-RESULT-AUTHORITY.md](./adr/ADR-004-RESULT-AUTHORITY.md) — Orchestrator, Synthesizer와 사용자-visible 결과 정본
-8. [adr/ADR-005-AUTOMATIC-RUN-START.md](./adr/ADR-005-AUTOMATIC-RUN-START.md) — 사용자 요청 1회 승인과 graph 검증 후 자동 시작
-9. [adr/ADR-007-DURABLE-TURN-DISPATCH.md](./adr/ADR-007-DURABLE-TURN-DISPATCH.md) — 스레드 확보·명령 제출·복구를 하나로 묶는 결정
-10. [adr/ADR-008-EVIDENCE-BASED-COMPLETION.md](./adr/ADR-008-EVIDENCE-BASED-COMPLETION.md) — Agent 문구가 아닌 실행 증거로 성공을 판정하는 결정
-11. [contracts/EXECUTION_FLOW_CONTRACT.md](./contracts/EXECUTION_FLOW_CONTRACT.md) — 요청부터 결과 접근까지 단계별 gate와 evidence 매트릭스
-12. [contracts/TURN_DISPATCH.md](./contracts/TURN_DISPATCH.md) — TurnDispatch 상태, 영속 필드, 취소·재시작 판정
-13. [contracts/COMPLETION_GATE.md](./contracts/COMPLETION_GATE.md) — Turn·명령·output·workspace·validation·integration 증거의 단일 완료 판정
-14. [contracts/CONTEXT_RESOLUTION.md](./contracts/CONTEXT_RESOLUTION.md) — 지식 수집, authority, 충돌과 Context Snapshot
-15. [contracts/CONTRACT_AUTHORITY.md](./contracts/CONTRACT_AUTHORITY.md) — 제품 계약 manifest, 권위, revision과 실행 전 충돌 차단
-16. [contracts/GLOBAL_RUNS.md](./contracts/GLOBAL_RUNS.md) — Global Run 상태, 권한, 프로젝트 간 dependency
-17. [contracts/TARGET_PERSISTENCE.md](./contracts/TARGET_PERSISTENCE.md) — 목표 schema, 원자성, migration과 호환성
-18. [contracts/STATE_MACHINES.md](./contracts/STATE_MACHINES.md) — 현재 Run, Task, Agent, Lease의 상태와 전이
-19. [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md) — 권한, sandbox, workspace, 부작용 계약
-20. [contracts/PERSISTENCE.md](./contracts/PERSISTENCE.md) — 현재 SQLite 소유권, 원자성, 멱등성, 저장 모델
-21. [contracts/RESULT_DELIVERY.md](./contracts/RESULT_DELIVERY.md) — 결과 projection, 알림과 작업 스레드 접근
-22. [operations/FAILURE_RECOVERY.md](./operations/FAILURE_RECOVERY.md) — 실패 분류, 재시도, 재시작 복구, worktree 복구
-23. [operations/RUNTIME_LIFECYCLE.md](./operations/RUNTIME_LIFECYCLE.md) — 런타임 identity, 데몬 handover, 배포·재설치
-24. [STABILIZATION_GATE.md](./STABILIZATION_GATE.md) — 1~8단계 안정화의 최종 E2E 검증 근거
-25. [GLOBAL_ORCHESTRATION_GATE.md](./GLOBAL_ORCHESTRATION_GATE.md) — 새 설계의 구현 순서와 최종 E2E 게이트
-26. [G7_E2E_EVIDENCE.md](./G7_E2E_EVIDENCE.md) — 최종 12개 시나리오의 자동 검증 evidence
-27. [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) — 현재 설계에서 다음 점검 때 결정해야 할 항목
+1. [Product Direction](./PRODUCT_DIRECTION.md) — origin, product definition, current direction, and target structure
+2. [Architecture](./ARCHITECTURE.md) — system boundaries, three-plane ownership, and core invariants
+3. [Terminology](./TERMINOLOGY.md) — canonical terms for threads, sessions, Runs, and Tasks
+4. [ADR-001](./adr/ADR-001-CONTEXT-SOURCE-OF-TRUTH.md) — context authority and provenance
+5. [ADR-002](./adr/ADR-002-GLOBAL-RUN-HIERARCHY.md) — multi-project execution hierarchy
+6. [ADR-003](./adr/ADR-003-THREAD-LIFECYCLE.md) — thread creation, reuse, compaction, and archive policy
+7. [ADR-004](./adr/ADR-004-RESULT-AUTHORITY.md) — Orchestrator, Synthesizer, and visible result authority
+8. [ADR-005](./adr/ADR-005-AUTOMATIC-RUN-START.md) — one user authorization and automatic start after graph validation
+9. [ADR-007](./adr/ADR-007-DURABLE-TURN-DISPATCH.md) — durable thread acquisition, command submission, and recovery
+10. [ADR-008](./adr/ADR-008-EVIDENCE-BASED-COMPLETION.md) — success based on execution evidence rather than Agent prose
+11. [Execution Flow](./contracts/EXECUTION_FLOW_CONTRACT.md) — stage gates and evidence from request to result access
+12. [Turn Dispatch](./contracts/TURN_DISPATCH.md) — TurnDispatch state, durable fields, cancellation, and restart decisions
+13. [Completion Gate](./contracts/COMPLETION_GATE.md) — one decision over Turn, command, output, workspace, validation, and integration evidence
+14. [Context Resolution](./contracts/CONTEXT_RESOLUTION.md) — knowledge collection, authority, conflicts, and snapshots
+15. [Contract Authority](./contracts/CONTRACT_AUTHORITY.md) — manifests, authority, revisions, and pre-execution conflict rejection
+16. [Global Runs](./contracts/GLOBAL_RUNS.md) — Global Run state, authority, and cross-project dependencies
+17. [Target Persistence](./contracts/TARGET_PERSISTENCE.md) — goal schemas, atomicity, migration, and compatibility
+18. [State Machines](./contracts/STATE_MACHINES.md) — Run, Task, Agent, and Lease states and transitions
+19. [Execution Contract](./contracts/EXECUTION_CONTRACT.md) — authority, sandbox, workspace, and side-effect contracts
+20. [Persistence](./contracts/PERSISTENCE.md) — SQLite ownership, atomicity, idempotency, and storage model
+21. [Result Delivery](./contracts/RESULT_DELIVERY.md) — result projection, notifications, and work-thread access
+22. [Failure Recovery](./operations/FAILURE_RECOVERY.md) — failure classes, retry, restart recovery, and worktree recovery
+23. [Runtime Lifecycle](./operations/RUNTIME_LIFECYCLE.md) — runtime identity, daemon handover, deployment, and reinstall
+24. [Stabilization Gate](./STABILIZATION_GATE.md) — final E2E evidence for stabilization stages 1–8
+25. [Global Orchestration Gate](./GLOBAL_ORCHESTRATION_GATE.md) — implementation order and final E2E gate
+26. [G7 E2E Evidence](./G7_E2E_EVIDENCE.md) — automated evidence for the final twelve scenarios
+27. [Review Checklist](./REVIEW_CHECKLIST.md) — decisions required at the next design review
 
-## 문서의 권위와 변경 규칙
+## Authority and change rules
 
-- 이 문서는 현재 동작을 사람이 검토할 수 있게 정리한 기준선이다.
-- 코드와 문서가 다르면 코드가 현재 동작의 증거이지만, 차이는 결함으로 기록하고 어느 쪽이 맞는지 결정해야 한다.
-- 권한이나 상태 전이를 바꾸는 변경은 관련 계약 문서와 테스트를 같은 변경에서 수정해야 한다.
-- 호환성 필드는 문서에서 표준 용어로 설명하되, 저장 데이터와 공개 API의 기존 이름은 임의로 변경하지 않는다.
-- `README.md`는 제품 소개와 사용법을 담당하고, 세부 설계의 정본은 이 디렉터리에 둔다.
-- 제품 목적과 우선순위 판단의 정본은 `PRODUCT_DIRECTION.md`이며, 채택된 설계 결정은 `adr/`에 둔다.
+- These documents provide a human-reviewable baseline for current behavior.
+- Code is evidence of current behavior when code and documentation disagree, but the discrepancy is a defect that must be resolved explicitly.
+- Changes to authority or state transitions must update the relevant contract document and tests in the same change.
+- Compatibility fields use canonical terms in prose; persisted and public API names are not renamed casually.
+- The root `README.md` owns product introduction and usage. This directory owns detailed design.
+- `PRODUCT_DIRECTION.md` is authoritative for product purpose and priorities. Accepted decisions live under `adr/`.
 
-## 구현 추적 기준
+## Implementation traceability
 
-| 설계 영역 | 주요 구현 | 주요 검증 |
+| Design area | Primary implementation | Primary verification |
 |---|---|---|
-| 요청 접수와 그래프 준비 | `src/mcp-server.js`, `src/planner-engine.js` | `test/mcp-server.test.js`, `test/planner-engine.test.js` |
-| 실행 계약 | `src/execution-contracts.js` | `test/execution-contracts.test.js` |
-| 상태와 원자적 claim | `src/registry.js`, `src/run-controller.js` | `test/registry.test.js`, `test/run-controller.test.js` |
-| 라우팅과 agent lease | `src/router.js`, `src/mcp-server.js` | `test/registry.test.js`, `test/mcp-server.test.js` |
-| Durable Turn Dispatch | `src/turn-dispatcher.js`, `src/domain-states.js`, `src/registry.js` schema v8 | `test/turn-dispatcher.test.js`, migration·MCP·dashboard tests |
-| 검증 | `src/result-validator.js` | `test/result-validator.test.js` |
-| Completion Gate | `src/completion-evaluator.js`, final Turn hydration, 정상·복구 공통 verdict, integration postcondition | `test/completion-evaluator.test.js`, App Server 누락 event, 빈 diff, restart integration, synthesis mismatch tests |
-| worktree와 통합 | `src/worktree-manager.js` | `test/worktree-manager.test.js` |
-| 결과 접근과 알림 | `src/dashboard-model.js`, `src/mcp-server.js`, `src/notification-policy.js` | `test/dashboard-model.test.js`, `test/mcp-server.test.js`, `test/notification-policy.test.js` |
-| 데몬과 generation | `src/daemon.js`, `src/daemon-client.js`, `src/build-info.js` | `test/daemon.test.js`, `test/reinstall-preflight.test.js` |
-| Project identity와 legacy claim migration | `src/project-identity.js`, `src/registry.js` schema v2 | `test/project-identity.test.js`, `test/registry.test.js` migration/project tests |
-| Claim·ThreadKnowledge·routing evidence | `src/context-claims.js`, `src/context-manager.js`, `src/registry.js`, `src/router.js` | `test/context-claims.test.js`, `test/context-manager.test.js`, routing tests |
-| Context Resolution | G3 완료: immutable snapshot, 과거 thread digest, conflict/fingerprint gate, Planner·Task·dashboard 연동 | `src/context-resolver.js`, `src/thread-knowledge-indexer.js` |
-| Global Run core | G4 완료: 중앙 상태, 원자적 Project Run graph, dependency release/집계, 취소·claim fencing, 재시작 복구, MCP/dashboard projection | `src/global-runs.js`, `src/domain-states.js`, `src/registry.js`, `test/global-runs.test.js` |
-| Cross-project handoff와 권한 ceiling | G5 완료: schema v6 project manifest, handoff evidence/content hash/receipt, consumer claim fencing과 재시작 멱등 복구 | `src/global-runs.js`, `src/registry.js`, `test/global-runs.test.js`, `test/mcp-server.test.js` |
-| Thread lifecycle | G6 완료: schema v7 lifecycle projection, versioned budget, wait/ephemeral routing, compact/archive fencing과 dashboard 진단 | `src/thread-lifecycle.js`, `src/registry.js`, `src/router.js`, `test/thread-lifecycle.test.js` |
+| Request intake and graph preparation | `src/mcp-server.js`, `src/planner-engine.js` | MCP and Planner tests |
+| Execution contracts | `src/execution-contracts.js` | execution-contract tests |
+| State and atomic claims | `src/registry.js`, `src/run-controller.js` | Registry and Run Controller tests |
+| Routing and Agent leases | `src/router.js`, `src/mcp-server.js` | routing, Registry, and MCP tests |
+| Durable Turn Dispatch | Turn dispatcher, domain states, Registry schema v8 | dispatch, migration, MCP, and dashboard tests |
+| Validation and completion | result validator and completion evaluator | validation, evidence, and integration tests |
+| Worktrees and integration | `src/worktree-manager.js` | worktree and recovery tests |
+| Result access and notification | dashboard model, MCP server, notification policy | dashboard, MCP, and notification tests |
+| Daemon and runtime generation | daemon, client, and build identity | daemon and reinstall-preflight tests |
+| Context Resolution | context claims, snapshots, resolver, and thread knowledge | context and routing tests |
+| Global Run core | global state, project graph, dependencies, cancellation, recovery | global-run and MCP tests |
+| Cross-project handoff | authorization manifests, evidence hashes, and receipts | global-run, Registry, and MCP tests |
+| Thread lifecycle | lifecycle projection, versioned budgets, routing, archive fencing | lifecycle and routing tests |
 
-추적 대상이 없거나 구현과 문서가 어긋나는 항목은 [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md)에 남긴다.
+Record untraced or inconsistent behavior in [Review Checklist](./REVIEW_CHECKLIST.md).
