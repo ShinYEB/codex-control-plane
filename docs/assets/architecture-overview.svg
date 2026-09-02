@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
-  <title id="title">Codex Agent Control Plane architecture</title>
+  <title id="title">RUVORA architecture</title>
   <desc id="desc">A user objective flows through context resolution, planning, execution contracts, task orchestration, Codex worker threads, validation, integration, and a durable work navigator.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
@@ -31,16 +31,16 @@
   </defs>
 
   <rect width="1200" height="690" rx="24" fill="url(#background)"/>
-  <text x="56" y="58" class="title">Codex Agent Control Plane</text>
-  <text x="56" y="84" class="subtitle">맥락을 고정하고, 계약을 검증한 뒤, 여러 프로젝트의 Codex 작업을 하나의 결과로 조정합니다.</text>
+  <text x="56" y="58" class="title">RUVORA</text>
+  <text x="56" y="84" class="subtitle">Freeze context, validate contracts, and coordinate Codex work across projects into one result.</text>
 
   <text x="56" y="129" class="section">CONTROL SURFACE</text>
   <rect x="56" y="147" width="230" height="94" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
   <circle cx="88" cy="179" r="14" fill="#dbeafe"/>
   <path d="M81 179h14M88 172v14" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/>
   <text x="112" y="177" class="label">User Objective</text>
-  <text x="112" y="201" class="body">Codex 대화 · CLI</text>
-  <text x="112" y="220" class="body">단일 또는 다중 프로젝트 목표</text>
+  <text x="112" y="201" class="body">Codex conversations · CLI</text>
+  <text x="112" y="220" class="body">Single or multi-project goals</text>
 
   <rect x="56" y="267" width="230" height="82" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
   <text x="82" y="300" class="label">Thin MCP Proxy</text>

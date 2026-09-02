@@ -1,0 +1,25 @@
+name: Feature request
+description: Propose a scoped capability or improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the user problem independently of a proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+    validations:
+      required: true
+  - type: textarea
+    id: contract
+    attributes:
+      label: Contract and safety impact
+      description: Note any effect on authority, state, retry, recovery, integration, or compatibility.
+    validations:
+      required: true

@@ -1,10 +1,13 @@
 {
-  "name": "codex-control-plane",
+  "name": "ruvora",
   "version": "0.14.0",
   "private": true,
   "type": "module",
-  "description": "Durable context-aware control plane for Codex App Server agents",
+  "description": "A control plane for complex Codex work",
   "bin": {
+    "ruvora": "./src/cli.js",
+    "ruvora-mcp": "./src/mcp-proxy.js",
+    "ruvorad": "./src/daemon.js",
     "codex-control": "./src/cli.js",
     "codex-control-mcp": "./src/mcp-proxy.js",
     "codex-control-daemon": "./src/daemon.js"
@@ -20,6 +23,14 @@
     "reinstall:preflight": "node scripts/prepare-reinstall.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ruvora/ruvora.git"
+  },
+  "homepage": "https://github.com/ruvora/ruvora#readme",
+  "bugs": {
+    "url": "https://github.com/ruvora/ruvora/issues"
   }
 }

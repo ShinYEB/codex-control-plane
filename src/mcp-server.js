@@ -3058,7 +3058,7 @@ export class McpControlServer {
       this.#storeAgent(agent, shouldAutoRegister ? {
         role: "general",
         capabilities: existing?.capabilities ?? [],
-        summary: existing?.summary ?? "Codex Agent Control Plane 플러그인이 자동으로 등록한 기존 스레드입니다.",
+        summary: existing?.summary ?? "RUVORA 플러그인이 자동으로 등록한 기존 스레드입니다.",
         metadata: {
           autoRegistered: true,
           contextUpdatedAt: new Date().toISOString(),
