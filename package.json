@@ -23,7 +23,7 @@
     "reinstall:preflight": "node scripts/prepare-reinstall.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "repository": {
     "type": "git",

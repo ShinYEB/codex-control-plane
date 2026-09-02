@@ -166,7 +166,7 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 
 ## 로컬 소스에서 실행
 
-요구 사항은 Node.js 20 이상과 로그인된 Codex CLI입니다. 외부 npm runtime dependency는 없습니다.
+요구 사항은 Node.js 22 이상과 로그인된 Codex CLI입니다. 외부 npm runtime dependency는 없습니다.
 
 ```bash
 git clone https://github.com/ruvora/ruvora.git
@@ -227,7 +227,7 @@ ruvora fork THREAD_ID --ephemeral
 | 최종 E2E | 12개 시나리오 통과 |
 | 전체 테스트 | 260/260 통과 |
 | Completion Gate | 핵심 구현 및 회귀 테스트 완료 |
-| Runtime | Node.js ≥20, 외부 npm dependency 없음 |
+| Runtime | Node.js ≥22, 외부 npm dependency 없음 |
 
 릴리스 판정은 특정 테스트 파일이 아니라 전체 suite를 대상으로 합니다.
 

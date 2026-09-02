@@ -13,7 +13,7 @@ Thank you for helping improve RUVORA.
 
 Requirements:
 
-- Node.js 20 or later
+- Node.js 22 or later
 - pnpm 10
 
 ```bash
