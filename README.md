@@ -1,6 +1,6 @@
-# Codex Agent Control Plane
+# RUVORA
 
-> 여러 프로젝트와 Codex 스레드에 흩어진 맥락을 근거와 함께 고정하고, 하나의 목표로 안전하게 실행하는 로컬 영속 오케스트레이션 계층입니다.
+> 복잡한 Codex 작업을 위한 로컬 영속 제어 계층입니다.
 
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?logo=nodedotjs&logoColor=white)](./package.json)
 [![Version](https://img.shields.io/badge/version-0.14.0-2563eb)](./package.json)
@@ -24,7 +24,7 @@ Codex를 오래 사용할수록 스레드는 늘어나지만, 중요한 결정�
 
 ### Codex Desktop에서 요청하기
 
-이 저장소의 runtime을 Codex Agent Control Plane 플러그인으로 배포한 경우, **도구 이름을 직접 지정하지 않고 자연어로 요청하는 방식**이 기본입니다.
+이 저장소의 runtime을 RUVORA 플러그인으로 배포한 경우, **도구 이름을 직접 지정하지 않고 자연어로 요청하는 방식**이 기본입니다.
 
 1. 플러그인을 처음 설치하거나 runtime을 갱신했다면 Codex Desktop에서 새 대화를 엽니다.
 2. 대상 프로젝트에서 `/mcp`를 열어 `codex_control_plane` 연결을 확인합니다.
@@ -75,7 +75,7 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 
 ## 아키텍처
 
-![Codex Agent Control Plane 전체 아키텍처. 사용자 목표가 MCP 프록시, 단일 데몬, Codex Agent 스레드와 프로젝트 작업공간을 거쳐 검증된 결과로 돌아오는 구조](./docs/assets/architecture-overview.svg)
+![RUVORA 전체 아키텍처. 사용자 목표가 MCP 프록시, 단일 데몬, Codex Agent 스레드와 프로젝트 작업공간을 거쳐 검증된 결과로 돌아오는 구조](./docs/assets/architecture-overview.svg)
 
 ### 세 Plane의 책임
 
@@ -169,18 +169,19 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 요구 사항은 Node.js 20 이상과 로그인된 Codex CLI입니다. 외부 npm runtime dependency는 없습니다.
 
 ```bash
-git clone https://github.com/ShinYEB/codex-control-plane.git
-cd codex-control-plane
+git clone https://github.com/ruvora/ruvora.git
+cd ruvora
 node --test
 ```
 
-테스트 후 CLI로 현재 프로젝트의 스레드를 조회하거나 새 작업을 시작할 수 있습니다. 모든 명령은 단일 로컬 daemon으로 전달되고 결과는 JSON으로 출력됩니다.
+테스트 후 CLI를 연결하면 현재 프로젝트의 스레드를 조회하거나 새 작업을 시작할 수 있습니다. 모든 명령은 단일 로컬 daemon으로 전달되고 결과는 JSON으로 출력됩니다.
 
 ```bash
 PROJECT_ROOT=/absolute/path/to/project
+pnpm link --global
 
-node src/cli.js list --cwd "$PROJECT_ROOT"
-node src/cli.js ask \
+ruvora list --cwd "$PROJECT_ROOT"
+ruvora ask \
   --cwd "$PROJECT_ROOT" \
   --prompt "이 프로젝트의 구조와 주요 위험을 분석해줘"
 ```
@@ -188,7 +189,7 @@ node src/cli.js ask \
 쓰기 작업은 sandbox를 명시합니다.
 
 ```bash
-node src/cli.js ask \
+ruvora ask \
   --cwd "$PROJECT_ROOT" \
   --sandbox workspace-write \
   --prompt "실패하는 테스트를 고치고 다시 실행해줘"
@@ -197,18 +198,20 @@ node src/cli.js ask \
 기존 스레드 재개와 fork:
 
 ```bash
-node src/cli.js resume THREAD_ID
-node src/cli.js run THREAD_ID --prompt "앞선 분석을 이어서 테스트 전략을 제안해줘"
-node src/cli.js fork THREAD_ID
+ruvora resume THREAD_ID
+ruvora run THREAD_ID --prompt "앞선 분석을 이어서 테스트 전략을 제안해줘"
+ruvora fork THREAD_ID
 ```
 
 일회성 스레드와 명시적 Agent 생성:
 
 ```bash
-node src/cli.js start --cwd "$PROJECT_ROOT"
-node src/cli.js start --cwd "$PROJECT_ROOT" --ephemeral
-node src/cli.js fork THREAD_ID --ephemeral
+ruvora start --cwd "$PROJECT_ROOT"
+ruvora start --cwd "$PROJECT_ROOT" --ephemeral
+ruvora fork THREAD_ID --ephemeral
 ```
+
+`codex-control`, `codex-control-mcp`, `codex-control-daemon` 명령과 `codex_control_plane` MCP 서비스 이름은 기존 설치 호환성을 위해 `0.14.x`에서 유지됩니다. 새 설치와 문서에서는 RUVORA 명칭을 사용합니다.
 
 이 공개 저장소는 Control Plane runtime 소스입니다. Codex Desktop 플러그인 패키징·배포 시에는 실행 중인 작업과 runtime generation을 먼저 확인해야 합니다. 절차는 [Runtime lifecycle](./docs/operations/RUNTIME_LIFECYCLE.md)을 따르며, 재설치 후에는 새 대화를 열어야 새 MCP generation이 적용됩니다.
 

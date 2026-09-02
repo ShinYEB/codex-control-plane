@@ -26,12 +26,12 @@ function usage() {
   return `Codex Control Plane
 
 Usage:
-  codex-control list [--cwd PATH] [--limit N]
-  codex-control start [--cwd PATH] [--sandbox MODE] [--model MODEL] [--ephemeral]
-  codex-control resume THREAD_ID
-  codex-control fork THREAD_ID [--ephemeral]
-  codex-control run THREAD_ID --prompt TEXT [--cwd PATH]
-  codex-control ask --prompt TEXT [--cwd PATH] [--sandbox MODE]
+  ruvora list [--cwd PATH] [--limit N]
+  ruvora start [--cwd PATH] [--sandbox MODE] [--model MODEL] [--ephemeral]
+  ruvora resume THREAD_ID
+  ruvora fork THREAD_ID [--ephemeral]
+  ruvora run THREAD_ID --prompt TEXT [--cwd PATH]
+  ruvora ask --prompt TEXT [--cwd PATH] [--sandbox MODE]
 
 All commands are sent to the single local control-plane daemon, which is the only
 process allowed to write Codex threads. All output is JSON.`;

@@ -1,4 +1,4 @@
-# Codex Agent Control Plane 아키텍처
+# RUVORA 아키텍처
 
 이 문서는 전체 구조와 책임 경계의 정본이다. 제품이 해결하는 문제와 목표 방향은 [제품 목적과 설계 방향](./PRODUCT_DIRECTION.md), 세부 상태, 권한, 저장, 전달, 복구 규칙은 [설계 문서 인덱스](./README.md)에서 연결된 계약 문서를 따른다.
 

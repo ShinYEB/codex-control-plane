@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="690" viewBox="0 0 1200 690" role="img" aria-labelledby="title desc">
-  <title id="title">Codex Agent Control Plane architecture</title>
+  <title id="title">RUVORA architecture</title>
   <desc id="desc">A user objective flows through context resolution, planning, execution contracts, task orchestration, Codex worker threads, validation, integration, and a durable work navigator.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
@@ -31,7 +31,7 @@
   </defs>
 
   <rect width="1200" height="690" rx="24" fill="url(#background)"/>
-  <text x="56" y="58" class="title">Codex Agent Control Plane</text>
+  <text x="56" y="58" class="title">RUVORA</text>
   <text x="56" y="84" class="subtitle">맥락을 고정하고, 계약을 검증한 뒤, 여러 프로젝트의 Codex 작업을 하나의 결과로 조정합니다.</text>
 
   <text x="56" y="129" class="section">CONTROL SURFACE</text>
