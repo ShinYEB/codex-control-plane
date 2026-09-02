@@ -112,6 +112,8 @@ test("legacy database upgrades transactionally with backup, run foreign key, and
     assert.equal(registry.getTask("legacy_task").runId, "legacy_run");
     assert.equal(existsSync(registry.migrationBackupPath), true);
     assert.equal(registry.db.prepare("PRAGMA foreign_key_list(tasks)").all().some((entry) => entry.from === "run_id" && entry.table === "runs"), true);
+    assert.equal(registry.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'turn_dispatches'").get().count, 1);
+    assert.match(registry.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'turn_dispatches'").get().sql, /turn_submitting/);
     assert.throws(() => registry.db.prepare("UPDATE tasks SET status = 'not_a_state' WHERE id = 'legacy_task'").run(), /CHECK constraint failed/);
     registry.close();
 
@@ -564,6 +566,11 @@ test("cancellation clears task ownership and releases active leases", () => {
   const claim = registry.claimTask("cancelled", "worker");
   registry.acquireLease({ key: "workspace", ownerTaskId: "cancelled", ownerAgentId: "agent", ownerToken: claim.claimToken });
   registry.acquireAgentLease("agent", "cancelled", claim.claimToken);
+  registry.createTurnDispatch({
+    subjectType: "task", subjectId: "cancelled", purpose: "execution", parentTaskId: "cancelled",
+    promptFingerprint: "prompt", submissionKey: "submission", status: "turn_running",
+    threadId: "agent", turnId: "turn_cancelled", deadlineAt: new Date(Date.now() + 60_000).toISOString(),
+  });
 
   const cancelled = registry.cancelTask("cancelled");
   assert.equal(cancelled.status, "canceled");
@@ -573,6 +580,8 @@ test("cancellation clears task ownership and releases active leases", () => {
   assert.equal(registry.listLeases({ ownerTaskId: "cancelled" })[0].status, "released");
   assert.equal(registry.getAgentLease("agent").status, "released");
   assert.equal(registry.getAgent("agent").status, "idle");
+  assert.equal(registry.listTurnDispatches({ parentTaskId: "cancelled" })[0].status, "cancelling");
+  assert.equal(registry.listTurnDispatches({ parentTaskId: "cancelled" })[0].cancellationGeneration, 1);
   registry.close();
 });
 

@@ -16,6 +16,8 @@ Codex를 오래 사용할수록 프로젝트와 작업별 스레드가 계속 �
 
 > Codex Agent Control Plane은 여러 프로젝트와 스레드의 지식·상태를 색인하고, 목표에 맞는 맥락을 근거와 함께 구성하며, 이를 바탕으로 안전한 다중 스레드·다중 프로젝트 실행을 지휘하는 로컬 영속 조정 계층이다.
 
+사용자 요청 한 건은 작업 탐색기에서 하나의 **Master Worker**로 표현한다. 단순 요청은 실제 작업을 직접 수행하는 단일 Master Worker 스레드로, 복합 요청은 하위 작업을 분해하고 종합하는 Master Orchestrator 스레드로 실행한다. 복합 Run의 개별 Task는 Slave Worker 스레드가 수행한다. daemon은 이 스레드들의 계약·상태·소유권을 관리하는 백그라운드 프로세스이며 사용자 작업 노드가 아니다.
+
 ## 제품이 수행해야 하는 세 가지 일
 
 ### 1. 스레드와 지식의 식별
@@ -59,7 +61,7 @@ Codex를 오래 사용할수록 프로젝트와 작업별 스레드가 계속 �
 | 스레드가 계속 증가함 | Agent 재사용·fork·archive, durable Task thread | 부분 충족 | 생성 예산, compact/supersede, ephemeral 실행 정책 |
 | 적합한 스레드를 찾기 어려움 | 역할·경로·요약·키워드 기반 Router | 부분 충족 | Thread Knowledge와 provenance 기반 선택 |
 | 여러 스레드의 맥락이 분산됨 | 프로젝트 memory, Task DAG, A2A handoff | 부분 충족 | 기존 스레드 지식 수집, 충돌 검출, Context Snapshot |
-| 여러 프로젝트를 중앙 지휘할 수 없음 | 단일 daemon과 전역 Registry 관찰 | 미충족 | Global Run, Project Run, cross-project dependency |
+| 여러 프로젝트를 중앙 지휘할 수 없음 | Global Run, Project Run, cross-project dependency와 durable handoff | 핵심 구현 | Master 중심 탐색 구조와 실제 복합 E2E 검증 |
 
 계약 안정화 작업은 폐기하거나 후퇴시키지 않는다. 다음 제품 단계의 중심을 dashboard 확장이나 worker 수 증가가 아니라 지식 구조화, context resolution과 전역 실행 계층으로 옮긴다.
 
@@ -67,17 +69,24 @@ Codex를 오래 사용할수록 프로젝트와 작업별 스레드가 계속 �
 
 ```text
 User Objective
-  -> resolve relevant Context Claims across threads/projects
-  -> freeze Context Snapshot
-  -> create Global Run
-       -> Project Run A -> Task DAG -> Agents/threads
-       -> Project Run B -> Task DAG -> Agents/threads
-       -> cross-project dependencies and handoffs
-  -> validate project results
-  -> synthesize and deliver one global result
+  -> create one Master Worker
+       -> simple: Master Worker performs the Task
+       -> complex: Master Orchestrator
+            -> validated Task DAG
+            -> Slave Worker threads
+            -> durable evidence/result envelopes
+            -> final synthesis in the Master thread
+  -> inspect status and hierarchy in Work Navigator
+  -> navigate to the actual Master or Slave Codex thread
 ```
 
-`Global Run`은 목표와 조정을 소유한다. 기존 `Run`은 프로젝트별 권한과 실행을 소유하는 `Project Run`으로 유지한다. 이 분리는 기존 `cwd` 기반 계약을 모호하게 확장하지 않고 다중 프로젝트를 지원하기 위한 것이다.
+여러 프로젝트를 포함하는 경우 `Global Run`이 목표와 전역 조정을 소유하고, 기존 `Run`은 프로젝트별 권한과 실행을 소유하는 `Project Run`으로 유지한다. 이 계층도 사용자에게는 하나의 Master를 중심으로 표시하며 프로젝트별 Run과 Slave는 그 하위 구조가 된다.
+
+Slave 결과는 Master에게 직접 비영속 메시지로 보내지 않는다. Slave가 명령·테스트·artifact·validation evidence를 Registry에 기록하면 daemon이 이를 검증하고, 결정 장벽이나 예외 또는 최종 종합 시점에 Master를 깨워 검증된 결과 묶음을 전달한다.
+
+## 성공의 제품적 의미
+
+Agent가 자연어로 “완료”라고 답한 것은 성공 증거가 아니다. 성공은 terminal Turn, 명령과 테스트 결과, 실제 산출물, workspace 변경, validation, integration과 통합 후 조건을 daemon이 확인한 뒤에만 확정한다. 자연어 답변은 이 구조화된 판정을 설명할 수 있지만 뒤집을 수 없다. 세부 규칙은 [Completion Gate 계약](./contracts/COMPLETION_GATE.md)을 따른다.
 
 ## 범위 밖
 

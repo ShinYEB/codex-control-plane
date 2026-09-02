@@ -42,7 +42,8 @@ Failure record는 최소 다음을 포함한다.
 
 ## Validation failure
 
-- acceptance criteria가 없으면 successful Data Plane result가 바로 완료될 수 있다.
+- 분석·검토의 단순 report를 제외한 구현·통합·release Task는 명시적 acceptance criteria 또는 계약 기반 output·mutation 조건을 가져야 한다.
+- test Task와 테스트 통과 criterion은 실제 test command evidence를 가져야 한다.
 - criteria가 있으면 Data Plane output 후 별도 read-only Validator를 실행한다.
 - `accept`는 `completed`, `accept_with_warnings`는 `completed_with_warnings`다.
 - unmet criteria가 있으면 feedback을 추가해 attempt budget 내 rework한다.
@@ -50,15 +51,20 @@ Failure record는 최소 다음을 포함한다.
 
 Validator는 구현 권한이 없고 scope를 넓히지 않는다.
 
+Validator의 승인만으로 Task를 완료하지 않는다. 선언된 output, workspace mutation, 필요한 integration과 destination postcondition까지 [Completion Gate](../contracts/COMPLETION_GATE.md)가 확인해야 한다.
+
 ## Restart reconciliation
 
 daemon은 active Task heartbeat가 끊기면 저장된 status만 믿지 않고 Codex `thread/read`와 대조한다.
 
-- turn이 terminal이고 결과를 읽을 수 있으면 claim을 현재 결과로 완료/실패/검증한다.
+채택된 목표 구조에서는 Task뿐 아니라 Planner, Orchestrator, Validator, Synthesizer의 active `TurnDispatch`도 같은 방식으로 대조한다. `turn_submitting`은 “아직 보내지 않음”을 뜻하지 않는다. submission intent 이후에는 해당 스레드에서 기존 Turn을 찾기 전 같은 prompt를 다시 보내지 않는다. 구체적인 판정표는 [TURN_DISPATCH.md](../contracts/TURN_DISPATCH.md)를 따른다.
+
+- turn이 terminal이면 전체 Turn item을 hydrate하고 정상 실행과 같은 Completion Evaluator로 완료/실패/검증한다.
 - side-effect-free `read-only + sideEffectPolicy=none` 작업은 결과를 확정할 수 없을 때 재queue할 수 있다.
 - 재queue 전에 contract marker, version, schema와 fingerprint를 다시 검증한다. invalid contract는 configuration/policy terminal 상태로 종료한다.
 - mutation이나 local-runtime side effect가 있는 불확실 작업은 `recovery_attention`으로 격리한다.
 - `integration_pending`에 journal이 있으면 적용 여부를 검사해 전용 recovery를 수행한다. journal이 없는 불확실 통합만 `recovery_attention`으로 격리한다.
+- Validator Turn이 완료된 상태에서 재시작해도 필요한 integration과 destination postcondition 단계로 계속 진행하며 바로 Task를 완료하지 않는다.
 - read probe가 반복 실패하면 자동 재실행 대신 attention으로 전환한다.
 - stale worker가 늦게 완료해도 claim token이 달라 반영되지 않는다.
 - restart recovery update는 관찰한 status, version, worker, claim token이 모두 그대로일 때만 적용한다.
@@ -66,6 +72,8 @@ daemon은 active Task heartbeat가 끊기면 저장된 status만 믿지 않고 C
 daemon 종료는 active work drain을 우선한다. 제한 시간을 넘긴 turn은 interrupt하고 위 규칙으로 claim을 복구한다.
 
 명시적 취소는 Task의 worker, claim token, heartbeat, retry time을 제거하고 해당 Task가 소유한 worktree/Agent lease를 release한다. 연결된 Agent는 active ownership이 사라진 뒤 idle로 복귀한다.
+
+취소된 부모의 active Dispatch는 먼저 cancellation generation을 올리고 `cancelling`으로 전이한다. 외부 `thread/start|resume|turn/start` 호출 전후의 conditional check가 실패하면 늦은 응답은 기록만 남기고 실행 상태를 전진시키지 않는다. `Run cancelled` 뒤 새 Planner/Worker Turn이 생성되는 것은 허용되지 않는다.
 
 ## Dependency failure
 

@@ -18,6 +18,10 @@ export const TASK_STATUSES = Object.freeze([
 export const AGENT_STATUSES = Object.freeze(["unknown", "available", "idle", "leased", "running", "validating", "approval_waiting"]);
 export const LEASE_STATUSES = Object.freeze(["active", "released", "expired"]);
 export const DELIVERY_STATUSES = Object.freeze(["pending", "delivering", "retry_waiting", "pending_attention", "direct_delivered", "delivered"]);
+export const TURN_DISPATCH_STATUSES = Object.freeze([
+  "prepared", "thread_acquiring", "thread_created", "turn_submitting", "turn_running",
+  "cancelling", "completed", "failed", "interrupted", "cancelled", "recovery_attention",
+]);
 
 export const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled"]);
 export const TERMINAL_GLOBAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "attention_required"]);
@@ -43,6 +47,8 @@ export const ACTIVE_AGENT_STATUSES = new Set(["leased", "running", "validating",
 export const TERMINAL_LEASE_STATUSES = new Set(["released", "expired"]);
 export const TERMINAL_DELIVERY_STATUSES = new Set(["direct_delivered", "delivered"]);
 export const WAITING_DELIVERY_STATUSES = new Set(["pending", "retry_waiting", "pending_attention"]);
+export const TERMINAL_TURN_DISPATCH_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled", "recovery_attention"]);
+export const ACTIVE_TURN_DISPATCH_STATUSES = new Set(TURN_DISPATCH_STATUSES.filter((status) => !TERMINAL_TURN_DISPATCH_STATUSES.has(status)));
 
 const RUN_TRANSITIONS = new Map([
   ["draft", new Set(["accepted", "planning", "preparing", "running", "failed", "cancelled"])],
@@ -121,6 +127,17 @@ const DELIVERY_TRANSITIONS = new Map([
   ["delivered", new Set()],
 ]);
 
+const TURN_DISPATCH_TRANSITIONS = new Map([
+  ["prepared", new Set(["thread_acquiring", "cancelling", "failed", "cancelled", "recovery_attention"])],
+  ["thread_acquiring", new Set(["thread_created", "cancelling", "failed", "cancelled", "recovery_attention"])],
+  ["thread_created", new Set(["turn_submitting", "cancelling", "failed", "cancelled", "recovery_attention"])],
+  ["turn_submitting", new Set(["turn_running", "completed", "failed", "interrupted", "cancelling", "cancelled", "recovery_attention"])],
+  ["turn_running", new Set(["completed", "failed", "interrupted", "cancelling", "recovery_attention"])],
+  ["cancelling", new Set(["completed", "failed", "interrupted", "cancelled", "recovery_attention"])],
+  ["completed", new Set()], ["failed", new Set()], ["interrupted", new Set()],
+  ["cancelled", new Set()], ["recovery_attention", new Set()],
+]);
+
 function assertKnown(status, values, entity) {
   if (!values.includes(status)) throw Object.assign(new Error(`Unsupported ${entity} status: ${status}`), { code: "STATE_INVALID" });
   return status;
@@ -153,6 +170,10 @@ export function assertLeaseStatus(status) {
 
 export function assertDeliveryStatus(status) {
   return assertKnown(status, DELIVERY_STATUSES, "Delivery");
+}
+
+export function assertTurnDispatchStatus(status) {
+  return assertKnown(status, TURN_DISPATCH_STATUSES, "TurnDispatch");
 }
 
 function transition(from, to, transitions, assertStatus, entity, options = {}) {
@@ -194,6 +215,10 @@ export function transitionLease(from, to, options = {}) {
 
 export function transitionDelivery(from, to, options = {}) {
   return transition(from, to, DELIVERY_TRANSITIONS, assertDeliveryStatus, "Delivery", options);
+}
+
+export function transitionTurnDispatch(from, to, options = {}) {
+  return transition(from, to, TURN_DISPATCH_TRANSITIONS, assertTurnDispatchStatus, "TurnDispatch", options);
 }
 
 export const assertRunTransition = transitionRun;
@@ -253,6 +278,15 @@ const SEMANTIC_TABLES = Object.freeze({
     attention: status === "pending_attention",
     retry: ["retry_waiting", "pending_attention"].includes(status) ? "bounded" : "none",
     recovery: status === "delivering" ? "return_to_retry_waiting" : "none",
+  }])),
+  turn_dispatch: Object.fromEntries(TURN_DISPATCH_STATUSES.map((status) => [status, {
+    terminal: TERMINAL_TURN_DISPATCH_STATUSES.has(status),
+    success: status === "completed",
+    active: ACTIVE_TURN_DISPATCH_STATUSES.has(status),
+    waiting: ["prepared", "thread_acquiring", "thread_created", "turn_submitting", "cancelling"].includes(status),
+    attention: status === "recovery_attention",
+    retry: ["failed", "interrupted"].includes(status) ? "policy_decision" : "none",
+    recovery: ["turn_submitting", "turn_running", "cancelling"].includes(status) ? "thread_read_reconcile" : ACTIVE_TURN_DISPATCH_STATUSES.has(status) ? "resume_fenced" : "none",
   }])),
 });
 

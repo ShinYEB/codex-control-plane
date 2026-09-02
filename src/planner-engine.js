@@ -3,6 +3,7 @@ import { agentDisplayName } from "./agent-names.js";
 import { ContextResolver } from "./context-resolver.js";
 import { ThreadKnowledgeIndexer } from "./thread-knowledge-indexer.js";
 import { compileAndValidateExecutionContract, EXECUTION_CAPABILITIES, RUN_AUTHORIZATION_SCOPES, SIDE_EFFECT_POLICIES } from "./execution-contracts.js";
+import { TurnDispatcher } from "./turn-dispatcher.js";
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -106,6 +107,7 @@ export class PlannerEngine {
     this.roleTemplates = options.roleTemplates;
     this.getControl = options.getControl;
     this.decorateAgent = options.decorateAgent;
+    this.turnDispatcher = options.turnDispatcher ?? new TurnDispatcher({ registry: this.registry, instanceId: options.instanceId });
   }
 
   async plan(options) {
@@ -123,14 +125,14 @@ export class PlannerEngine {
           requestedThreadIds: options.requestedThreadIds, maxContextBudget: options.maxContextBudget,
         });
       this.registry.updatePlan(targetId, { metadata: { contextSnapshotId: snapshot.id, contextSnapshotFingerprint: snapshot.fingerprint } });
-      return await this.#invoke(targetId, null, snapshot);
+      return await this.#invoke(targetId, null, snapshot, options.runId ?? null);
     } catch (error) {
       this.registry.updatePlan(targetId, { status: "failed", metadata: { error: error.message } });
       throw error;
     }
   }
 
-  async revise(planId, feedback) {
+  async revise(planId, feedback, options = {}) {
     const plan = this.registry.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
     this.registry.updatePlan(planId, { status: "revising", feedback });
@@ -141,7 +143,7 @@ export class PlannerEngine {
         requestedThreadIds: plan.metadata?.requestedThreadIds,
       });
       this.registry.updatePlan(planId, { metadata: { contextSnapshotId: snapshot.id, contextSnapshotFingerprint: snapshot.fingerprint } });
-      return await this.#invoke(planId, feedback, snapshot);
+      return await this.#invoke(planId, feedback, snapshot, options.runId ?? null);
     } catch (error) {
       this.registry.updatePlan(planId, { status: "failed", metadata: { error: error.message } });
       throw error;
@@ -151,22 +153,49 @@ export class PlannerEngine {
   async synthesize(planId, tasks) {
     const plan = this.registry.getPlan(planId);
     if (!plan) throw new Error(`Plan not found: ${planId}`);
-    const { control, agent } = await this.#ensureAgent(plan.cwd, "synthesizer");
-    const result = await control.runTask(agent.id, [
+    const run = plan.metadata?.runId ? this.registry.getRun(plan.metadata.runId) : null;
+    const expectedStatus = run?.status === "completed" ? "completed" : run ? "failed" : null;
+    const control = await this.getControl();
+    const prompt = [
       "Synthesize this completed control-plane run. Return only JSON matching the supplied schema.",
+      expectedStatus ? `The durable Run verdict is ${expectedStatus}. Your status must match it and cannot be changed by prose.` : null,
       `Objective: ${plan.objective}`,
       `Plan: ${JSON.stringify(plan.plan)}`,
-      `Task results: ${JSON.stringify(tasks.map(({ id, status, title, result, error }) => ({ id, status, title, result, error })))}`,
-    ].join("\n\n"), { cwd: plan.cwd, outputSchema: SYNTHESIS_SCHEMA, approvalPolicy: "never" });
-    const synthesis = parseJsonOutput(result.output);
+      `Task results: ${JSON.stringify(tasks.map((task) => ({
+        id: task.id,
+        status: task.status,
+        title: task.metadata?.title ?? task.title ?? null,
+        output: task.output ?? task.result ?? null,
+        error: task.error ?? null,
+        validation: task.metadata?.validation ?? null,
+        completionVerdict: task.metadata?.completionVerdict ?? null,
+      })))}`,
+    ].filter(Boolean).join("\n\n");
+    const result = await this.turnDispatcher.execute({
+      subjectType: "plan", subjectId: planId, purpose: "synthesis", planId,
+      parentRunId: plan.metadata?.runId ?? null, prompt, control, allowTerminalParent: true,
+      acquireThread: async (threadId) => (await this.#ensureAgent(plan.cwd, "synthesizer", threadId, control)).agent,
+      runOptions: { cwd: plan.cwd, outputSchema: SYNTHESIS_SCHEMA, approvalPolicy: "never" },
+    });
+    const reported = parseJsonOutput(result.output);
+    const synthesis = expectedStatus && reported.status !== expectedStatus
+      ? {
+        status: expectedStatus,
+        summary: `Run ${run.status}: Synthesizer output contradicted the durable Run verdict.`,
+        evidence: tasks.map((task) => `${task.id}:${task.status}`),
+        unresolvedRisks: [...new Set([...(reported.unresolvedRisks ?? []), "synthesis_status_mismatch"])],
+        followUps: [],
+        consistency: { consistent: false, expectedStatus, reportedStatus: reported.status, reported },
+      }
+      : { ...reported, consistency: { consistent: true, expectedStatus, reportedStatus: reported.status } };
     return this.registry.updatePlan(planId, { status: "synthesized", synthesis, completedAt: new Date().toISOString() });
   }
 
-  async #invoke(planId, feedback, contextSnapshot) {
+  async #invoke(planId, feedback, contextSnapshot, runId = null) {
     const plan = this.registry.getPlan(planId);
     const validatedSnapshot = this.contextResolver.assertSnapshot(contextSnapshot ?? plan.metadata?.contextSnapshotId);
     const context = this.contextManager.build({ cwd: plan.cwd, prompt: plan.objective, role: "planner", touch: true });
-    const { control, agent } = await this.#ensureAgent(plan.cwd, "planner", plan.plannerAgentId);
+    const control = await this.getControl();
     const basePrompt = [
       "Create or revise an executable control-plane task graph. Return only JSON matching the supplied schema.",
       `Objective: ${plan.objective}`,
@@ -187,7 +216,23 @@ export class PlannerEngine {
         basePrompt,
         contractError ? `Your previous graph violated the Run authorization contract: ${contractError.message}. Correct every affected task and return the complete JSON graph again.` : null,
       ].filter(Boolean).join("\n\n");
-      const result = await control.runTask(agent.id, prompt, { cwd: plan.cwd, outputSchema: PLAN_SCHEMA, approvalPolicy: "never" });
+      let activeAgent;
+      const result = await this.turnDispatcher.execute({
+        subjectType: "plan", subjectId: planId, purpose: "planning", planId, parentRunId: runId,
+        prompt, contextSnapshotId: validatedSnapshot.id, control,
+        acquireThread: async (threadId) => {
+          activeAgent = (await this.#ensureAgent(plan.cwd, "planner", threadId ?? plan.plannerAgentId, control)).agent;
+          return activeAgent;
+        },
+        onThread: ({ agent: boundAgent, dispatch }) => {
+          activeAgent = boundAgent;
+          this.registry.updatePlan(planId, {
+            plannerAgentId: boundAgent.id,
+            metadata: { activeTurnDispatchId: dispatch.id, runId: runId ?? plan.metadata?.runId ?? null },
+          });
+        },
+        runOptions: { cwd: plan.cwd, outputSchema: PLAN_SCHEMA, approvalPolicy: "never" },
+      });
       materialized = parseJsonOutput(result.output);
       if (!materialized || !Array.isArray(materialized.tasks) || materialized.tasks.length === 0) {
         throw new Error("Planner returned an invalid graph without tasks");
@@ -205,7 +250,7 @@ export class PlannerEngine {
     return this.registry.updatePlan(planId, {
       status: "planned",
       version: plan.version + (feedback ? 1 : 0),
-      plannerAgentId: agent.id,
+      plannerAgentId: this.registry.getPlan(planId).plannerAgentId,
       plan: materialized,
       feedback: feedback ?? plan.feedback,
       metadata: {
@@ -216,8 +261,8 @@ export class PlannerEngine {
     });
   }
 
-  async #ensureAgent(cwd, role, preferredId = null) {
-    const control = await this.getControl();
+  async #ensureAgent(cwd, role, preferredId = null, suppliedControl = null) {
+    const control = suppliedControl ?? await this.getControl();
     const template = this.roleTemplates.resolve(role);
     let agent;
     if (preferredId) {

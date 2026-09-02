@@ -99,6 +99,8 @@ function taskSummary(task, taskById, agentById = new Map(), registry = null) {
       fingerprint: task.metadata.executionContract.fingerprint,
     } : null,
     integration: task.metadata?.integration ?? null,
+    completionVerdict: task.metadata?.completionVerdict ?? null,
+    postconditionEvidence: task.metadata?.postconditionEvidence ?? null,
   };
 }
 
@@ -209,6 +211,74 @@ function notificationSummary(notification) {
   };
 }
 
+function turnDispatchSummary(dispatch) {
+  return {
+    id: dispatch.id, subjectType: dispatch.subjectType, subjectId: dispatch.subjectId,
+    purpose: dispatch.purpose, revision: dispatch.revision, status: dispatch.status,
+    parentRunId: dispatch.parentRunId, parentTaskId: dispatch.parentTaskId,
+    threadId: dispatch.threadId, turnId: dispatch.turnId, threadAction: dispatch.threadAction,
+    promptFingerprint: dispatch.promptFingerprint,
+    executionContractFingerprint: dispatch.executionContractFingerprint,
+    ownerInstanceId: dispatch.ownerInstanceId, heartbeatAt: dispatch.heartbeatAt,
+    deadlineAt: dispatch.deadlineAt, cancellationGeneration: dispatch.cancellationGeneration,
+    reconciliationDecision: dispatch.reconciliationDecision,
+    failure: failureSummary(dispatch.failure), createdAt: dispatch.createdAt, updatedAt: dispatch.updatedAt,
+  };
+}
+
+const THREAD_PURPOSE_LABELS = {
+  planning: "Planner",
+  orchestration: "Orchestrator",
+  execution: "Data Plane",
+  validation: "Validator",
+  synthesis: "Synthesizer",
+};
+const THREAD_PURPOSE_ORDER = ["planning", "orchestration", "execution", "validation", "synthesis"];
+const ACTIVE_THREAD_STATES = new Set([
+  "prepared", "thread_acquiring", "thread_created", "turn_submitting", "turn_running", "cancelling",
+  "running", "validating", "agent_done", "integration_pending", "approval_waiting", "leased",
+]);
+
+function runThreadSummaries(dispatches, run, tasks, agentById) {
+  const byThread = new Map();
+  const add = ({ threadId, purpose, status, turnId = null, taskId = null, updatedAt = null }) => {
+    if (!threadId) return;
+    const agent = agentById.get(threadId);
+    const current = byThread.get(threadId) ?? {
+      id: threadId, threadId, name: agent?.name ?? null, role: agent?.role ?? null,
+      purposes: [], taskIds: [], status: "idle", turnId: null, active: false,
+      managedByDaemon: true, updatedAt: null,
+    };
+    if (purpose && !current.purposes.includes(purpose)) current.purposes.push(purpose);
+    if (taskId && !current.taskIds.includes(taskId)) current.taskIds.push(taskId);
+    const active = ACTIVE_THREAD_STATES.has(status);
+    if (active || !current.active) {
+      current.status = status ?? current.status;
+      current.turnId = turnId ?? current.turnId;
+    }
+    current.active ||= active;
+    if (!current.updatedAt || String(updatedAt ?? "").localeCompare(current.updatedAt) > 0) current.updatedAt = updatedAt;
+    byThread.set(threadId, current);
+  };
+  for (const dispatch of dispatches) add({
+    threadId: dispatch.threadId, purpose: dispatch.purpose, status: dispatch.status,
+    turnId: dispatch.turnId, taskId: dispatch.parentTaskId, updatedAt: dispatch.updatedAt,
+  });
+  const orchestratorId = run?.metadata?.orchestratorSessionIdentity?.agentId ?? run?.metadata?.orchestratorAgentId;
+  add({ threadId: orchestratorId, purpose: "orchestration", status: agentById.get(orchestratorId)?.status ?? "idle", updatedAt: run?.updatedAt });
+  for (const task of tasks) add({
+    threadId: task.agentId, purpose: "execution", status: task.status,
+    turnId: task.turnId, taskId: task.id, updatedAt: task.updatedAt,
+  });
+  return [...byThread.values()].map((entry) => {
+    const purposes = entry.purposes.sort((left, right) => THREAD_PURPOSE_ORDER.indexOf(left) - THREAD_PURPOSE_ORDER.indexOf(right));
+    return {
+      ...entry, purposes,
+      displayRole: purposes.map((purpose) => THREAD_PURPOSE_LABELS[purpose] ?? purpose).join(" · ") || entry.role || "Codex thread",
+    };
+  }).sort((left, right) => Number(right.active) - Number(left.active) || String(right.updatedAt ?? "").localeCompare(String(left.updatedAt ?? "")));
+}
+
 export function dashboardRevision(registry) {
   return registry.listEvents({ limit: 1 })[0]?.id ?? 0;
 }
@@ -257,6 +327,7 @@ export function buildDashboardSnapshot(registry, options = {}) {
     ? allTasks.slice(0, 100)
     : runId ? (taskByRunId.get(runId) ?? []).slice(0, 100) : [];
   const taskById = new Map(tasks.map((task) => [task.id, task]));
+  const selectedTurnDispatches = runId ? (registry.listTurnDispatches?.({ parentRunId: runId, limit: 200 }) ?? []) : [];
   return {
     kind: "snapshot",
     revision: dashboardRevision(registry),
@@ -277,6 +348,8 @@ export function buildDashboardSnapshot(registry, options = {}) {
     roles: (registry.listRoleTemplates?.({ limit: 100 }) ?? []).map(({ developerInstructions: _instructions, metadata: _metadata, ...role }) => role),
     memories: (registry.listMemories?.({ cwd, limit: 100 }) ?? []).map(memorySummary),
     notifications: (registry.listNotifications?.({ cwd, limit: 20 }) ?? []).map(notificationSummary),
+    turnDispatches: selectedTurnDispatches.map(turnDispatchSummary),
+    runThreads: run ? runThreadSummaries(selectedTurnDispatches, run, tasks, agentById) : [],
     events: registry.listEvents({ limit: 50 }),
   };
 }
@@ -297,15 +370,16 @@ export function buildDashboardDelta(registry, options = {}) {
   const changedTypes = new Set(events.map((event) => event.entityType));
   if (events.some((event) => event.eventType === "agent.project_reconciled")) changedTypes.add("agent");
   const changed = {
-    ...(["agent", "thread_lifecycle"].some((type) => changedTypes.has(type)) ? { agents: snapshot.agents } : {}),
+    ...(["agent", "thread_lifecycle"].some((type) => changedTypes.has(type)) ? { agents: snapshot.agents, runThreads: snapshot.runThreads } : {}),
     ...(["agent", "thread_lifecycle", "thread_budget"].some((type) => changedTypes.has(type)) ? { threadBudget: snapshot.threadBudget } : {}),
-    ...(changedTypes.has("task") ? { tasks: snapshot.tasks } : {}),
-    ...(["task", "run"].some((type) => changedTypes.has(type)) ? { runs: snapshot.runs, run: snapshot.run } : {}),
+    ...(changedTypes.has("task") ? { tasks: snapshot.tasks, runThreads: snapshot.runThreads } : {}),
+    ...(["task", "run"].some((type) => changedTypes.has(type)) ? { runs: snapshot.runs, run: snapshot.run, runThreads: snapshot.runThreads } : {}),
     ...(changedTypes.has("plan") ? { plans: snapshot.plans } : {}),
     ...(changedTypes.has("worktree") ? { worktrees: snapshot.worktrees } : {}),
     ...(changedTypes.has("role") ? { roles: snapshot.roles } : {}),
     ...(changedTypes.has("memory") ? { memories: snapshot.memories } : {}),
     ...(changedTypes.has("notification") ? { notifications: snapshot.notifications } : {}),
+    ...(changedTypes.has("turn_dispatch") ? { turnDispatches: snapshot.turnDispatches, runThreads: snapshot.runThreads, agents: snapshot.agents, tasks: snapshot.tasks } : {}),
     ...(changedTypes.has("global_run") ? { globalRuns: snapshot.globalRuns, runs: snapshot.runs, run: snapshot.run } : {}),
     ...(["task", "run", "worktree"].some((type) => changedTypes.has(type)) ? { graph: snapshot.graph } : {}),
   };
@@ -339,6 +413,7 @@ export function getDashboardDetail(registry, entityType, entityId, options = {})
     case "memory": return registry.getMemory(entityId);
     case "context_snapshot": return registry.getContextSnapshot(entityId);
     case "global_run": return registry.getGlobalRunGraph(entityId);
+    case "turn_dispatch": return registry.getTurnDispatch(entityId);
     default: throw new Error(`Unsupported dashboard entity type: ${entityType}`);
   }
 }

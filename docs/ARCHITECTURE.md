@@ -11,7 +11,7 @@
 - 사용자 요청 한 건을 durable Run으로 접수하고 Task DAG로 준비한다.
 - Task별 권한과 작업공간을 실행 계약으로 확정한 뒤 worker를 시작한다.
 - Agent/Task/Run/Lease 상태를 영속화하고 재시작 후 복구한다.
-- Data Plane 결과를 검증·통합·종합하여 요청이 시작된 Control Plane 스레드로 돌려준다.
+- Data Plane 결과를 검증·통합·종합하여 작업 탐색기의 durable result projection과 담당 Codex 스레드에서 확인할 수 있게 한다.
 - 프로젝트 내부 파일 변경은 관리하지만 원격 서비스 변경과 파괴적 작업은 자동 실행하지 않는다.
 
 ## 설계 철학
@@ -29,7 +29,8 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 - direct dispatch와 Orchestrator Plane 경로를 선택한다.
 - 실행 계약을 compile하고 preflight한다.
 - 단일 embedded dashboard를 제공하되 다음 요청을 받을 수 있게 유지한다.
-- 채팅을 기본 제품 표면으로 삼고 terminal 결과를 origin Control Plane 스레드에 돌려준다.
+- 작업 탐색기를 상태·결과의 기본 제품 표면으로 삼고 origin Control Plane 스레드에는 terminal 결과를 자동 append하지 않는다.
+- 사용자 요청마다 하나의 Master Worker identity를 만들고 작업 탐색기의 최상위 목록은 Master를 중심으로 구성한다.
 
 ### Orchestrator Plane
 
@@ -37,6 +38,7 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 - 배정, retry, failure, artifact, integration 결정을 기록한다.
 - dependency Task 사이에 구조화된 A2A handoff를 전달한다.
 - 두 번째 scheduler나 workspace writer가 되지 않는다. claim, lease, fencing, 상태 전이는 daemon 소유다.
+- Slave 결과를 직접 수신하는 임시 메시지함이 아니라 Registry의 검증된 결과 묶음을 decision barrier에서 읽고 최종 결과를 자신의 Codex 스레드에 기록한다.
 
 ### Data Plane
 
@@ -44,6 +46,7 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 - 배정된 sandbox와 shared/worktree workspace 안에서만 작업한다.
 - 선언된 output과 validation evidence를 만든다.
 - 읽을 수 있는 작업 이력을 보존하고 artifact를 Integration Manager에 반환한다.
+- 자신의 자연어 응답으로 Task terminal 상태를 결정하지 않는다.
 
 ## Component 소유권
 
@@ -59,6 +62,7 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 | WorktreeManager | 격리 workspace, artifact, 직렬 integration | 무음 conflict 해결 또는 artifact 삭제 |
 | Orchestrator | 복합 Run 조정 context와 synthesis evidence | scheduling, terminal 상태 또는 사용자 결과 정본 결정 |
 | Synthesizer | durable 상태에서 Result projection 생성 | terminal 상태 변경, follow-up 작업 자동 시작 |
+| Completion Evaluator | Turn·명령·산출물·validation·integration·postcondition evidence 판정 | Agent 자연어만으로 성공 확정 |
 
 ## 시스템 불변조건
 
@@ -74,6 +78,8 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 10. **No automatic external authority:** `external`, `destructive` side effect는 별도 사용자 요청이 필요하며 Task repair나 dashboard action으로 승인할 수 없다.
 11. **One result authority:** 작업 목록, 결과 요약과 thread drill-down은 같은 durable Result projection을 사용한다. Orchestrator prose는 terminal 상태나 결과 정본을 덮어쓰지 않는다.
 12. **No unresolved contract execution:** 권한·계약·workspace에 active 충돌이 있으면 Planner, Task, Agent, lease, worktree, attempt 생성 전에 차단한다.
+13. **Evidence before success:** Agent·Orchestrator의 자연어 완료 선언은 terminal 상태를 만들지 않는다. 구조화된 completion evidence가 모두 충족되어야 한다.
+14. **Same completion logic after restart:** 정상 실행과 daemon 재시작 복구는 같은 Completion Evaluator와 evidence precedence를 사용한다.
 
 ## 기본 요청 흐름
 
@@ -85,15 +91,23 @@ Control Plane request
   -> Planner creates and validates graph
   -> atomically persist Run + staged Tasks + dependencies
   -> automatic release to queued/blocked
-  -> claim + Agent lease + Data Plane turn
-  -> optional Validator
-  -> optional artifact integration
+  -> claim + Agent lease
+  -> durable TurnDispatch(thread acquire -> turn submit -> reconcile)
+  -> Data Plane turn
+  -> hydrate complete Turn evidence
+  -> materialize and verify declared outputs
+  -> Validator when required by Task kind/criteria
+  -> artifact integration when required
+  -> post-integration verification when required
+  -> one Completion Gate verdict
   -> terminalize Tasks and Run
   -> project/synthesize result
   -> work navigator -> owning Codex thread
 ```
 
 정상 경로에는 placeholder `READY` turn과 dashboard Start gate가 없다.
+
+스레드 생성은 작업 시작을 뜻하지 않는다. Planner, Orchestrator, Worker, Validator, Synthesizer는 모두 [Durable Turn Dispatch 계약](./contracts/TURN_DISPATCH.md)을 사용한다. `threadId` 확보, 제출 의도, `turnId`, terminal evidence를 단계별로 저장하고 취소 generation과 owner token으로 fence한다.
 
 ## 실행 계약
 
@@ -127,12 +141,12 @@ Runtime deployment는 `src`, `ui`, `scripts`, `package.json`을 staging하고 di
 
 ## Dashboard 계약
 
-Control Plane만 dashboard lease와 polling loop를 소유한다. Worker와 Orchestrator 스레드는 poll하지 않는다. dispatch는 작업 탐색기를 자동으로 열지 않는다. 기본 화면은 Run 목록과 선택한 Run의 실행 구조를 함께 펼친다. 복잡한 Run은 Orchestrator와 Task DAG를, 단순 Run은 담당 Task를 보여주며 각 항목 선택은 실제 Codex 스레드 이동으로 이어진다. 결과, 작업, 스레드는 보조 탭이고 실행 계약, 내부 event, raw state는 별도 고급 진단에 둔다. Task approval tab이나 manual Start 경로는 없다.
+Control Plane만 dashboard lease와 polling loop를 소유한다. Worker와 Orchestrator 스레드는 poll하지 않는다. dispatch는 작업 탐색기를 자동으로 열지 않는다. 기본 화면의 최상위 목록은 사용자 요청을 대표하는 Master Worker들이다. 단순 Run의 Master를 선택하면 실제 작업 스레드로 이동한다. 복잡한 Run의 Master Orchestrator를 선택하면 일반 Codex 실행 기록과 함께 하위 Slave Task DAG를 표시하며, 그래프 노드를 선택하면 실제 Slave Worker 스레드로 이동한다. Planner, Validator, Synthesizer TurnDispatch는 고급 진단에서 조회할 수 있지만 사용자 작업 목록의 동급 최상위 노드로 올리지 않는다. Daemon Scheduler는 Codex 채팅이 아니므로 탐색 대상으로 넣지 않는다. Task approval tab이나 manual Start 경로는 없다.
 
 사용자-visible notification은 `completed`, `failed`, `attention_required`, `policy_blocked` 네 종류뿐이다. running, queued, retrying, validation 같은 정상 진행은 notification을 만들지 않는다. notification은 작업 탐색기에 표시하며 policy stop은 제품·infrastructure failure와 구분한다.
 
 ## 결과 접근 계약
 
-모든 control request는 요청 thread와 host가 제공하면 origin turn을 provenance로 기록한다. terminal projection, synthesis와 notification은 durable하다. daemon은 요청 스레드에 결과를 append하지 않는다. 사용자는 작업 탐색기에서 active·terminal Run을 확인하고, 복잡한 Run의 Orchestrator와 Task DAG 또는 단순 Run의 Task를 선택해 실제 Codex 스레드로 이동한다. 기존 delivery row는 migration 호환 데이터일 뿐 새 Run에는 생성하지 않는다.
+모든 control request는 요청 thread와 host가 제공하면 origin turn을 provenance로 기록한다. terminal projection, synthesis와 notification은 durable하다. daemon은 요청 스레드에 결과를 append하지 않는다. 사용자는 작업 탐색기에서 active·terminal Master를 확인하고 실제 Master 스레드로 이동한다. Master Orchestrator의 하위 그래프에서는 Slave 스레드로 이동할 수 있다. 기존 delivery row는 migration 호환 데이터일 뿐 새 Run에는 생성하지 않는다.
 
 Responsive contract는 360, 600, 800, 1000, 1200px에서 검증한다. 좁은 화면은 1열 흐름을 사용하고 한국어 단어를 불필요하게 분리하지 않으며 primary container가 document-level 가로 overflow를 만들면 안 된다.

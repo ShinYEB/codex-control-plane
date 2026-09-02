@@ -18,6 +18,7 @@ Codex를 오래 사용할수록 스레드는 늘어나지만, 중요한 결정�
 | 작업이 늘수록 영구 스레드가 계속 쌓인다 | lifecycle과 생성 예산을 적용해 `reuse`, `fork`, `spawn`, `ephemeral`, `wait`를 선택합니다. |
 | 계약 오류와 재시도로 실행이 반복 실패한다 | strict execution contract, pre-claim gate, fingerprint 기반 retry·repair 정책으로 실행 전에 차단합니다. |
 | 데몬 종료나 통합 충돌로 상태가 유실된다 | SQLite Registry, fenced claim, lease, integration journal, durable delivery로 복구합니다. |
+| Agent의 완료 문구와 실제 명령·파일 결과가 다를 수 있다 | Completion Gate가 전체 Turn, 명령, output, 변경, 검증과 통합 증거를 우선순위대로 판정합니다. |
 
 ## 사용 방법
 
@@ -28,7 +29,7 @@ Codex를 오래 사용할수록 스레드는 늘어나지만, 중요한 결정�
 1. 플러그인을 처음 설치하거나 runtime을 갱신했다면 Codex Desktop에서 새 대화를 엽니다.
 2. 대상 프로젝트에서 `/mcp`를 열어 `codex_control_plane` 연결을 확인합니다.
 3. 원하는 목표, 대상 범위, 완료 조건을 자연어로 전달합니다.
-4. 접수된 Run은 백그라운드에서 실행됩니다. 작업 탐색기에서 상태를 확인하고 Run의 Orchestrator 또는 Task를 선택해 실제 작업 스레드로 이동합니다.
+4. 접수된 Run은 백그라운드에서 실행됩니다. 작업 탐색기의 Master Worker 목록에서 작업을 선택해 실제 Codex 스레드로 이동합니다. 복합 작업은 Master Orchestrator 안의 Slave 그래프에서 하위 작업 스레드를 열 수 있습니다.
 
 다음 예시를 그대로 시작점으로 사용할 수 있습니다.
 
@@ -67,7 +68,8 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 - 배정된 Agent 스레드와 routing 근거
 - Validator, retry, integration과 failure의 next action
 - Context Snapshot과 실행 계약의 고급 진단
-- 완료된 작업에서 실제 결과를 보유한 Codex 스레드로 이동
+- 사용자 요청별 Master Worker와 실제 Codex 스레드 이동
+- Master Orchestrator의 Slave Task 그래프와 하위 Codex 스레드 이동
 
 작업 탐색기는 상태·결과 확인과 실제 작업 스레드 이동의 기본 화면입니다. 열기·새로고침·닫기는 작업을 시작하거나 완료하지 않습니다.
 
@@ -94,8 +96,9 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 3. Planner가 Global Run → Project Run → Task DAG를 만들고 전체 그래프를 원자적으로 저장합니다.
 4. 각 Task의 실행 계약을 compile·validate하고 policy와 workspace preflight를 통과시킵니다.
 5. 검증된 Task만 claim하며 Router가 기존 스레드 재사용, fork, 새 스레드, ephemeral 실행 또는 대기를 결정합니다.
-6. Worker 결과를 Validator가 검사하고, 필요한 artifact를 managed worktree에서 프로젝트로 통합합니다.
-7. 하나의 Result projection을 만들고 작업 탐색기에서 Run 구조와 담당 스레드를 통해 접근합니다.
+6. Worker Turn의 전체 명령·테스트·output·workspace evidence를 수집하고 Validator가 완료 조건을 검사합니다.
+7. 필요한 artifact를 프로젝트로 통합하고 destination postcondition을 확인한 뒤 Completion Gate가 terminal 상태를 결정합니다.
+8. 하나의 Result projection을 만들고 Master Worker와 Slave 그래프에서 실제 담당 스레드로 접근합니다.
 
 ## 핵심 도메인 모델
 
@@ -109,6 +112,7 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 | **Execution Contract** | sandbox, network, side effect, workspace, output과 fingerprint를 가진 versioned 권한 계약 |
 | **Agent / Thread** | Task를 수행하는 Codex 실행 주체와 그 durable provenance |
 | **Artifact / Handoff** | 프로젝트 내부 변경 증거와 프로젝트 간 검증된 전달물 |
+| **Completion Evidence / Gate** | 실제 명령, 산출물, 변경, 검증과 통합을 결합하는 중앙 성공 판정 |
 
 ## 안전 불변조건
 
@@ -120,6 +124,7 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 - **Artifact preservation:** 통합되지 않았거나 충돌한 worktree와 artifact는 retain 또는 quarantine합니다.
 - **Global goal, local authority:** Global Run도 프로젝트별 sandbox와 authorization 경계를 우회하지 않습니다.
 - **One result authority:** 작업 목록, 구조, 결과 요약과 담당 스레드가 같은 durable Result projection을 사용합니다.
+- **Evidence before success:** Agent의 자연어 완료 선언보다 명령·테스트·산출물·통합 증거가 우선합니다.
 - **No origin append:** terminal 결과는 요청 스레드에 자동으로 끼워 넣지 않습니다.
 - **Dashboard independence:** 대시보드를 열거나 닫는 동작은 실행의 시작·완료 조건이 아닙니다.
 
@@ -149,14 +154,14 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 - canonical Project identity와 Global Run / Project Run 계층
 - required·optional Project Run 실패 집계
 - schema-versioned cross-project artifact handoff와 중복 수신 방지
-- Global/Project Run 목록과 Orchestrator/Data Plane 스레드 drill-down
+- 사용자 요청별 Master Worker 목록과 Master Orchestrator → Slave Worker drill-down
 - 하나의 전역 결과와 프로젝트별 evidence 보존
 
 ### 관찰 표면
 
 - SQLite 기반 Agent, Run, Task, lease, memory, event Registry
 - MCP Apps 작업 탐색기와 로컬 HTTP/SSE fallback
-- Run 목록, DAG, 현재 작업, 결과, 담당 스레드 이동, 고급 계약 진단
+- Master 목록, Slave DAG, 현재 작업, 결과, 실제 스레드 이동, 고급 계약 진단
 - 대시보드 없이도 계속되는 background execution
 
 ## 로컬 소스에서 실행
@@ -212,12 +217,13 @@ node src/cli.js fork THREAD_ID --ephemeral
 | 항목 | 상태 |
 |---|---|
 | Package | `0.14.0` |
-| Persistence | SQLite schema v7 |
+| Persistence | SQLite schema v8 |
 | Global Run request API | v1 |
 | Cross-project handoff schema | v1 |
 | 구현 게이트 | G0–G7 완료 |
 | 최종 E2E | 12개 시나리오 통과 |
-| 전체 테스트 | 234/234 통과 |
+| 전체 테스트 | 260/260 통과 |
+| Completion Gate | 핵심 구현 및 회귀 테스트 완료 |
 | Runtime | Node.js ≥20, 외부 npm dependency 없음 |
 
 릴리스 판정은 특정 테스트 파일이 아니라 전체 suite를 대상으로 합니다.

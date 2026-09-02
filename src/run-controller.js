@@ -79,6 +79,8 @@ export function buildRunGraph(registry, runId, options = {}) {
       ...(options.detail === false ? {} : {
         acceptanceCriteria: task.metadata?.acceptanceCriteria ?? [],
         validation: task.metadata?.validation ?? null,
+        completionVerdict: task.metadata?.completionVerdict ?? null,
+        postconditionEvidence: task.metadata?.postconditionEvidence ?? null,
         failure: task.metadata?.failure ?? null,
         routing,
         output: task.output,
@@ -177,8 +179,18 @@ export class RunController {
     const run = this.registry.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
     if (TERMINAL_RUN_STATUSES.has(run.status)) return run;
+    const dispatches = this.registry.requestTurnDispatchCancellation({ parentRunId: runId });
     const tasks = this.registry.listTasks({ runId, limit: 1000 });
-    const control = tasks.some((task) => ["running", "validating", "integration_pending"].includes(task.status)) ? await this.getControl() : null;
+    const control = dispatches.some((dispatch) => dispatch.threadId && dispatch.turnId)
+      || tasks.some((task) => ["running", "validating", "integration_pending"].includes(task.status)) ? await this.getControl() : null;
+    for (const dispatch of dispatches) {
+      if (!dispatch.threadId || !dispatch.turnId) continue;
+      try {
+        await control.interruptTask(dispatch.threadId, dispatch.turnId);
+      } catch (error) {
+        this.registry.recordEvent("turn_dispatch", dispatch.id, "turn_dispatch.interrupt_failed", { error: error.message });
+      }
+    }
     for (const task of tasks) {
       if (!["running", "validating", "integration_pending"].includes(task.status)) continue;
       const threadId = task.status === "validating" ? task.metadata?.validationInProgress?.agentId : task.agentId;
@@ -190,7 +202,7 @@ export class RunController {
         this.registry.recordEvent("task", task.id, "task.interrupt_failed", { error: error.message });
       }
     }
-    return this.registry.cancelRun(runId);
+    return this.registry.cancelRun(runId, { dispatchCancellationRequested: true });
   }
 
   refresh(runId) {

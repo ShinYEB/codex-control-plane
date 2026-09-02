@@ -2,6 +2,22 @@
 
 이 문서는 설계 점검 항목과 결정 상태를 기록한다. 완료된 항목은 결정과 검증 근거를 남기고, 미결 항목은 다음 점검에서 `유지`, `변경`, `폐기` 중 하나로 결정한다.
 
+## P0 — Durable TurnDispatch 구현
+
+- 상태: 구현 및 자동 테스트 완료.
+- 결정: 스레드 확보와 명령 제출을 `turn_dispatch_v1` 단일 프로토콜로 관리한다. `ready` 상태와 placeholder READY Turn은 사용하지 않는다.
+- 구현: schema v8 `turn_dispatches`, 중앙 상태 의미·전이, 공통 `TurnDispatcher`, Planner/Worker/Validator/Synthesizer/Orchestrator 연결, 취소 generation fencing, restart reconciliation과 dashboard 고급 진단 projection.
+- 검증: thread/Turn 선저장, 늦은 thread 응답 fencing, 이미 제출된 Turn의 read recovery, 동일 submission 중복 방지, migration과 전체 회귀 테스트.
+
+## P0 — Evidence-based Completion Gate
+
+- 상태: 핵심 구현 및 자동 테스트 완료.
+- 결정: Agent와 Orchestrator 자연어는 성공 권한이 없다. daemon의 단일 Completion Evaluator가 전체 Turn item, 명령·테스트, output materialization, workspace diff, validation, integration journal과 destination postcondition을 결합한다.
+- 정상 실행과 restart reconciliation은 같은 verdict 함수를 사용한다.
+- 구현: final `thread/read` hydration과 item 병합, fingerprinted CompletionVerdict, 실제 test command와 output/mutation 검사, Validator 이후 integration 복구, destination artifact 적용 확인, Master/Synthesizer consistency fallback.
+- 검증: 누락된 command event, non-zero exit와 성공 문구 충돌, 변경 없는 구현, 실행되지 않은 필수 검증, Validator 직후 crash, 통합 후 실패, 정상/복구 verdict 동등성.
+- 근거: [ADR-008](./adr/ADR-008-EVIDENCE-BASED-COMPLETION.md), [Completion Gate 계약](./contracts/COMPLETION_GATE.md)
+
 ## P0 — 기준선 확정 전 결정
 
 ### 0. 제품 목적과 다음 설계 축

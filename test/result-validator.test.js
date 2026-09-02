@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ResultValidator, parseValidationOutput } from "../src/result-validator.js";
+import { ControlRegistry } from "../src/registry.js";
 
 const valid = {
   decision: "accept",
@@ -26,14 +27,8 @@ test("validator parser rejects text without a schema-shaped object", () => {
 
 test("validator receives the parent Run authorization and never asks for another Start", async () => {
   let prompt;
-  const settings = new Map();
-  const registry = {
-    getSetting: (key) => settings.get(key),
-    setSetting: (key, value) => settings.set(key, value),
-    upsertAgent: () => {},
-    updateTask: () => {},
-    recordEvent: () => {},
-  };
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createTask({ id: "task_1", status: "validating", prompt: "verify" });
   const control = {
     spawnAgent: async () => ({ id: "validator_1", cwd: "/repo", status: "idle" }),
     runTask: async (_id, value, options) => {
@@ -52,20 +47,19 @@ test("validator receives the parent Run authorization and never asks for another
   assert.equal(result.decision, "accept");
   assert.match(prompt, /\[RUN AUTHORIZATION\]/);
   assert.match(prompt, /Do not request another Start confirmation/);
+  assert.equal(registry.listTurnDispatches({ parentTaskId: "task_1" })[0].status, "completed");
+  registry.close();
 });
 
 test("validator serializes concurrent validations that reuse one workspace agent", async () => {
-  const settings = new Map();
   let active = 0;
   let maximumActive = 0;
   let releaseFirst;
   let calls = 0;
   const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
-  const registry = {
-    getSetting: (key) => settings.get(key),
-    setSetting: (key, value) => settings.set(key, value),
-    upsertAgent: () => {}, updateTask: () => {}, recordEvent: () => {},
-  };
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createTask({ id: "task_1", status: "validating", prompt: "one" });
+  registry.createTask({ id: "task_2", status: "validating", prompt: "two" });
   const control = {
     spawnAgent: async () => ({ id: "validator_shared", cwd: "/repo", status: "idle" }),
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle" }),
@@ -92,4 +86,5 @@ test("validator serializes concurrent validations that reuse one workspace agent
   await Promise.all([first, second]);
   assert.equal(calls, 2);
   assert.equal(maximumActive, 1);
+  registry.close();
 });

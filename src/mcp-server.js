@@ -26,13 +26,15 @@ import { buildDashboardDelta, buildDashboardSnapshot, getDashboardDetail } from 
 import { dataPlaneRuntime, runtimePrompt } from "./runtime-environment.js";
 import { assertNewContractRevision } from "./retry-policy.js";
 import { assessTaskResult, classifyFailure } from "./failure-classifier.js";
+import { completionFailure, evaluateSynthesisConsistency, evaluateTaskCompletion } from "./completion-evaluator.js";
 import { assertExecutionContract, compileAndValidateExecutionContract, executionContractFailure, EXECUTION_CAPABILITIES, RUN_AUTHORIZATION } from "./execution-contracts.js";
 import { classifyRunNotification, NOTIFICATION_KINDS } from "./notification-policy.js";
-import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
+import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
+import { TurnDispatcher } from "./turn-dispatcher.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v5.html";
+const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v7.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const execFile = promisify(execFileCallback);
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -916,6 +918,8 @@ export class McpControlServer {
     this.lines = null;
     this.registry = options.registry ?? new ControlRegistry({ path: options.registryPath });
     this.ownsRegistry = !options.registry;
+    this.instanceId = options.instanceId ?? `worker_${randomUUID()}`;
+    this.turnDispatcher = options.turnDispatcher ?? new TurnDispatcher({ registry: this.registry, instanceId: this.instanceId });
     this.router = options.router ?? new AgentRouter();
     this.contextManager = options.contextManager ?? new ContextManager(this.registry);
     this.contextResolver = options.contextResolver ?? new ContextResolver(this.registry);
@@ -932,6 +936,8 @@ export class McpControlServer {
       roleTemplates: this.roleTemplates,
       getControl: () => this.#getControl(),
       decorateAgent: (...args) => this.#decorateAgent(...args),
+      turnDispatcher: this.turnDispatcher,
+      instanceId: this.instanceId,
     });
     this.runController = options.runController ?? new RunController({
       registry: this.registry,
@@ -943,8 +949,9 @@ export class McpControlServer {
       roleTemplates: this.roleTemplates,
       getControl: () => this.#getControl(),
       decorateAgent: (...args) => this.#decorateAgent(...args),
+      turnDispatcher: this.turnDispatcher,
+      instanceId: this.instanceId,
     });
-    this.instanceId = options.instanceId ?? `worker_${randomUUID()}`;
     // Normal work wakes the scheduler through queueMicrotask callbacks. This is
     // only a recovery/safety tick, so keep it slow while the daemon is idle.
     this.schedulerIntervalMs = options.schedulerIntervalMs ?? 30_000;
@@ -988,7 +995,57 @@ export class McpControlServer {
     this.schedulerTimer = setInterval(() => void this.#pollTasks(), this.schedulerIntervalMs);
     this.schedulerTimer.unref?.();
     queueMicrotask(() => void this.#recoverIntegrations().finally(() => this.#pollTasks()));
-    queueMicrotask(() => void this.#resumeControlDispatches());
+    queueMicrotask(() => void this.#reconcileTurnDispatches().finally(() => this.#resumeControlDispatches()));
+  }
+
+  async #reconcileTurnDispatches() {
+    const active = this.registry.listTurnDispatches({ active: true, limit: 500 });
+    if (!active.length) return { checked: 0, recovered: 0, attention: 0 };
+    const observable = active.filter((dispatch) => dispatch.threadId && ["turn_submitting", "turn_running", "cancelling"].includes(dispatch.status));
+    const control = observable.length ? await this.#getControl() : null;
+    let recovered = 0;
+    let attention = 0;
+    for (const original of active) {
+      let dispatch = this.registry.claimTurnDispatch(original.id, this.instanceId, 120_000, { forceRecovery: true });
+      if (!dispatch) continue;
+      try {
+        if (["prepared", "thread_acquiring", "thread_created"].includes(dispatch.status)) {
+          if (dispatch.parentTaskId) {
+            dispatch = this.registry.transitionTurnDispatch(dispatch.id, "failed", {
+              failure: { category: "coordination", code: "DISPATCH_INTERRUPTED_BEFORE_SUBMISSION", message: "Daemon restarted before Turn submission", retryable: true, nextAction: "retry_if_safe" },
+              reconciliationDecision: "no_turn_submitted",
+            }, { ownerToken: dispatch.ownerToken });
+            this.registry.recoverInterruptedTasks({ taskId: dispatch.parentTaskId });
+          }
+          continue;
+        }
+        if (dispatch.status === "cancelling") {
+          if (dispatch.turnId) {
+            try { await control.interruptTask(dispatch.threadId, dispatch.turnId); } catch { /* read reconciliation below decides */ }
+          }
+          const reconciled = await this.turnDispatcher.reconcile(dispatch.id, control, { ownerToken: dispatch.ownerToken });
+          dispatch = reconciled.dispatch;
+          if (dispatch && !["completed", "failed", "interrupted"].includes(dispatch.status)) {
+            dispatch = this.registry.transitionTurnDispatch(dispatch.id, "cancelled", { reconciliationDecision: "cancelled_after_restart" }, { ownerToken: dispatch.ownerToken });
+          }
+        } else {
+          const reconciled = await this.turnDispatcher.reconcile(dispatch.id, control, { ownerToken: dispatch.ownerToken });
+          dispatch = reconciled.dispatch;
+        }
+        if (dispatch && ["completed", "failed", "interrupted", "cancelled"].includes(dispatch.status)) recovered += 1;
+      } catch (error) {
+        const current = this.registry.getTurnDispatch(original.id);
+        if (current && !["completed", "failed", "interrupted", "cancelled", "recovery_attention"].includes(current.status)) {
+          this.registry.transitionTurnDispatch(current.id, "recovery_attention", {
+            failure: { category: "coordination", code: "DISPATCH_RECONCILIATION_FAILED", message: error.message, retryable: false, nextAction: "inspect_dispatch" },
+            reconciliationDecision: "read_failed",
+          }, { ownerToken: current.ownerToken });
+          attention += 1;
+        }
+      }
+    }
+    if (recovered || attention) this.registry.recordEvent("system", null, "system.turn_dispatches_reconciled", { checked: active.length, recovered, attention });
+    return { checked: active.length, recovered, attention };
   }
 
   async #recoverIntegrations() {
@@ -1004,10 +1061,41 @@ export class McpControlServer {
       const task = journal.taskId ? this.registry.getTask(journal.taskId) : null;
       if (!task || task.status !== "integration_pending") continue;
       const validationDecision = task.metadata?.validation?.decision;
-      const status = journal.status === "recorded"
-        ? (validationDecision === "accept_with_warnings" ? "completed_with_warnings" : "completed")
-        : "integration_blocked";
-      this.registry.finishRecoveredIntegration(task.id, journal, { status, error: journal.lastError });
+      if (journal.status === "recorded") {
+        const contract = task.metadata?.executionContract ?? task.metadata?.execution?.executionContract ?? {};
+        const worktree = journal.worktreeId ? this.registry.getManagedWorktree(journal.worktreeId) : null;
+        const integration = { status: "integrated", journalId: journal.id, artifact: worktree?.metadata?.artifact ?? journal.artifact ?? null, recovered: true };
+        let postconditionEvidence = null;
+        if (typeof this.worktreeManager.verifyIntegration === "function") {
+          try {
+            postconditionEvidence = await this.worktreeManager.verifyIntegration(journal.worktreeId);
+          } catch (error) {
+            postconditionEvidence = { required: true, passed: false, summary: error.message, recoveryVerificationFailed: true };
+          }
+        }
+        const result = this.#storedExecutionResult(task, { output: task.output, turnId: task.turnId, turn: { id: task.turnId, status: "completed" } });
+        const completionVerdict = evaluateTaskCompletion({
+          result,
+          contract,
+          acceptanceCriteria: task.metadata?.acceptanceCriteria ?? [],
+          validation: task.metadata?.validation ?? (validationDecision ? { decision: validationDecision } : null),
+          artifact: integration.artifact,
+          integration,
+          postconditionEvidence,
+          strictEvidence: result?.evidenceComplete !== undefined,
+        });
+        this.registry.updateTask(task.id, { metadata: { completionVerdict, integration, postconditionEvidence } });
+        if (["accept", "accept_with_warnings"].includes(completionVerdict.decision)) {
+          const status = validationDecision === "accept_with_warnings" ? "completed_with_warnings" : "completed";
+          this.registry.finishRecoveredIntegration(task.id, journal, { status });
+        } else {
+          this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, completionFailure(completionVerdict), {
+            terminalStatus: completionVerdict.decision === "attention" ? "recovery_attention" : "failed",
+          });
+        }
+      } else {
+        this.registry.finishRecoveredIntegration(task.id, journal, { status: "integration_blocked", error: journal.lastError });
+      }
       for (const lease of this.registry.listLeases({ ownerTaskId: task.id }).filter((entry) => entry.status === "active")) {
         this.registry.releaseLease(lease.key, task.id, { ownerToken: lease.ownerToken });
       }
@@ -1251,7 +1339,16 @@ export class McpControlServer {
         result = this.registry.refreshGlobalRun(args.globalRunId);
         if (!result) throw new Error(`Global Run not found: ${args.globalRunId}`);
       } else if (name === "cancel_global_run") {
-        result = this.registry.cancelGlobalRun(args.globalRunId);
+        const requested = this.registry.requestGlobalRunCancellation(args.globalRunId);
+        if (["completed", "failed", "cancelled", "attention_required"].includes(requested.globalRun.status)) {
+          result = requested;
+        } else {
+          for (const membership of requested.memberships) {
+            const run = this.registry.getRun(membership.runId);
+            if (run && !TERMINAL_RUN_STATUSES.has(run.status)) await this.runController.cancel(run.id);
+          }
+          result = this.registry.cancelGlobalRun(args.globalRunId, { childRunsCancelled: true });
+        }
       } else if (name === "list_runs") {
         result = { runs: this.registry.listRuns(args) };
       } else if (name === "archive_run") {
@@ -1527,6 +1624,11 @@ export class McpControlServer {
     let agent;
     let mode;
     let heartbeatTimer;
+    let workspaceBefore = null;
+    let workspaceEvidence = null;
+    let contextPack;
+    let taskPrompt;
+    let turnDispatchIntent;
     let lease;
     let agentLease;
     let leaseKey = args.leaseKey ?? (executionContract.workspaceMode === "shared" && executionContract.mutatesWorkspace
@@ -1534,6 +1636,13 @@ export class McpControlServer {
       : null);
     const leaseTtlMs = args.leaseTtlMs ?? 120_000;
     try {
+      if (executionContract.workspaceMode === "shared" && args.cwd) {
+        try {
+          workspaceBefore = await this.worktreeManager.inspectRepository(args.cwd);
+        } catch (error) {
+          workspaceBefore = { available: false, error: error.message };
+        }
+      }
       if (executionContract.workspaceMode === "worktree") {
         managedWorktree = await this.worktreeManager.prepare({ taskId, cwd: args.cwd, baseRef: args.baseRef, branch: args.branch });
         effectiveCwd = managedWorktree.path;
@@ -1559,16 +1668,34 @@ export class McpControlServer {
       }
 
       if (args.preparedAgentId) {
+        contextPack = this.contextManager.build({
+          prompt: args.prompt, cwd: effectiveCwd, role: args.role, capabilities: args.capabilities,
+          tools: args.tools, branch: args.branch, touch: true,
+        });
+        taskPrompt = [
+          RUN_AUTHORIZATION,
+          "[DATA PLANE BOUNDARY] Do not open or query the Control Plane dashboard. Work only on this assigned task and return status through the task result.",
+          runtimePrompt(this.runtime),
+          this.contextManager.format(contextPack),
+        ].join("\n\n");
+        const currentRunId = this.registry.getTask(taskId)?.metadata?.runId ?? null;
+        turnDispatchIntent = this.turnDispatcher.beginThreadAcquisition({
+          subjectType: "task", subjectId: taskId, purpose: "execution", revision: claim?.attempt ?? 1,
+          parentTaskId: taskId, parentRunId: currentRunId, prompt: taskPrompt,
+          settleAgentOnTerminal: false,
+          timeoutMs: args.timeoutMs ?? 1_800_000, executionContractFingerprint: executionContract.fingerprint,
+          contextSnapshotId: this.registry.getTask(taskId)?.metadata?.contextSnapshotId ?? null,
+        });
         sourceThreadId = args.preparedSourceThreadId ?? sourceThreadId;
         routing = args.preparedRouting ?? null;
         agentLease = this.registry.acquireAgentLease(args.preparedAgentId, taskId, claimToken, leaseTtlMs, { mode: "prepared" });
         if (!agentLease) throw new Error(`Agent thread is already leased: ${args.preparedAgentId}`);
-        agent = await control.resumeAgent(args.preparedAgentId, {
+        agent = await this.turnDispatcher.acquireThread(turnDispatchIntent.id, () => control.resumeAgent(args.preparedAgentId, {
           cwd: effectiveCwd,
           sandbox,
           model,
           approvalPolicy,
-        });
+        }), { threadAction: "resume" });
         agent.name = args.preparedAgentName ?? agent.name;
         mode = args.preparedMode ?? "prepared";
       } else if (!sourceThreadId && (args.routingMode ?? "auto") === "auto") {
@@ -1591,54 +1718,77 @@ export class McpControlServer {
         if (["reuse", "fork"].includes(routing.decision)) sourceThreadId = routing.selectedAgent.id;
       }
 
+      if (!turnDispatchIntent) {
+        contextPack = routing?.contextPack ?? this.contextManager.build({
+          prompt: args.prompt, cwd: effectiveCwd, role: args.role, capabilities: args.capabilities,
+          tools: args.tools, branch: args.branch, touch: true,
+        });
+        taskPrompt = [
+          RUN_AUTHORIZATION,
+          "[DATA PLANE BOUNDARY] Do not open or query the Control Plane dashboard. Work only on this assigned task and return status through the task result.",
+          runtimePrompt(this.runtime),
+          this.contextManager.format(contextPack),
+        ].join("\n\n");
+        const currentRecord = this.registry.getTask(taskId);
+        turnDispatchIntent = this.turnDispatcher.beginThreadAcquisition({
+          subjectType: "task", subjectId: taskId, purpose: "execution", revision: currentRecord?.attempt ?? claim?.attempt ?? 1,
+          parentTaskId: taskId, parentRunId: currentRecord?.metadata?.runId ?? null, prompt: taskPrompt,
+          settleAgentOnTerminal: false,
+          timeoutMs: args.timeoutMs ?? 1_800_000, executionContractFingerprint: executionContract.fingerprint,
+          contextSnapshotId: currentRecord?.metadata?.contextSnapshotId ?? null,
+        });
+      }
+      this.registry.updateTask(taskId, { metadata: { activeTurnDispatchId: turnDispatchIntent.id } });
+
       if (!agent && !sourceThreadId) {
         const ephemeral = args.ephemeral ?? routing?.ephemeral ?? false;
-        agent = await control.spawnAgent({
+        agent = await this.turnDispatcher.acquireThread(turnDispatchIntent.id, () => control.spawnAgent({
           cwd: effectiveCwd,
           sandbox,
           model,
           approvalPolicy,
           developerInstructions: `${roleTemplate.developerInstructions}\n\nDashboard boundary: this is a Data Plane thread. Do not call show_agent_dashboard, get_dashboard_state, or get_dashboard_detail; report status through your assigned task only.`,
           ephemeral,
-        });
+        }), { threadAction: ephemeral ? "ephemeral_spawn" : "spawn" });
         agent.ephemeral = ephemeral;
         mode = ephemeral ? "ephemeral_spawned" : "spawned";
       } else if (!agent && args.reuseExisting === true && routing?.decision !== "fork") {
         agentLease = this.registry.acquireAgentLease(sourceThreadId, taskId, claimToken, leaseTtlMs, { mode: "reused" });
         if (agentLease) {
-          agent = await control.resumeAgent(sourceThreadId, {
+          agent = await this.turnDispatcher.acquireThread(turnDispatchIntent.id, () => control.resumeAgent(sourceThreadId, {
             cwd: effectiveCwd,
             sandbox,
             model,
             approvalPolicy,
-          });
+          }), { threadAction: "resume" });
           mode = "reused";
         } else {
           if (routing?.budgetState && (!routing.budgetState.canCreateProject || !routing.budgetState.canCreateRole || !routing.budgetState.canForkLineage)) {
+            this.turnDispatcher.failBeforeSubmission(turnDispatchIntent.id, Object.assign(new Error("Agent lease unavailable and thread budget prevents fallback"), { code: "THREAD_BUDGET_WAIT" }));
             if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
             if (managedWorktree) await this.worktreeManager.cleanup(managedWorktree.id);
             const waiting = this.registry.waitClaimForLease(taskId, this.instanceId, claimToken, this.schedulerIntervalMs);
             this.registry.recordEvent("task", taskId, "task.thread_budget_waiting", { sourceThreadId, reason: "lease_race_budget_fenced" });
             return { waitingForLease: true, routing, record: waiting };
           }
-          agent = await control.forkAgent(sourceThreadId, {
+          agent = await this.turnDispatcher.acquireThread(turnDispatchIntent.id, () => control.forkAgent(sourceThreadId, {
             cwd: effectiveCwd,
             sandbox,
             model,
             approvalPolicy,
             ephemeral: args.ephemeral ?? false,
-          });
+          }), { threadAction: "fork" });
           mode = "forked_lease_fallback";
           routing = { ...(routing ?? {}), leaseFallback: { sourceThreadId, reason: "source agent already leased" } };
         }
       } else if (!agent) {
-        agent = await control.forkAgent(sourceThreadId, {
+        agent = await this.turnDispatcher.acquireThread(turnDispatchIntent.id, () => control.forkAgent(sourceThreadId, {
           cwd: effectiveCwd,
           sandbox,
           model,
           approvalPolicy,
           ephemeral: args.ephemeral ?? false,
-        });
+        }), { threadAction: "fork" });
         mode = "forked";
         if (args.reuseExisting === true && routing?.rolloverRequired) {
           routing = { ...routing, rollover: { sourceThreadId, reason: "reuse history threshold reached" } };
@@ -1739,15 +1889,6 @@ export class McpControlServer {
         routing,
       });
       if (!bound) throw new Error(`Task claim was fenced before agent start: ${taskId}`);
-      const contextPack = this.contextManager.build({
-        prompt: args.prompt,
-        cwd: effectiveCwd,
-        role: args.role,
-        capabilities: args.capabilities,
-        tools: args.tools,
-        branch: args.branch,
-        agent: storedAgent,
-      });
       this.registry.updateTask(taskId, { metadata: { contextPack } });
       heartbeatTimer = setInterval(() => {
         try {
@@ -1761,35 +1902,61 @@ export class McpControlServer {
       }, 15_000);
       heartbeatTimer.unref?.();
 
-      const task = await control.runTask(agent.id, [
-        RUN_AUTHORIZATION,
-        "[DATA PLANE BOUNDARY] Do not open or query the Control Plane dashboard. Work only on this assigned task and return status through the task result.",
-        runtimePrompt(this.runtime),
-        this.contextManager.format(contextPack),
-      ].join("\n\n"), {
-        cwd: effectiveCwd,
-        model,
-        effort,
-        approvalPolicy,
-        ...(networkAccess ? {
-          sandboxPolicy: {
-            type: "workspaceWrite",
-            writableRoots: [effectiveCwd],
-            networkAccess: true,
-            excludeTmpdirEnvVar: false,
-            excludeSlashTmp: false,
+      const task = await this.turnDispatcher.execute({
+        subjectType: "task", subjectId: taskId, purpose: "execution",
+        revision: currentTask?.attempt ?? claim?.attempt ?? 1,
+        parentTaskId: taskId, parentRunId: run?.id ?? null,
+        prompt: taskPrompt, timeoutMs: args.timeoutMs ?? 1_800_000, control,
+        settleAgentOnTerminal: false,
+        executionContractFingerprint: executionContract.fingerprint,
+        contextSnapshotId: currentTask?.metadata?.contextSnapshotId ?? run?.metadata?.contextSnapshotId ?? null,
+        threadAction: mode,
+        acquireThread: async () => agent,
+        agent,
+        onThread: ({ dispatch }) => this.registry.updateTask(taskId, { metadata: { activeTurnDispatchId: dispatch.id } }),
+        runOptions: {
+          cwd: effectiveCwd,
+          model,
+          effort,
+          approvalPolicy,
+          ...(networkAccess ? {
+            sandboxPolicy: {
+              type: "workspaceWrite",
+              writableRoots: [effectiveCwd],
+              networkAccess: true,
+              excludeTmpdirEnvVar: false,
+              excludeSlashTmp: false,
+            },
+          } : {}),
+          timeoutMs: args.timeoutMs ?? 1_800_000,
+          onStarted: ({ turnId }) => {
+            this.registry.setClaimTurn(taskId, this.instanceId, claimToken, turnId);
+            this.registry.updateAgent(agent.id, { status: "running", metadata: { lifecycleState: "running" } });
+            this.registry.recordEvent("agent", agent.id, "agent.running", { taskId, turnId });
           },
-        } : {}),
-        timeoutMs: args.timeoutMs ?? 1_800_000,
-        onStarted: ({ turnId }) => {
-          this.registry.setClaimTurn(taskId, this.instanceId, claimToken, turnId);
-          this.registry.updateAgent(agent.id, { status: "running", metadata: { lifecycleState: "running" } });
-          this.registry.recordEvent("agent", agent.id, "agent.running", { taskId, turnId });
         },
       });
       const status = task.turn?.status?.type ?? task.turn?.status ?? "completed";
-      const outcomeFailure = assessTaskResult(task);
-      if (outcomeFailure) {
+      if (executionContract.workspaceMode === "shared" && args.cwd) {
+        try {
+          const workspaceAfter = await this.worktreeManager.inspectRepository(args.cwd);
+          workspaceEvidence = {
+            available: workspaceBefore?.available !== false,
+            beforeFingerprint: workspaceBefore?.fingerprint ?? null,
+            afterFingerprint: workspaceAfter.fingerprint,
+            changed: Boolean(workspaceBefore?.fingerprint && workspaceBefore.fingerprint !== workspaceAfter.fingerprint),
+            before: workspaceBefore,
+            after: workspaceAfter,
+          };
+        } catch (error) {
+          workspaceEvidence = { available: false, changed: null, before: workspaceBefore, error: error.message };
+        }
+      }
+      const strictEvidence = task.evidenceComplete !== undefined;
+      const executionVerdict = evaluateTaskCompletion({ result: task, contract: executionContract, phase: "execution", strictEvidence });
+      if (!['accept', 'accept_with_warnings'].includes(executionVerdict.decision)) {
+        this.registry.updateTask(taskId, { metadata: { completionVerdict: executionVerdict, workspaceEvidence } });
+        const outcomeFailure = completionFailure(executionVerdict);
         const persistedTask = this.registry.finishFailureClaim(taskId, this.instanceId, claimToken, outcomeFailure, {
           terminalStatus: status === "interrupted" ? "interrupted" : "failed",
           output: task.output ?? null,
@@ -1807,6 +1974,8 @@ export class McpControlServer {
       const acceptanceCriteria = this.registry.getTask(taskId)?.metadata?.acceptanceCriteria ?? [];
       let validation = null;
       let integration = null;
+      let artifact = null;
+      let postconditionEvidence = null;
       let persistedTask;
       if (acceptanceCriteria.length) {
         const agentDone = this.registry.markClaimAgentDone(taskId, this.instanceId, claimToken, { output: task.output ?? null, turnId: task.turnId ?? null });
@@ -1831,24 +2000,58 @@ export class McpControlServer {
         }
         if (["accept", "accept_with_warnings"].includes(validation.decision) && managedWorktree && executionContract.integrationStrategy !== "none") {
           if (!this.registry.markClaimIntegrationPending(taskId, this.instanceId, claimToken, { strategy: executionContract.integrationStrategy })) throw new Error(`Task integration transition was rejected by fencing: ${taskId}`);
-          await this.worktreeManager.finalize(managedWorktree.id);
+          artifact = await this.worktreeManager.finalize(managedWorktree.id);
           integration = await this.worktreeManager.integrate(managedWorktree.id, { strategy: executionContract.integrationStrategy });
+          postconditionEvidence = typeof this.worktreeManager.verifyIntegration === "function"
+            ? await this.worktreeManager.verifyIntegration(managedWorktree.id)
+            : null;
           this.registry.updateTask(taskId, { metadata: { integration } });
           this.#recordOrchestration(run, "task_integrated", { taskId, strategy: executionContract.integrationStrategy, artifactCommit: integration.artifact?.commit ?? null });
         }
-        persistedTask = this.registry.finishValidationClaim(taskId, this.instanceId, claimToken, validation);
+        if (!["accept", "accept_with_warnings"].includes(validation.decision)) {
+          const completionVerdict = evaluateTaskCompletion({
+            result: task, contract: executionContract, acceptanceCriteria, validation, workspaceEvidence, strictEvidence,
+          });
+          this.registry.updateTask(taskId, { metadata: { completionVerdict, workspaceEvidence } });
+          persistedTask = this.registry.finishValidationClaim(taskId, this.instanceId, claimToken, validation);
+        } else {
+          const completionVerdict = evaluateTaskCompletion({
+            result: task, contract: executionContract, acceptanceCriteria, validation,
+            artifact: artifact ?? integration?.artifact ?? null, integration, workspaceEvidence, postconditionEvidence, strictEvidence,
+          });
+          this.registry.updateTask(taskId, { metadata: { completionVerdict, workspaceEvidence, postconditionEvidence } });
+          persistedTask = ["accept", "accept_with_warnings"].includes(completionVerdict.decision)
+            ? this.registry.finishValidationClaim(taskId, this.instanceId, claimToken, validation)
+            : this.registry.finishFailureClaim(taskId, this.instanceId, claimToken, completionFailure(completionVerdict), {
+              terminalStatus: completionVerdict.decision === "attention" ? "recovery_attention" : "failed",
+            });
+        }
       } else {
         if (managedWorktree && executionContract.integrationStrategy !== "none") {
           if (!this.registry.markClaimIntegrationPending(taskId, this.instanceId, claimToken, { strategy: executionContract.integrationStrategy })) throw new Error(`Task integration transition was rejected by fencing: ${taskId}`);
-          await this.worktreeManager.finalize(managedWorktree.id);
+          artifact = await this.worktreeManager.finalize(managedWorktree.id);
           integration = await this.worktreeManager.integrate(managedWorktree.id, { strategy: executionContract.integrationStrategy });
+          postconditionEvidence = typeof this.worktreeManager.verifyIntegration === "function"
+            ? await this.worktreeManager.verifyIntegration(managedWorktree.id)
+            : null;
           this.registry.updateTask(taskId, { metadata: { integration } });
           this.#recordOrchestration(run, "task_integrated", { taskId, strategy: executionContract.integrationStrategy, artifactCommit: integration.artifact?.commit ?? null });
         }
-        persistedTask = this.registry.completeClaim(taskId, this.instanceId, claimToken, {
-          output: task.output ?? null,
-          turnId: task.turnId ?? null,
+        const completionVerdict = evaluateTaskCompletion({
+          result: task, contract: executionContract, acceptanceCriteria,
+          artifact: artifact ?? integration?.artifact ?? null, integration, workspaceEvidence, postconditionEvidence, strictEvidence,
         });
+        this.registry.updateTask(taskId, { metadata: { completionVerdict, workspaceEvidence, postconditionEvidence } });
+        persistedTask = ["accept", "accept_with_warnings"].includes(completionVerdict.decision)
+          ? this.registry.completeClaim(taskId, this.instanceId, claimToken, {
+            output: task.output ?? null,
+            turnId: task.turnId ?? null,
+          })
+          : this.registry.finishFailureClaim(taskId, this.instanceId, claimToken, completionFailure(completionVerdict), {
+            terminalStatus: completionVerdict.decision === "attention" ? "recovery_attention" : "failed",
+            output: task.output ?? null,
+            turnId: task.turnId ?? null,
+          });
       }
       clearInterval(heartbeatTimer);
       if (!persistedTask) throw new Error(`Task completion was rejected by fencing: ${taskId}`);
@@ -1860,6 +2063,7 @@ export class McpControlServer {
       return { mode, sourceThreadId, routing, contextPack, validation, integration, resultMemory, agent: this.registry.getAgent(agent.id), task, record: persistedTask };
     } catch (error) {
       clearInterval(heartbeatTimer);
+      if (turnDispatchIntent) this.turnDispatcher.failBeforeSubmission(turnDispatchIntent.id, error);
       const ownsClaim = this.registry.isClaimOwner(taskId, this.instanceId, claimToken);
       if (ownsClaim && leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
       const leasedAgentId = agent?.id ?? agentLease?.agentId;
@@ -2125,6 +2329,7 @@ export class McpControlServer {
     } else {
       this.registry.updateRun(runId, { status: "planning", metadata: { dispatchPhase: "planning", planningStartedAt: new Date().toISOString() } });
       plan = await this.planner.plan({
+        runId,
         objective: args.objective,
         cwd: args.cwd,
         constraints: args.constraints,
@@ -2566,6 +2771,50 @@ export class McpControlServer {
     }
   }
 
+  #storedExecutionResult(task, fallback = {}) {
+    const dispatch = this.registry.listTurnDispatches({ parentTaskId: task.id, purpose: "execution", limit: 100 })
+      .find((entry) => entry.turnId === task.turnId || entry.status === "completed");
+    return dispatch?.evidence?.result ?? fallback;
+  }
+
+  async #finishRecoveredCompletion(task, result, validation = null) {
+    const contract = task.metadata?.executionContract ?? task.metadata?.execution?.executionContract ?? {};
+    const acceptanceCriteria = task.metadata?.acceptanceCriteria ?? [];
+    let artifact = task.metadata?.integration?.artifact ?? task.metadata?.artifact ?? null;
+    let integration = task.metadata?.integration?.status === "integrated" ? task.metadata.integration : null;
+    let postconditionEvidence = task.metadata?.postconditionEvidence ?? null;
+    const worktreeId = task.metadata?.managedWorktreeId ?? null;
+    if (["accept", "accept_with_warnings"].includes(validation?.decision) || !acceptanceCriteria.length) {
+      if (worktreeId && contract.integrationStrategy !== "none" && integration?.status !== "integrated") {
+        if (!this.registry.markClaimIntegrationPending(task.id, task.workerId, task.claimToken, { strategy: contract.integrationStrategy })) {
+          throw new Error(`Recovered Task integration transition was rejected by fencing: ${task.id}`);
+        }
+        artifact = await this.worktreeManager.finalize(worktreeId);
+        integration = await this.worktreeManager.integrate(worktreeId, { strategy: contract.integrationStrategy });
+        this.registry.updateTask(task.id, { metadata: { integration } });
+      }
+      if (worktreeId && contract.integrationStrategy !== "none" && typeof this.worktreeManager.verifyIntegration === "function") {
+        postconditionEvidence = await this.worktreeManager.verifyIntegration(worktreeId);
+      }
+    }
+    const strictEvidence = result?.evidenceComplete !== undefined;
+    const completionVerdict = evaluateTaskCompletion({
+      result, contract, acceptanceCriteria, validation, artifact, integration,
+      workspaceEvidence: task.metadata?.workspaceEvidence ?? null, postconditionEvidence, strictEvidence,
+    });
+    this.registry.updateTask(task.id, { metadata: { completionVerdict, postconditionEvidence } });
+    if (!["accept", "accept_with_warnings"].includes(completionVerdict.decision)) {
+      return this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, completionFailure(completionVerdict), {
+        terminalStatus: completionVerdict.decision === "attention" ? "recovery_attention" : "failed",
+        output: result?.output ?? task.output,
+        turnId: result?.turnId ?? task.turnId,
+      });
+    }
+    return acceptanceCriteria.length
+      ? this.registry.finishValidationClaim(task.id, task.workerId, task.claimToken, validation)
+      : this.registry.completeClaim(task.id, task.workerId, task.claimToken, { output: result?.output ?? task.output, turnId: result?.turnId ?? task.turnId });
+  }
+
   async reconcileStaleTasks() {
     const staleBefore = Date.now() - this.staleTaskMs;
     const stale = this.registry.listTasks({ limit: 1000 }).filter((task) =>
@@ -2599,15 +2848,64 @@ export class McpControlServer {
             } catch (error) {
               validation = { decision: "error", failureKind: "environment", summary: `Recovered validator output was invalid: ${error.message}`, evidence: [], unmetCriteria: task.metadata?.acceptanceCriteria ?? [] };
             }
-            this.registry.finishValidationClaim(task.id, task.workerId, task.claimToken, validation);
+            if (["accept", "accept_with_warnings"].includes(validation.decision)) {
+              const executionResult = this.#storedExecutionResult(task, {
+                output: task.output, turnId: task.turnId, turn: { id: task.turnId, status: "completed" },
+              });
+              await this.#finishRecoveredCompletion(task, executionResult, validation);
+            } else {
+              const executionResult = this.#storedExecutionResult(task, { output: task.output, turnId: task.turnId, turn: { id: task.turnId, status: "completed" } });
+              const completionVerdict = evaluateTaskCompletion({
+                result: executionResult,
+                contract: task.metadata?.executionContract ?? task.metadata?.execution?.executionContract ?? {},
+                acceptanceCriteria: task.metadata?.acceptanceCriteria ?? [],
+                validation,
+                strictEvidence: executionResult?.evidenceComplete !== undefined,
+              });
+              this.registry.updateTask(task.id, { metadata: { completionVerdict } });
+              this.registry.finishValidationClaim(task.id, task.workerId, task.claimToken, validation);
+            }
           } else {
             const failure = classifyFailure(turn.error?.message ?? turn.error ?? `Validator turn ended with status: ${turn.status}`, "validation");
             this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, failure, { terminalStatus: "validation_failed" });
           }
-        } else if (turn.status === "completed" && !(task.metadata?.acceptanceCriteria ?? []).length && ["running", "approval_waiting"].includes(task.status)) {
-          const failure = assessTaskResult({ turn, output, executionItems: turn.items ?? [] });
-          if (failure) this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, failure, { terminalStatus: "failed", output, turnId });
-          else this.registry.completeClaim(task.id, task.workerId, task.claimToken, { output, turnId });
+        } else if (turn.status === "completed" && ["running", "approval_waiting"].includes(task.status)) {
+          const executionResult = { turn, output, turnId, executionItems: turn.items ?? [], completionMethod: "thread/read-recovery", recoveredFromRead: true, evidenceComplete: true };
+          const executionVerdict = evaluateTaskCompletion({
+            result: executionResult,
+            contract: task.metadata?.executionContract ?? task.metadata?.execution?.executionContract ?? {},
+            phase: "execution",
+            strictEvidence: true,
+          });
+          if (!["accept", "accept_with_warnings"].includes(executionVerdict.decision)) {
+            this.registry.updateTask(task.id, { metadata: { completionVerdict: executionVerdict } });
+            this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, completionFailure(executionVerdict), { terminalStatus: "failed", output, turnId });
+          } else if ((task.metadata?.acceptanceCriteria ?? []).length) {
+            if (!this.registry.markClaimAgentDone(task.id, task.workerId, task.claimToken, { output, turnId })) throw new Error(`Recovered Task agent_done transition was rejected: ${task.id}`);
+            if (!this.registry.markClaimValidating(task.id, task.workerId, task.claimToken)) throw new Error(`Recovered Task validating transition was rejected: ${task.id}`);
+            const validation = await this.resultValidator.validate({
+              taskId: task.id,
+              prompt: task.prompt,
+              acceptanceCriteria: task.metadata.acceptanceCriteria,
+              output,
+              cwd: task.metadata?.effectiveCwd ?? task.cwd,
+            });
+            const current = this.registry.getTask(task.id);
+            if (["accept", "accept_with_warnings"].includes(validation.decision)) await this.#finishRecoveredCompletion(current, executionResult, validation);
+            else {
+              const completionVerdict = evaluateTaskCompletion({
+                result: executionResult,
+                contract: current.metadata?.executionContract ?? current.metadata?.execution?.executionContract ?? {},
+                acceptanceCriteria: current.metadata?.acceptanceCriteria ?? [],
+                validation,
+                strictEvidence: true,
+              });
+              this.registry.updateTask(task.id, { metadata: { completionVerdict } });
+              this.registry.finishValidationClaim(task.id, task.workerId, task.claimToken, validation);
+            }
+          } else {
+            await this.#finishRecoveredCompletion(task, executionResult);
+          }
         } else if (["failed", "interrupted"].includes(turn.status) && ["running", "approval_waiting"].includes(task.status)) {
           const failure = assessTaskResult({ turn, output, executionItems: turn.items ?? [] });
           this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, failure, { terminalStatus: turn.status, output, turnId });
@@ -2642,12 +2940,11 @@ export class McpControlServer {
 
   async #maybeNotifyOrchestrator(run) {
     const agentId = run.metadata?.orchestratorAgentId;
-    if (!agentId || run.metadata?.orchestratorFinalized === "completed") return this.registry.getRunResult(run.id)?.synthesis ?? null;
+    if (!agentId || ["completed", "consistency_failed"].includes(run.metadata?.orchestratorFinalized)) return this.registry.getRunResult(run.id)?.synthesis ?? null;
     if (run.metadata?.orchestratorFinalized === "notifying") return null;
     this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "notifying" } });
     try {
       const control = await this.#getControl();
-      await control.resumeAgent(agentId, { cwd: run.cwd, sandbox: "read-only", approvalPolicy: "never" });
       const tasks = this.registry.listTasks({ runId: run.id, limit: 1000 });
       const taskResults = tasks.map((task) => {
         const agent = task.agentId ? this.registry.getAgent(task.agentId) : null;
@@ -2661,18 +2958,30 @@ export class McpControlServer {
           validation: task.metadata?.validation ?? null,
         };
       });
-      const finalized = await control.runTask(agentId, [
+      const prompt = [
         `The delegated run is now ${run.status}. Record the final orchestration status without starting follow-up work.`,
         `Results: ${JSON.stringify(taskResults)}`,
         "Write a normal user-facing Codex final response with: overall verdict, a task-by-task summary naming each Data Plane thread, concrete files or tests reported, failures and their causal chain, and unresolved risks. Keep full low-level transcripts in the individual Data Plane threads. Do not create, retry, or start any follow-up work.",
-      ].join("\n\n"), { cwd: run.cwd, approvalPolicy: "never", timeoutMs: 180_000 });
-      this.registry.updateRunResultSynthesis(run.id, {
-        status: "completed",
-        synthesis: { source: "orchestrator", text: finalized.output, threadId: agentId, turnId: finalized.turnId ?? null },
+      ].join("\n\n");
+      const finalized = await this.turnDispatcher.execute({
+        subjectType: "run", subjectId: run.id, purpose: "orchestration", parentRunId: run.id,
+        prompt, timeoutMs: 180_000, control, allowTerminalParent: true, threadAction: "resume",
+        acquireThread: async () => {
+          const resumed = await control.resumeAgent(agentId, { cwd: run.cwd, sandbox: "read-only", approvalPolicy: "never" });
+          return resumed;
+        },
+        runOptions: { cwd: run.cwd, approvalPolicy: "never", timeoutMs: 180_000 },
       });
-      this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "completed" } });
-      this.registry.recordEvent("agent", agentId, "orchestrator.finalized", { runId: run.id, status: run.status });
-      return finalized.output;
+      const consistency = evaluateSynthesisConsistency(run.status, finalized.output);
+      this.registry.updateRunResultSynthesis(run.id, {
+        status: consistency.consistent ? "completed" : "consistency_failed",
+        synthesis: consistency.consistent
+          ? { source: "orchestrator", text: finalized.output, threadId: agentId, turnId: finalized.turnId ?? null, consistency }
+          : { source: "deterministic_fallback", text: consistency.summary, reportedText: finalized.output, threadId: agentId, turnId: finalized.turnId ?? null, consistency },
+      });
+      this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: consistency.consistent ? "completed" : "consistency_failed", synthesisConsistency: consistency } });
+      this.registry.recordEvent("agent", agentId, consistency.consistent ? "orchestrator.finalized" : "orchestrator.consistency_failed", { runId: run.id, status: run.status });
+      return consistency.consistent ? finalized.output : consistency.summary;
     } catch (error) {
       this.registry.updateRun(run.id, { metadata: { orchestratorFinalized: "failed", orchestratorFinalizationError: error.message } });
       this.logger(`Run ${run.id} orchestrator finalization failed: ${error.message}`);

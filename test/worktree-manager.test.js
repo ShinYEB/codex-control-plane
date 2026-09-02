@@ -170,6 +170,9 @@ test("commit integration cherry-picks a clean artifact and records the strategy"
     assert.equal(result.strategy, "commit");
     assert.equal(readFileSync(join(repo, "source.txt"), "utf8"), "integrated\n");
     assert.equal(registry.getManagedWorktree(worktree.id).status, "integrated");
+    const postcondition = await manager.verifyIntegration(worktree.id);
+    assert.equal(postcondition.passed, true);
+    assert.equal(postcondition.journalStatus, "recorded");
   } finally {
     registry.close();
     rmSync(root, { recursive: true, force: true });

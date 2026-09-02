@@ -1,6 +1,6 @@
 # 맥락·전역 실행 목표 영속성 계약
 
-- 설계 상태: G1~G6 구현 완료. schema version 7에 thread lifecycle projection과 versioned project/role budget이 포함된다.
+- 설계 상태: G1~G6와 TurnDispatch 구현 완료. schema version 8에 durable TurnDispatch와 v7 thread lifecycle projection·versioned project/role budget이 포함된다.
 - 현재 저장 계약: [PERSISTENCE.md](./PERSISTENCE.md)
 
 이 문서는 Context Resolution과 Global Run을 추가하기 위한 목표 schema, migration과 원자성 경계를 정의한다. 현재 구현의 SQLite single-writer, `PRAGMA user_version`, migration snapshot과 fencing 원칙을 그대로 유지한다.

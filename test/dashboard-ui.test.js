@@ -74,6 +74,7 @@ test("dashboard defaults to orchestration structure and separates work, threads,
   assert.match(html, /data-tab="results">결과/);
   assert.match(html, /tab: "graph"/);
   assert.match(html, /id="diagnostics"/);
+  assert.match(html, /Turn Dispatch/);
   assert.match(html, /id="open-diagnostics"[^>]*>고급 진단/);
   assert.match(html, /Context Snapshot/);
   assert.match(html, /Global Run/);
@@ -135,11 +136,12 @@ test("chat navigation opens actual Orchestrator and worker threads through the D
   assert.match(html, /data-thread-id=/);
   assert.doesNotMatch(html, /sendFollowUpMessage/);
   assert.doesNotMatch(html, /request\("ui\/message"/);
-  assert.match(html, /오케스트레이터 스레드 열기/);
-  assert.match(html, /작업 에이전트 스레드 열기/);
+  assert.match(html, /오케스트레이터 스레드/);
+  assert.match(html, /작업 에이전트 스레드/);
   assert.match(html, /navigator\.clipboard\.writeText\(threadId\)/);
   assert.match(html, /readOnly: !resultSession\.available/);
-  assert.match(html, /실행 중인 실제 작업 스레드를 읽기 전용으로 엽니다/);
+  assert.match(html, /명령 입력은 데몬이 관리/);
+  assert.match(html, /state\.runThreads/);
   assert.match(html, /run-card-actors/);
   assert.match(html, /executionParticipants/);
   assert.match(html, /node\.resultSession\?\.threadId[\s\S]*?openAgentThread\(node\.resultSession\.threadId\)/);

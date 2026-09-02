@@ -29,6 +29,8 @@
 | `roleTemplate` | 적용된 역할 템플릿 이름. 권한 근거가 아님 |
 | `fingerprint` | 정렬된 계약 JSON의 SHA-256 앞 20자리 |
 
+`outputs`는 설명용 label이 아니라 Completion Gate가 실제 결과와 대응시켜야 하는 요구사항이다. `workspace-change`는 non-empty diff 또는 적용 가능한 artifact를, `report`는 비어 있지 않은 구조화 결과와 provenance를 요구한다. 이름만 선언하고 임의의 자연어 output이 존재하는 것으로 충족 처리하지 않는다.
+
 ## Default compilation
 
 명시적 `taskKind`가 없으면 title, prompt, capability, tool의 단어를 이용한 호환 추론을 사용한다. 신규 Planner 출력은 명시적으로 제공해야 한다.
@@ -73,6 +75,8 @@ Compiler는 구조화된 `acceptanceCriteria`에서 실제 브라우저·viewpor
 8. version, enum, boolean, array, nullable string 필드의 타입이 schema와 다르다.
 9. mutation, side-effect, workspace mode, integration strategy가 서로 모순된다.
 10. execution capability가 sandbox, tool 또는 기존 호환 필드와 모순된다.
+11. `implementation`, `integration`, `release` Task에 명시적 criterion과 계약 기반 output·mutation 조건이 모두 없다.
+12. test Task의 완료 결과에 실제 test command evidence가 없다. 이 항목은 실행 후 Completion Gate에서 판정한다.
 
 검증은 두 경계에서 실행한다.
 
@@ -120,6 +124,12 @@ Task claim SQL은 `contractStatus=validated`이고 marker fingerprint가 저장 
 - `patch`: `git apply --check` 후 main workspace에 적용한다.
 - `commit`: main workspace가 clean일 때만 check 후 cherry-pick한다.
 - conflict 시 cherry-pick을 abort하고 artifact/worktree를 `integration_blocked`로 보존한다.
+
+`mutatesWorkspace=true`이고 계약이 workspace 변경 output을 요구하면 빈 diff는 성공이 아니다. Worktree integration이 끝난 것과 제품 작업이 완료된 것은 구분한다. 계약이 요구하면 destination workspace에서 postcondition을 다시 확인한 뒤 Completion Gate가 terminal 상태를 결정한다.
+
+## Completion boundary
+
+실행 계약은 성공 자체를 선언하지 않는다. terminal Turn 이후 [COMPLETION_GATE.md](./COMPLETION_GATE.md)가 명령, output, workspace, validation, integration과 postcondition evidence를 같은 contract fingerprint에 결합한다. `completeClaim()` 계열 상태 변경은 유효한 CompletionVerdict 없이 성공 상태를 만들 수 없어야 한다.
 
 ## Role and routing separation
 

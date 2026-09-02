@@ -25,11 +25,20 @@ export class WorktreeManager {
     const repoRoot = (await this.#git(["-C", cwd, "rev-parse", "--show-toplevel"])).trim();
     const head = (await this.#git(["-C", repoRoot, "rev-parse", "HEAD"])).trim();
     const status = (await this.#git(["-C", repoRoot, "status", "--porcelain"])).trim();
+    const trackedDiff = await this.#git(["-C", repoRoot, "diff", "--binary", "HEAD"]);
+    const untracked = (await this.#git(["-C", repoRoot, "ls-files", "--others", "--exclude-standard", "-z"]))
+      .split("\0").filter(Boolean).sort();
+    const untrackedDigests = [];
+    for (const path of untracked) {
+      const digest = (await this.#git(["-C", repoRoot, "hash-object", "--", path])).trim();
+      untrackedDigests.push([path, digest]);
+    }
     return {
       repoRoot,
       head,
       dirty: Boolean(status),
-      fingerprint: createHash("sha256").update(`${head}\n${status}`).digest("hex").slice(0, 20),
+      status,
+      fingerprint: createHash("sha256").update(JSON.stringify({ head, status, trackedDiff, untrackedDigests })).digest("hex").slice(0, 20),
     };
   }
 
@@ -223,6 +232,28 @@ export class WorktreeManager {
       }
     }
     return results;
+  }
+
+  async verifyIntegration(worktreeId) {
+    const worktree = this.registry.getManagedWorktree(worktreeId);
+    if (!worktree) throw new Error(`Managed worktree not found: ${worktreeId}`);
+    const journalId = worktree.metadata?.integrationJournalId ?? null;
+    const journal = journalId
+      ? this.registry.getIntegrationJournal(journalId)
+      : this.registry.listIntegrationJournals({ worktreeId, limit: 1 })[0] ?? null;
+    const artifact = worktree.metadata?.artifact ?? journal?.artifact ?? null;
+    const applied = worktree.status === "integrated" && await this.#isArtifactApplied(worktree.repoRoot, artifact);
+    const recorded = artifact?.changed === false || journal?.status === "recorded";
+    return {
+      required: true,
+      passed: Boolean(applied && recorded),
+      worktreeId,
+      journalId,
+      journalStatus: journal?.status ?? (artifact?.changed === false ? "not_applicable" : null),
+      artifactChanged: artifact?.changed ?? null,
+      applied,
+      summary: applied && recorded ? "Integrated artifact is present in the destination workspace" : "Integrated artifact or durable journal evidence is missing from the destination workspace",
+    };
   }
 
   async #recordIntegration(worktree, artifact, strategy, journalId, extra = {}) {

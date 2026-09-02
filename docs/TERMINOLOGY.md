@@ -5,6 +5,9 @@
 | 표준 용어 | 의미 | 사용 예 | 사용하지 않는 표현 |
 |---|---|---|---|
 | Control Plane 스레드 | 여러 프로젝트의 요청을 접수하고 작업 탐색기를 여는 사용자의 Codex 대화 | “Control Plane에서 작업 목록 확인” | Control Plane 세션 |
+| Master Worker | 사용자 요청 한 건을 대표하는 실제 Codex 스레드. 단순 작업을 직접 수행하거나 복합 작업의 Master Orchestrator가 됨 | “Master Worker 목록에서 작업 열기” | daemon worker |
+| Master Orchestrator | 복합 Run을 분해하고 Slave 결과를 종합하는 Master Worker | “Master Orchestrator의 하위 그래프 확인” | scheduler 또는 두 번째 daemon |
+| Slave Worker | Master Orchestrator가 배정한 Task 하나를 수행하는 실제 Data Plane Codex 스레드 | “Slave Worker 실행 기록 열기” | 하위 프로세스만을 뜻하는 worker |
 | 에이전트 스레드 | 역할과 맥락이 부여되어 재사용·포크할 수 있는 영구 Codex 대화 | “기존 QA 스레드 재사용” | 에이전트 세션 |
 | Orchestrator 스레드 | 복합 Run 하나의 조정과 종합을 기록하는 에이전트 스레드 | “Orchestrator 스레드 열기” | 조정 세션 |
 | Data Plane 스레드 | Task를 실제로 수행하는 에이전트 스레드 | “작업 스레드 3개” | 작업 세션 |
@@ -12,13 +15,16 @@
 | Run(실행) | 사용자가 Control Plane에 제출한 요청 한 건과 그 전체 수명주기 | “실행 완료” | 작업과 혼용 |
 | Task(작업) | Run 내부 DAG의 실행 노드 한 개 | “선행 작업 완료” | Run과 혼용 |
 | Turn(턴) | 한 스레드 안의 요청·응답 한 회 | “완료 턴” | 스레드와 혼용 |
+| TurnDispatch | 한 명령의 스레드 확보, 제출 의도, Turn 결합, 완료 관찰과 복구를 묶는 durable 실행 레코드 | “중단된 Planner Dispatch를 reconcile” | READY 또는 메모리 Promise |
 | 에이전트 | 역할, capability, 권한 계약과 현재 배정 상태를 포함한 논리적 작업 주체 | “QA 에이전트” | 스레드 ID 자체와 동일시 |
 | 데몬 스케줄러 | Run·Task·lease·재시도·결과 projection을 소유하는 로컬 프로세스 | “데몬이 작업을 배정” | Codex 에이전트 또는 스레드 |
 | 실행 계약 | Task의 sandbox, network, workspace, side effect, 통합 방식을 결정하는 구조화된 권한 계약 | “실행 계약 preflight” | 역할 이름이나 prompt |
 | Claim | 특정 데몬 worker가 Task 상태를 바꿀 수 있게 하는 `worker_id + claim_token` 소유권 | “claim을 회수함” | Agent lease와 혼용 |
 | Agent lease | 한 Agent 스레드를 한 Task에 독점 배정하는 TTL 소유권 | “Agent lease 해제” | worktree lease와 혼용 |
 | Artifact | managed worktree 변경을 보존하는 commit과 binary patch | “artifact를 다시 통합” | 이미 main에 적용된 변경과 동일시 |
-| Origin | Run 요청이 시작되어 결과를 받아야 하는 Control Plane thread/turn identity | “origin 스레드로 전달” | 현재 열린 임의 대화 |
+| Completion Evidence | 명령 종료 코드, 테스트 결과, 실제 output, workspace diff, validation, integration과 postcondition을 포함한 성공 판정 근거 | “완료 증거가 부족해 reject” | Agent의 완료 문구 |
+| Completion Gate | 모든 필수 Completion Evidence를 중앙 규칙으로 평가해 Task terminal 상태를 결정하는 경계 | “통합 후 Completion Gate 통과” | Validator 한 번과 동일시 |
+| Origin | Run 요청이 시작된 Control Plane thread/turn provenance | “origin에서 시작된 Run” | 결과를 자동으로 돌려보낼 대상 |
 | Context Claim | 출처, scope, 최신성, 권위를 포함한 재사용 가능한 사실·결정·제약·결과 | “결정 claim이 이전 제약을 supersede함” | 출처 없는 요약 문자열 |
 | Context Snapshot | 특정 목표의 planning에 사용하도록 선택·고정한 Context Claim 집합과 미해결 충돌 | “snapshot revision 2로 재계획” | 가변적인 현재 대화 전체 |
 | Global Run | 여러 프로젝트를 포함할 수 있는 사용자 목표와 전역 조정의 수명주기 | “Global Run 아래 프로젝트 실행 2개” | 단일 프로젝트 Run과 혼용 |

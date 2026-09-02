@@ -49,12 +49,22 @@ user decision / repository manifest / validated evidence
 
 ## 확정된 결과 접근 계약
 
-`result_access`의 최종 계약은 [ADR-006](../adr/ADR-006-WORK-NAVIGATOR-RESULT-ACCESS.md)이다.
+`result_access`의 최종 계약은 [ADR-006](../adr/ADR-006-WORK-NAVIGATOR-RESULT-ACCESS.md)과 manifest의 `result_access_policy_v3`다.
 
-- 작업 탐색기가 active·terminal Run의 durable 상태 표면이다.
-- 복잡한 Run은 Orchestrator와 Task DAG를 보여준다.
-- 사용자가 Orchestrator 또는 Task를 선택하면 실제 Codex 스레드로 이동한다.
+- 작업 탐색기의 최상위 작업 목록은 사용자 요청마다 하나의 Master Worker를 보여준다.
+- 복잡한 Run은 Master Orchestrator 아래 Slave Task DAG를 보여준다.
+- 사용자가 Master 또는 Slave를 선택하면 실제 Codex 스레드로 이동한다.
+- Planner, Validator, Synthesizer는 고급 진단 evidence이며 Master와 동급인 최상위 작업이 아니다.
 - daemon은 terminal 결과를 요청 스레드에 자동 append하지 않는다.
+
+## 확정된 성공 판정 계약
+
+`task_completion_authority`의 최종 계약은 [ADR-008](../adr/ADR-008-EVIDENCE-BASED-COMPLETION.md)과 [Completion Gate](./COMPLETION_GATE.md)다.
+
+- Agent·Orchestrator의 자연어 완료 선언은 terminal 상태 권한이 없다.
+- daemon의 Completion Evaluator가 전체 Turn, 명령·테스트, output, workspace, validation, integration과 postcondition evidence를 판정한다.
+- 정상 실행과 restart reconciliation은 같은 verdict 함수를 사용한다.
+- 누락되거나 상충하는 evidence는 성공으로 추정하지 않는다.
 
 ## 변경 체크리스트
 

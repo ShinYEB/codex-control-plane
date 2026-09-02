@@ -148,6 +148,9 @@ test("global cancellation and revision tampering fence claims without consuming 
   try {
     cancelled.registry.createGlobalRunGraph(cancelled.graph());
     cancelled.registry.releaseGlobalRun("global");
+    const requested = cancelled.registry.requestGlobalRunCancellation("global");
+    assert.ok(requested.globalRun.cancellationRequestedAt);
+    assert.notEqual(requested.globalRun.status, "cancelled");
     cancelled.registry.cancelGlobalRun("global");
     assert.equal(cancelled.registry.getGlobalRun("global").status, "cancelled");
     assert.equal(cancelled.registry.claimTask("task_a", "late_worker"), null);

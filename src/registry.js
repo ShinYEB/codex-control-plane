@@ -26,6 +26,7 @@ import {
   assertRunStatus,
   assertGlobalRunStatus,
   assertTaskStatus,
+  assertTurnDispatchStatus,
   deriveRunStatus,
   deriveGlobalRunStatus,
   FAILED_TASK_STATUSES,
@@ -40,11 +41,15 @@ import {
   transitionRun,
   transitionGlobalRun,
   transitionTask,
+  transitionTurnDispatch,
+  ACTIVE_TURN_DISPATCH_STATUSES,
+  TERMINAL_TURN_DISPATCH_STATUSES,
+  TURN_DISPATCH_STATUSES,
 } from "./domain-states.js";
 
 const LEGACY_DB_PATH = join(homedir(), ".codex", "control-plane", "registry.sqlite");
 const DEFAULT_DB_PATH = join(homedir(), ".codex", "control-plane", "v2", "registry.sqlite");
-const CURRENT_SCHEMA_VERSION = 7;
+const CURRENT_SCHEMA_VERSION = 8;
 
 function sqlString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
@@ -556,6 +561,47 @@ function normalizeRoutingDecision(row) {
   };
 }
 
+function normalizeTurnDispatch(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    subjectType: row.subject_type,
+    subjectId: row.subject_id,
+    purpose: row.purpose,
+    revision: row.revision,
+    parentRunId: row.parent_run_id ?? null,
+    parentTaskId: row.parent_task_id ?? null,
+    planId: row.plan_id ?? null,
+    status: row.status,
+    promptFingerprint: row.prompt_fingerprint,
+    executionContractFingerprint: row.execution_contract_fingerprint ?? null,
+    contextSnapshotId: row.context_snapshot_id ?? null,
+    threadId: row.thread_id ?? null,
+    agentId: row.agent_id ?? null,
+    threadAction: row.thread_action ?? null,
+    submissionKey: row.submission_key,
+    turnId: row.turn_id ?? null,
+    turnStatus: row.turn_status ?? null,
+    ownerInstanceId: row.owner_instance_id ?? null,
+    ownerToken: row.owner_token ?? null,
+    heartbeatAt: row.heartbeat_at ?? null,
+    leaseExpiresAt: row.lease_expires_at ?? null,
+    cancellationGeneration: row.cancellation_generation,
+    cancelRequestedAt: row.cancel_requested_at ?? null,
+    deadlineAt: row.deadline_at,
+    startedAt: row.started_at ?? null,
+    terminalAt: row.terminal_at ?? null,
+    lastProbeAt: row.last_probe_at ?? null,
+    probeCount: row.probe_count,
+    reconciliationDecision: row.reconciliation_decision ?? null,
+    failure: parse(row.failure_json, null),
+    evidence: parse(row.evidence_json, {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    version: row.version,
+  };
+}
+
 function normalizePlan(row) {
   if (!row) return null;
   return {
@@ -704,6 +750,154 @@ export class ControlRegistry {
     }
   }
 
+  createTurnDispatch(input) {
+    if (!input?.subjectType || !input?.subjectId || !input?.purpose) throw new TypeError("TurnDispatch subjectType, subjectId, and purpose are required");
+    if (!input.promptFingerprint || !input.submissionKey) throw new TypeError("TurnDispatch promptFingerprint and submissionKey are required");
+    const status = input.status ?? "prepared";
+    assertTurnDispatchStatus(status);
+    const timestamp = now();
+    const id = input.id ?? `dispatch_${randomUUID()}`;
+    const revision = Number(input.revision ?? 1);
+    this.db.prepare(`
+      INSERT INTO turn_dispatches (
+        id, subject_type, subject_id, purpose, revision, parent_run_id, parent_task_id, plan_id,
+        status, prompt_fingerprint, execution_contract_fingerprint, context_snapshot_id,
+        thread_id, agent_id, thread_action, submission_key, turn_id, turn_status,
+        owner_instance_id, owner_token, heartbeat_at, lease_expires_at,
+        cancellation_generation, cancel_requested_at, deadline_at, started_at, terminal_at,
+        last_probe_at, probe_count, reconciliation_decision, failure_json, evidence_json,
+        created_at, updated_at, version
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+      ON CONFLICT(subject_type, subject_id, purpose, revision) DO NOTHING
+    `).run(
+      id, input.subjectType, input.subjectId, input.purpose, revision,
+      input.parentRunId ?? null, input.parentTaskId ?? null, input.planId ?? null,
+      status, input.promptFingerprint, input.executionContractFingerprint ?? null, input.contextSnapshotId ?? null,
+      input.threadId ?? null, input.agentId ?? null, input.threadAction ?? null, input.submissionKey,
+      input.turnId ?? null, input.turnStatus ?? null, input.ownerInstanceId ?? null, input.ownerToken ?? null,
+      input.heartbeatAt ?? null, input.leaseExpiresAt ?? null, Number(input.cancellationGeneration ?? 0),
+      input.cancelRequestedAt ?? null, input.deadlineAt ?? new Date(Date.now() + 30 * 60_000).toISOString(),
+      input.startedAt ?? null, input.terminalAt ?? null, input.lastProbeAt ?? null, Number(input.probeCount ?? 0),
+      input.reconciliationDecision ?? null, json(input.failure), json(input.evidence, {}), timestamp, timestamp,
+    );
+    const dispatch = this.db.prepare(`
+      SELECT * FROM turn_dispatches WHERE subject_type = ? AND subject_id = ? AND purpose = ? AND revision = ?
+    `).get(input.subjectType, input.subjectId, input.purpose, revision);
+    return normalizeTurnDispatch(dispatch);
+  }
+
+  getTurnDispatch(id) {
+    return normalizeTurnDispatch(this.db.prepare("SELECT * FROM turn_dispatches WHERE id = ?").get(id));
+  }
+
+  listTurnDispatches(options = {}) {
+    const clauses = [];
+    const values = [];
+    for (const [field, column] of [["subjectType", "subject_type"], ["subjectId", "subject_id"], ["purpose", "purpose"], ["status", "status"], ["parentRunId", "parent_run_id"], ["parentTaskId", "parent_task_id"], ["planId", "plan_id"], ["threadId", "thread_id"]]) {
+      if (options[field] !== undefined) { clauses.push(`${column} = ?`); values.push(options[field]); }
+    }
+    if (options.active === true) clauses.push(`status IN (${[...ACTIVE_TURN_DISPATCH_STATUSES].map(sqlString).join(", ")})`);
+    const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
+    values.push(options.limit ?? 200);
+    return this.db.prepare(`SELECT * FROM turn_dispatches ${where} ORDER BY created_at DESC LIMIT ?`).all(...values).map(normalizeTurnDispatch);
+  }
+
+  claimTurnDispatch(id, ownerInstanceId, ttlMs = 120_000, options = {}) {
+    const dispatch = this.getTurnDispatch(id);
+    if (!dispatch || TERMINAL_TURN_DISPATCH_STATUSES.has(dispatch.status)) return null;
+    if (!options.forceRecovery && dispatch.ownerInstanceId === ownerInstanceId && dispatch.ownerToken
+      && (!dispatch.leaseExpiresAt || new Date(dispatch.leaseExpiresAt).valueOf() > Date.now())) {
+      return dispatch;
+    }
+    const timestamp = now();
+    const token = randomUUID();
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    const row = this.db.prepare(`
+      UPDATE turn_dispatches
+      SET owner_instance_id = ?, owner_token = ?, heartbeat_at = ?, lease_expires_at = ?, updated_at = ?, version = version + 1
+      WHERE id = ? AND status IN (${[...ACTIVE_TURN_DISPATCH_STATUSES].map(sqlString).join(", ")})
+        AND (owner_token IS NULL OR lease_expires_at IS NULL OR lease_expires_at <= ? OR owner_instance_id = ? OR ? = 1)
+      RETURNING *
+    `).get(ownerInstanceId, token, timestamp, expiresAt, timestamp, id, timestamp, ownerInstanceId, options.forceRecovery ? 1 : 0);
+    if (!row) return null;
+    this.recordEvent("turn_dispatch", id, "turn_dispatch.claimed", { ownerInstanceId, ownerToken: token, expiresAt });
+    return normalizeTurnDispatch(row);
+  }
+
+  transitionTurnDispatch(id, status, changes = {}, options = {}) {
+    const existing = this.getTurnDispatch(id);
+    if (!existing) throw new Error(`TurnDispatch not found: ${id}`);
+    transitionTurnDispatch(existing.status, status, options.transitionOptions ?? {});
+    if (options.ownerToken && existing.ownerToken !== options.ownerToken) return null;
+    if (options.cancellationGeneration !== undefined && existing.cancellationGeneration !== options.cancellationGeneration) return null;
+    const timestamp = now();
+    const terminalAt = TERMINAL_TURN_DISPATCH_STATUSES.has(status) ? changes.terminalAt ?? timestamp : existing.terminalAt;
+    const row = this.db.prepare(`
+      UPDATE turn_dispatches SET
+        status = ?, thread_id = ?, agent_id = ?, thread_action = ?, turn_id = ?, turn_status = ?,
+        heartbeat_at = ?, lease_expires_at = ?, cancel_requested_at = ?, deadline_at = ?,
+        started_at = ?, terminal_at = ?, last_probe_at = ?, probe_count = ?, reconciliation_decision = ?,
+        failure_json = ?, evidence_json = ?, updated_at = ?, version = version + 1
+      WHERE id = ? AND version = ?
+        AND (? IS NULL OR owner_token = ?)
+        AND (? IS NULL OR cancellation_generation = ?)
+      RETURNING *
+    `).get(
+      status, changes.threadId ?? existing.threadId, changes.agentId ?? existing.agentId,
+      changes.threadAction ?? existing.threadAction, changes.turnId ?? existing.turnId,
+      changes.turnStatus ?? existing.turnStatus, changes.heartbeatAt ?? existing.heartbeatAt,
+      changes.leaseExpiresAt ?? existing.leaseExpiresAt, changes.cancelRequestedAt ?? existing.cancelRequestedAt,
+      changes.deadlineAt ?? existing.deadlineAt, changes.startedAt ?? existing.startedAt, terminalAt,
+      changes.lastProbeAt ?? existing.lastProbeAt, changes.probeCount ?? existing.probeCount,
+      changes.reconciliationDecision ?? existing.reconciliationDecision, json(changes.failure ?? existing.failure),
+      json({ ...existing.evidence, ...(changes.evidence ?? {}) }, {}), timestamp, id, existing.version,
+      options.ownerToken ?? null, options.ownerToken ?? null,
+      options.cancellationGeneration ?? null, options.cancellationGeneration ?? null,
+    );
+    if (!row) return null;
+    this.recordEvent("turn_dispatch", id, `turn_dispatch.${status}`, {
+      previousStatus: existing.status, threadId: row.thread_id ?? null, turnId: row.turn_id ?? null,
+    });
+    return normalizeTurnDispatch(row);
+  }
+
+  heartbeatTurnDispatch(id, ownerInstanceId, ownerToken, ttlMs = 120_000) {
+    const timestamp = now();
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    const row = this.db.prepare(`
+      UPDATE turn_dispatches SET heartbeat_at = ?, lease_expires_at = ?, updated_at = ?, version = version + 1
+      WHERE id = ? AND owner_instance_id = ? AND owner_token = ?
+        AND status IN (${[...ACTIVE_TURN_DISPATCH_STATUSES].map(sqlString).join(", ")})
+      RETURNING *
+    `).get(timestamp, expiresAt, timestamp, id, ownerInstanceId, ownerToken);
+    return normalizeTurnDispatch(row);
+  }
+
+  requestTurnDispatchCancellation(options = {}) {
+    const clauses = [`status IN (${[...ACTIVE_TURN_DISPATCH_STATUSES].map(sqlString).join(", ")})`];
+    const values = [];
+    if (options.parentRunId) { clauses.push("parent_run_id = ?"); values.push(options.parentRunId); }
+    if (options.parentTaskId) { clauses.push("parent_task_id = ?"); values.push(options.parentTaskId); }
+    if (options.planId) { clauses.push("plan_id = ?"); values.push(options.planId); }
+    if (clauses.length === 1) throw new TypeError("TurnDispatch cancellation requires a parent identifier");
+    const timestamp = now();
+    const rows = this.db.prepare(`SELECT * FROM turn_dispatches WHERE ${clauses.join(" AND ")}`).all(...values).map(normalizeTurnDispatch);
+    const cancelled = [];
+    for (const dispatch of rows) {
+      const row = this.db.prepare(`
+        UPDATE turn_dispatches SET status = 'cancelling', cancellation_generation = cancellation_generation + 1,
+          cancel_requested_at = ?, updated_at = ?, version = version + 1
+        WHERE id = ? AND version = ?
+        RETURNING *
+      `).get(timestamp, timestamp, dispatch.id, dispatch.version);
+      if (row) {
+        this.recordEvent("turn_dispatch", dispatch.id, "turn_dispatch.cancelling", { previousStatus: dispatch.status });
+        cancelled.push(normalizeTurnDispatch(row));
+      }
+    }
+    return cancelled;
+  }
+
   recoverInterruptedTasks(options = {}) {
     const timestamp = now();
     const staleBefore = options.staleBefore ?? null;
@@ -725,6 +919,11 @@ export class ControlRegistry {
     `);
     let recovered = 0;
     for (const task of rows) {
+      const activeDispatch = this.listTurnDispatches({ parentTaskId: task.id, active: true, limit: 1 })[0] ?? null;
+      if (activeDispatch) {
+        this.recordEvent("task", task.id, "task.turn_dispatch_recovery_deferred", { dispatchId: activeDispatch.id, dispatchStatus: activeDispatch.status });
+        continue;
+      }
       if (task.status === "integration_pending" && this.listIntegrationJournals({ taskId: task.id, limit: 1 }).length) {
         this.recordEvent("task", task.id, "task.integration_recovery_deferred", { worktreeId: task.metadata?.managedWorktreeId });
         continue;
@@ -1780,10 +1979,18 @@ export class ControlRegistry {
           declaredOutputs: task.metadata?.executionContract?.outputs ?? [],
           output: task.output ?? null,
           validation: task.metadata?.validation ?? null,
+          completionVerdict: task.metadata?.completionVerdict ?? null,
           artifact: safeArtifact,
         };
       });
-      const missingOutputs = dependency.requiredOutputs.filter((required) => !evidence.some((item) => item.declaredOutputs.includes(required) && (item.output !== null || item.artifact !== null)));
+      const missingOutputs = dependency.requiredOutputs.filter((required) => !evidence.some((item) => {
+        if (!item.declaredOutputs.includes(required) || !["completed", "completed_with_warnings"].includes(item.status)) return false;
+        if (item.completionVerdict) {
+          return ["accept", "accept_with_warnings"].includes(item.completionVerdict.decision)
+            && item.completionVerdict.satisfiedEvidence?.includes(`output:${required}`);
+        }
+        return item.output !== null || item.artifact !== null;
+      }));
       const payload = {
         schemaVersion: dependency.handoffSchemaVersion,
         dependencyId, producerRunId: dependency.producerRunId, consumerRunId: dependency.consumerRunId,
@@ -1922,17 +2129,25 @@ export class ControlRegistry {
     return this.getGlobalRunGraph(globalRunId);
   }
 
-  cancelGlobalRun(globalRunId) {
+  requestGlobalRunCancellation(globalRunId) {
     const globalRun = this.getGlobalRun(globalRunId);
     if (!globalRun) throw new Error(`Global Run not found: ${globalRunId}`);
     if (["completed", "failed", "cancelled", "attention_required"].includes(globalRun.status)) return this.getGlobalRunGraph(globalRunId);
     const requestedAt = globalRun.cancellationRequestedAt ?? now();
     this.db.prepare("UPDATE global_runs SET cancellation_requested_at = ?, updated_at = ? WHERE id = ? AND cancellation_requested_at IS NULL").run(requestedAt, requestedAt, globalRunId);
-    this.recordEvent("global_run", globalRunId, "global_run.cancellation_requested", { requestedAt });
+    if (!globalRun.cancellationRequestedAt) this.recordEvent("global_run", globalRunId, "global_run.cancellation_requested", { requestedAt });
+    return this.getGlobalRunGraph(globalRunId);
+  }
+
+  cancelGlobalRun(globalRunId, options = {}) {
+    const requested = this.requestGlobalRunCancellation(globalRunId);
+    if (["completed", "failed", "cancelled", "attention_required"].includes(requested.globalRun.status)) return requested;
     const graph = this.getGlobalRunGraph(globalRunId);
-    for (const membership of graph.memberships) {
-      const run = this.getRun(membership.runId);
-      if (run && !TERMINAL_RUN_STATUSES.has(run.status)) this.cancelRun(run.id);
+    if (!options.childRunsCancelled) {
+      for (const membership of graph.memberships) {
+        const run = this.getRun(membership.runId);
+        if (run && !TERMINAL_RUN_STATUSES.has(run.status)) this.cancelRun(run.id);
+      }
     }
     this.updateGlobalRun(globalRunId, { status: "cancelled", completedAt: now() });
     return this.getGlobalRunGraph(globalRunId);
@@ -2227,11 +2442,12 @@ export class ControlRegistry {
     return updated;
   }
 
-  cancelRun(runId) {
+  cancelRun(runId, options = {}) {
     const run = this.getRun(runId);
     if (!run) throw new Error(`Run not found: ${runId}`);
+    if (!options.dispatchCancellationRequested) this.requestTurnDispatchCancellation({ parentRunId: runId });
     const tasks = this.listTasks({ runId, limit: 1000 });
-    for (const task of tasks) this.cancelTask(task.id);
+    for (const task of tasks) this.cancelTask(task.id, { dispatchCancellationRequested: true });
     return this.updateRun(runId, { status: "cancelled", completedAt: now() });
   }
 
@@ -3059,7 +3275,16 @@ export class ControlRegistry {
     const run = this.getRun(runId);
     if (!run) return null;
     const tasks = this.listTasks({ runId, limit: 1000 });
-    const taskResults = tasks.map((task) => ({ id: task.id, title: task.metadata?.title ?? task.prompt.slice(0, 80), status: task.status, output: task.output, error: task.error, failure: task.metadata?.failure ?? null }));
+    const taskResults = tasks.map((task) => ({
+      id: task.id,
+      title: task.metadata?.title ?? task.prompt.slice(0, 80),
+      status: task.status,
+      output: task.output,
+      error: task.error,
+      failure: task.metadata?.failure ?? null,
+      completionVerdict: task.metadata?.completionVerdict ?? null,
+      postconditionEvidence: task.metadata?.postconditionEvidence ?? null,
+    }));
     const validations = tasks.filter((task) => task.metadata?.validation).map((task) => ({ taskId: task.id, ...task.metadata.validation }));
     const artifacts = tasks.flatMap((task) => {
       const artifact = task.metadata?.integration?.artifact ?? task.metadata?.artifact ?? null;
@@ -3929,10 +4154,11 @@ export class ControlRegistry {
     });
   }
 
-  cancelTask(taskId) {
+  cancelTask(taskId, options = {}) {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`Task not found: ${taskId}`);
     if (TERMINAL_TASK_STATUSES.has(task.status)) return task;
+    if (!options.dispatchCancellationRequested) this.requestTurnDispatchCancellation({ parentTaskId: taskId });
     const worktreeLeases = this.listLeases({ ownerTaskId: taskId }).filter((lease) => ["active", "expired"].includes(lease.status));
     const agentLeases = this.db.prepare("SELECT * FROM agent_leases WHERE owner_task_id = ? AND status = 'active'").all(taskId).map(normalizeAgentLease);
     const canceled = this.updateTask(taskId, {
@@ -4221,6 +4447,50 @@ export class ControlRegistry {
       );
 
       CREATE INDEX IF NOT EXISTS plans_status_idx ON plans(status, updated_at DESC);
+
+      CREATE TABLE IF NOT EXISTS turn_dispatches (
+        id TEXT PRIMARY KEY,
+        subject_type TEXT NOT NULL CHECK (subject_type IN ('plan', 'run', 'task')),
+        subject_id TEXT NOT NULL,
+        purpose TEXT NOT NULL CHECK (purpose IN ('planning', 'orchestration', 'execution', 'validation', 'synthesis')),
+        revision INTEGER NOT NULL DEFAULT 1,
+        parent_run_id TEXT REFERENCES runs(id) ON DELETE SET NULL,
+        parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+        plan_id TEXT REFERENCES plans(id) ON DELETE SET NULL,
+        status TEXT NOT NULL CHECK (status IN (${TURN_DISPATCH_STATUSES.map(sqlString).join(", ")})),
+        prompt_fingerprint TEXT NOT NULL,
+        execution_contract_fingerprint TEXT,
+        context_snapshot_id TEXT,
+        thread_id TEXT,
+        agent_id TEXT,
+        thread_action TEXT,
+        submission_key TEXT NOT NULL,
+        turn_id TEXT,
+        turn_status TEXT,
+        owner_instance_id TEXT,
+        owner_token TEXT,
+        heartbeat_at TEXT,
+        lease_expires_at TEXT,
+        cancellation_generation INTEGER NOT NULL DEFAULT 0,
+        cancel_requested_at TEXT,
+        deadline_at TEXT NOT NULL,
+        started_at TEXT,
+        terminal_at TEXT,
+        last_probe_at TEXT,
+        probe_count INTEGER NOT NULL DEFAULT 0,
+        reconciliation_decision TEXT,
+        failure_json TEXT,
+        evidence_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 0,
+        UNIQUE(subject_type, subject_id, purpose, revision)
+      );
+
+      CREATE INDEX IF NOT EXISTS turn_dispatches_status_idx ON turn_dispatches(status, updated_at);
+      CREATE INDEX IF NOT EXISTS turn_dispatches_parent_run_idx ON turn_dispatches(parent_run_id, status);
+      CREATE INDEX IF NOT EXISTS turn_dispatches_parent_task_idx ON turn_dispatches(parent_task_id, status);
+      CREATE INDEX IF NOT EXISTS turn_dispatches_thread_idx ON turn_dispatches(thread_id, turn_id);
 
       CREATE TABLE IF NOT EXISTS projects (
         id TEXT PRIMARY KEY,

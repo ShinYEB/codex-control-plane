@@ -121,10 +121,36 @@ test("runTask collects streamed output until the matching turn completes", async
   const client = new CodexAppServerClient({ spawnProcess: () => child });
   const control = new CodexControlPlane(client);
   await control.connect();
-  const result = await control.runTask("thr_1", "say hello", { timeoutMs: 1_000 });
+  const result = await control.runTask("thr_1", "say hello", { timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
   assert.equal(result.output, "hello");
   assert.equal(result.turn.status, "completed");
   assert.equal(result.executionItems[0].exitCode, 0);
+  await client.close();
+});
+
+test("runTask hydrates the terminal Turn so a missed failed command cannot become success", async () => {
+  const child = fakeProcess();
+  captureRequests(child, (message) => {
+    if (message.method === "initialize") child.stdout.write(`${JSON.stringify({ id: message.id, result: {} })}\n`);
+    if (message.method === "turn/start") {
+      child.stdout.write(`${JSON.stringify({ id: message.id, result: { turn: { id: "turn_missed_failure" } } })}\n`);
+      queueMicrotask(() => child.stdout.write(`${JSON.stringify({ method: "turn/completed", params: { threadId: "thr_1", turn: { id: "turn_missed_failure", status: "completed" } } })}\n`));
+    }
+    if (message.method === "thread/read") {
+      child.stdout.write(`${JSON.stringify({ id: message.id, result: { thread: { turns: [{
+        id: "turn_missed_failure", status: "completed", output: "done",
+        items: [{ id: "cmd_failed", type: "commandExecution", command: "node --test", exitCode: 1, status: "completed" }],
+      }] } } })}\n`);
+    }
+  });
+
+  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  const control = new CodexControlPlane(client);
+  await control.connect();
+  const result = await control.runTask("thr_1", "run tests", { timeoutMs: 1_000 });
+  assert.equal(result.evidenceComplete, true);
+  assert.equal(result.executionItems[0].exitCode, 1);
+  assert.equal(result.completionMethod, "turn/completed+thread/read");
   await client.close();
 });
 
@@ -151,8 +177,8 @@ test("concurrent turns on one thread collect only their turn-scoped deltas", asy
   const control = new CodexControlPlane(client);
   await control.connect();
   const [first, second] = await Promise.all([
-    control.runTask("thr_shared", "first", { timeoutMs: 1_000 }),
-    control.runTask("thr_shared", "second", { timeoutMs: 1_000 }),
+    control.runTask("thr_shared", "first", { timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 }),
+    control.runTask("thr_shared", "second", { timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 }),
   ]);
   assert.equal(first.output, "first");
   assert.equal(second.output, "second");
@@ -181,7 +207,7 @@ test("runTask forwards an explicit workspace-write network policy", async () => 
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
-  await control.runTask("thr_network", "run integration tests", { sandboxPolicy, timeoutMs: 1_000 });
+  await control.runTask("thr_network", "run integration tests", { sandboxPolicy, timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
   assert.deepEqual(turnStartParams.sandboxPolicy, sandboxPolicy);
   await client.close();
 });
@@ -253,7 +279,7 @@ test("runTask returns promptly when a turn is interrupted", async () => {
   const client = new CodexAppServerClient({ spawnProcess: () => child });
   const control = new CodexControlPlane(client);
   await control.connect();
-  const result = await control.runTask("thr_1", "stop", { timeoutMs: 1_000 });
+  const result = await control.runTask("thr_1", "stop", { timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
   assert.equal(result.turn.status, "interrupted");
   await client.close();
 });
@@ -270,7 +296,7 @@ test("runTask derives terminal status from the App Server notification method", 
   const client = new CodexAppServerClient({ spawnProcess: () => child });
   const control = new CodexControlPlane(client);
   await control.connect();
-  const result = await control.runTask("thr_1", "fail", { timeoutMs: 1_000 });
+  const result = await control.runTask("thr_1", "fail", { timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
   assert.equal(result.turn.status, "failed");
   assert.equal(result.turn.error.message, "boom");
   assert.equal(result.completionMethod, "turn/failed");

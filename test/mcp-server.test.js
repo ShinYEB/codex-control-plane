@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -155,7 +156,11 @@ test("prepare_global_run atomically exposes root and dependent Project Runs thro
   const projectB = join(directory, "project-b");
   mkdirSync(projectA);
   mkdirSync(projectB);
-  const server = fakeServer({ connect: async () => {} }, { schedulerConcurrency: 0 });
+  const interrupts = [];
+  const server = fakeServer({
+    connect: async () => {},
+    interruptTask: async (threadId, turnId) => { interrupts.push({ threadId, turnId }); },
+  }, { schedulerConcurrency: 0 });
   try {
     const context = new ContextResolver(server.registry).resolve({ objective: "Coordinate two projects" });
     const response = await server.handleRequest({ method: "tools/call", params: { name: "prepare_global_run", arguments: {
@@ -180,6 +185,16 @@ test("prepare_global_run atomically exposes root and dependent Project Runs thro
     const detail = await server.handleRequest({ method: "tools/call", params: { name: "get_global_run", arguments: { globalRunId: "mcp_global" } } });
     assert.equal(detail.structuredContent.dependencies[0].status, "pending");
     assert.equal(detail.structuredContent.memberships.length, 2);
+    const activeDispatch = server.registry.createTurnDispatch({
+      subjectType: "task", subjectId: "mcp_task_a", purpose: "execution", revision: 1,
+      parentRunId: "mcp_run_a", parentTaskId: "mcp_task_a", status: "turn_running",
+      promptFingerprint: "prompt-fingerprint", submissionKey: "submission-key",
+      threadId: "thread_a", turnId: "turn_a",
+    });
+    const cancelled = await server.handleRequest({ method: "tools/call", params: { name: "cancel_global_run", arguments: { globalRunId: "mcp_global" } } });
+    assert.equal(cancelled.structuredContent.globalRun.status, "cancelled");
+    assert.deepEqual(interrupts, [{ threadId: "thread_a", turnId: "turn_a" }]);
+    assert.equal(server.registry.getTurnDispatch(activeDispatch.id).status, "cancelling");
   } finally {
     await server.close();
     rmSync(directory, { recursive: true, force: true });
@@ -643,6 +658,37 @@ test("an arbitrary unregistered implementation role executes with the explicit w
   await server.close();
 });
 
+test("a real mutating Task cannot complete when Agent prose reports success but no workspace change exists", async () => {
+  const root = mkdtempSync(join(tmpdir(), "mcp-empty-mutation-"));
+  execFileSync("git", ["init", root]);
+  execFileSync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", root, "config", "user.name", "Test"]);
+  writeFileSync(join(root, "source.txt"), "base\n");
+  execFileSync("git", ["-C", root, "add", "."]);
+  execFileSync("git", ["-C", root, "commit", "-m", "base"]);
+  const control = {
+    connect: async () => {},
+    spawnAgent: async () => ({ id: "worker_empty_mutation", cwd: root, status: "idle", provider: "codex" }),
+    runTask: async (_id, _prompt, options = {}) => {
+      options.onStarted?.({ turnId: "turn_empty_mutation" });
+      return { evidenceComplete: true, output: "Implementation completed", turnId: "turn_empty_mutation", turn: { status: "completed", items: [] }, executionItems: [] };
+    },
+  };
+  const server = fakeServer(control);
+  try {
+    const response = await server.handleRequest({ method: "tools/call", params: { name: "run_agent_task", arguments: {
+      prompt: "change source", cwd: root, taskKind: "implementation", mutatesWorkspace: true,
+      sandbox: "workspace-write", workspaceMode: "shared", integrationStrategy: "none", routingMode: "new",
+    } } });
+    assert.equal(response.structuredContent.record.status, "failed");
+    assert.ok(response.structuredContent.record.metadata.completionVerdict.missingEvidence.includes("output:workspace-change"));
+    assert.equal(response.structuredContent.resultMemory, null);
+  } finally {
+    await server.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("acceptance criteria keep a task validating until the validator accepts", async () => {
   const transitions = [];
   const control = {
@@ -780,8 +826,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.cwd, "/repo");
   assert.equal(result.structuredContent.dashboardPresentation, "embedded");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v5.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v5.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v7.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v7.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -1134,7 +1180,11 @@ test("daemon restart finalizes an integration_pending task from a recorded journ
   registry.transitionIntegrationJournal(journal.id, "applied");
   registry.transitionIntegrationJournal(journal.id, "recorded");
 
-  const server = fakeServer({ connect: async () => {} }, { registry, recoverInterruptedTasks: true, schedulerConcurrency: 0 });
+  const worktreeManager = {
+    recoverPendingIntegrations: async () => [],
+    verifyIntegration: async () => ({ required: true, passed: true, summary: "recorded artifact verified" }),
+  };
+  const server = fakeServer({ connect: async () => {} }, { registry, worktreeManager, recoverInterruptedTasks: true, schedulerConcurrency: 0 });
   server.startBackground();
   const completed = await waitUntil(() => registry.getTask("recover_integration").status === "completed");
   assert.equal(completed, true);
@@ -1305,6 +1355,65 @@ test("periodic reconciliation completes a stale task from thread/read", async ()
   assert.equal(server.registry.getTask("task_stale").output, "recovered result");
   assert.equal(server.registry.getAgent("agent_stale").status, "idle");
   assert.ok(claim.claimToken);
+  await server.close();
+});
+
+test("restart reconciliation continues a completed worker into validation", async () => {
+  let validations = 0;
+  const control = {
+    connect: async () => {},
+    inspectAgent: async () => ({ thread: { turns: [{ id: "turn_worker_done", status: "completed", output: "worker result", items: [] }] } }),
+  };
+  const resultValidator = {
+    validate: async () => {
+      validations += 1;
+      return { decision: "accept", failureKind: "none", summary: "verified", evidence: ["checked"], unmetCriteria: [] };
+    },
+  };
+  const server = fakeServer(control, { resultValidator, schedulerConcurrency: 0, staleTaskMs: 0 });
+  server.registry.upsertAgent({ id: "worker_restart", cwd: "/repo", status: "running" });
+  server.registry.createTask({ id: "task_restart_worker", prompt: "work", cwd: "/repo", metadata: { acceptanceCriteria: ["verified"] } });
+  const claim = server.registry.claimTask("task_restart_worker", "old_daemon");
+  server.registry.updateTask("task_restart_worker", { agentId: "worker_restart", turnId: "turn_worker_done", heartbeatAt: new Date(0).toISOString() });
+
+  const result = await server.reconcileStaleTasks();
+  assert.equal(result.reconciled, 1);
+  assert.equal(validations, 1);
+  assert.equal(server.registry.getTask("task_restart_worker").status, "completed");
+  assert.equal(server.registry.getTask("task_restart_worker").metadata.completionVerdict.decision, "accept");
+  assert.ok(claim.claimToken);
+  await server.close();
+});
+
+test("restart reconciliation never completes accepted validation before worktree integration", async () => {
+  const calls = [];
+  const contract = compileExecutionContract({ key: "restart_integrate", taskKind: "implementation", mutatesWorkspace: true, workspaceMode: "worktree", integrationStrategy: "patch" });
+  const control = {
+    connect: async () => {},
+    inspectAgent: async () => ({ thread: { turns: [{
+      id: "turn_validator_accept", status: "completed",
+      output: JSON.stringify({ decision: "accept", failureKind: "none", summary: "verified", evidence: ["checked"], unmetCriteria: [] }),
+    }] } }),
+  };
+  const worktreeManager = {
+    finalize: async (id) => { calls.push(["finalize", id]); return { changed: true, commit: "abc" }; },
+    integrate: async (id, options) => { calls.push(["integrate", id, options.strategy]); return { status: "integrated", artifact: { changed: true, commit: "abc" } }; },
+  };
+  const server = fakeServer(control, { worktreeManager, schedulerConcurrency: 0, staleTaskMs: 0 });
+  server.registry.createTask({
+    id: "task_restart_integrate", prompt: "implement", cwd: "/repo",
+    metadata: { acceptanceCriteria: ["verified"], executionContract: contract, managedWorktreeId: "worktree_restart" },
+  });
+  const claim = server.registry.claimTask("task_restart_integrate", "old_daemon");
+  server.registry.markClaimAgentDone("task_restart_integrate", "old_daemon", claim.claimToken, { output: "worker output", turnId: "turn_worker" });
+  server.registry.markClaimValidating("task_restart_integrate", "old_daemon", claim.claimToken);
+  server.registry.updateTask("task_restart_integrate", { heartbeatAt: new Date(0).toISOString(), metadata: { validationInProgress: { agentId: "validator_restart_accept", turnId: "turn_validator_accept" } } });
+
+  const result = await server.reconcileStaleTasks();
+  assert.equal(result.reconciled, 1);
+  assert.deepEqual(calls, [["finalize", "worktree_restart"], ["integrate", "worktree_restart", "patch"]]);
+  assert.equal(server.registry.getTask("task_restart_integrate").status, "completed");
+  assert.equal(server.registry.getTask("task_restart_integrate").metadata.completionVerdict.decision, "accept");
   await server.close();
 });
 

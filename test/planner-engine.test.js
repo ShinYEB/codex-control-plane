@@ -157,6 +157,38 @@ test("planner output schema marks every declared property as required", () => {
   assert.deepEqual(new Set(task.required), new Set(Object.keys(task.properties)));
 });
 
+test("synthesizer prose cannot replace the durable failed Run verdict", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const roles = new RoleTemplateManager(registry);
+  roles.seedBuiltins();
+  registry.createRun({ id: "run_failed_synthesis", cwd: "/repo", status: "failed" });
+  registry.createPlan({ id: "plan_failed_synthesis", requestKey: "failed-synthesis", objective: "verify", cwd: "/repo", metadata: { runId: "run_failed_synthesis" } });
+  registry.updatePlan("plan_failed_synthesis", { status: "planned", plan: { summary: "verify", risks: [], tasks: [] } });
+  const control = {
+    spawnAgent: async () => ({ id: "synthesizer_failed", cwd: "/repo" }),
+    runTask: async (_id, _prompt, options = {}) => {
+      options.onStarted?.({ turnId: "turn_bad_synthesis" });
+      return {
+        turnId: "turn_bad_synthesis", turn: { status: "completed" },
+        output: JSON.stringify({ status: "completed", summary: "Everything succeeded", evidence: [], unresolvedRisks: [], followUps: [] }),
+      };
+    },
+  };
+  const planner = new PlannerEngine({
+    registry,
+    contextManager: new ContextManager(registry),
+    roleTemplates: roles,
+    getControl: async () => control,
+    decorateAgent: async () => {},
+  });
+
+  const result = await planner.synthesize("plan_failed_synthesis", [{ id: "failed_task", status: "failed", output: "boom", metadata: {} }]);
+  assert.equal(result.synthesis.status, "failed");
+  assert.equal(result.synthesis.consistency.consistent, false);
+  assert.match(result.synthesis.summary, /contradicted/);
+  registry.close();
+});
+
 test("planner automatically retries a graph that asks for another Start", async () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   const roles = new RoleTemplateManager(registry);

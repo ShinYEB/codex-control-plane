@@ -40,6 +40,23 @@ accepted -> planning -> preparing -> running -> completed
 
 `agents_prepared`와 `awaiting_user_start`는 현재 자동 dispatch의 정상 상태가 아니다. `RunController.start()`가 읽는 이유는 저장 데이터와 저수준 API 호환성 때문이다. `releaseStagedRun()`의 반환값 `ready`도 저장되는 Run 상태가 아니다.
 
+## TurnDispatch
+
+TurnDispatch는 모든 Codex 명령에 적용되는 공통 실행 하위 상태 머신이다.
+
+```text
+prepared -> thread_acquiring -> thread_created -> turn_submitting -> turn_running
+                                                                  -> completed | failed | interrupted
+각 비terminal 상태 -> cancelling -> cancelled
+                  \-> recovery_attention
+```
+
+- `thread_created`는 작업 준비 완료나 성공 상태가 아니다.
+- `turn_running`은 `threadId + turnId + ownerToken + promptFingerprint`가 영속화된 상태다.
+- 부모가 terminal이거나 cancellation generation이 달라지면 새 thread/Turn을 만들 수 없다.
+- 제출 여부가 불확실한 `turn_submitting`은 기존 Turn을 reconcile하기 전 재전송할 수 없다.
+- 상세 계약은 [TURN_DISPATCH.md](./TURN_DISPATCH.md)를 따른다.
+
 Run 종료 판정은 Task 전체가 terminal일 때만 수행한다. `completed_with_warnings`는 Run을 실패시키지 않는다. `blocked_by_policy`와 `integration_blocked`는 Run을 `failed`로 만든다.
 
 ## Task

@@ -39,6 +39,7 @@ ResultProjection
 ```
 
 - terminal 상태와 child 집계는 중앙 상태 함수에서 가져오며 자연어 summary가 바꿀 수 없다.
+- Task terminal 상태는 versioned CompletionVerdict에서 가져오며 Agent output이나 Validator 문구만으로 만들지 않는다.
 - 일부 실패·취소·미통합 artifact를 summary가 성공으로 숨길 수 없다.
 - 동일 entity revision과 source fingerprint는 동일 projection에 수렴한다.
 - projection 생성 중 새 Task나 후속 Run을 시작하지 않는다.
@@ -49,6 +50,7 @@ ResultProjection
 - fallback은 빈 성공 메시지가 아니며 synthesis failure warning을 포함한다.
 - Orchestrator의 오래된 summary를 fallback 정본으로 승격하지 않는다.
 - terminal projection 저장 전 완료 notification을 만들지 않는다.
+- Orchestrator summary가 구조화된 Run verdict와 모순되면 `consistency_failed`로 기록하고 deterministic fallback을 사용한다.
 - 화면 재조회는 projection을 다시 합성하지 않고 저장된 payload/fingerprint를 사용한다.
 
 ## 작업 탐색기

@@ -60,16 +60,16 @@
     <text x="786" y="166" class="label">분산 실행</text>
     <rect x="748" y="193" width="160" height="65" rx="10" fill="#ecfeff"/>
     <text x="761" y="216" class="code">route → claim → run</text>
-    <text x="761" y="237" class="code">validate → integrate</text>
+      <text x="761" y="237" class="code">evidence → validate</text>
     <text x="748" y="293" class="body">thread · worktree lease</text>
-    <text x="748" y="314" class="body">fenced token으로 결과 수락</text>
+      <text x="748" y="314" class="body">integrate → completion gate</text>
 
     <rect x="956" y="130" width="196" height="214" rx="18" fill="#fff"/>
     <circle cx="986" cy="160" r="17" fill="#16a34a"/><text x="981" y="165" class="num">5</text>
     <text x="1012" y="166" class="label">작업 탐색</text>
     <rect x="974" y="193" width="160" height="65" rx="10" fill="#ecfdf5"/>
     <text x="987" y="216" class="code">one Result projection</text>
-    <text x="987" y="237" class="code">→ Run / thread</text>
+    <text x="987" y="237" class="code">→ Master / Slave</text>
     <text x="974" y="293" class="body">project evidence 종합</text>
     <text x="974" y="314" class="body">선택한 작업 스레드로 이동</text>
   </g>
@@ -78,5 +78,5 @@
   <path d="M476 237h25" class="arrow"/>
   <path d="M702 237h25" class="arrow"/>
   <path d="M928 237h25" class="arrow"/>
-  <text x="52" y="389" class="sub">작업 탐색기는 상태와 구조를 보여주고, 선택한 Orchestrator 또는 Task 스레드를 엽니다.</text>
+  <text x="52" y="389" class="sub">작업 탐색기는 Master 목록과 Slave 그래프를 보여주고, 선택한 실제 Codex 스레드를 엽니다.</text>
 </svg>

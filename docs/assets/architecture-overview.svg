@@ -75,7 +75,7 @@
   <path d="M577 364h39" class="line"/>
 
   <rect x="362" y="442" width="470" height="86" rx="14" fill="#0f172a"/>
-  <text x="386" y="475" class="label white">SQLite Registry · schema v7</text>
+  <text x="386" y="475" class="label white">SQLite Registry · schema v8</text>
   <text x="386" y="500" class="whiteBody">Context · Global Run · Project Run · Task · Agent · Lease · Artifact · Result</text>
   <path d="M469 413v27" class="dash"/>
   <path d="M725 413v27" class="dash"/>
@@ -89,9 +89,9 @@
   <path d="M865 364h27v-178h19" class="line"/>
 
   <rect x="913" y="253" width="231" height="92" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
-  <text x="936" y="285" class="label">Agent Threads</text>
-  <text x="936" y="309" class="body">Orchestrator · Implementer</text>
-  <text x="936" y="330" class="body">Reviewer · QA · Ephemeral</text>
+  <text x="936" y="285" class="label">Codex Work Threads</text>
+  <text x="936" y="309" class="body">Master · Master Orchestrator</text>
+  <text x="936" y="330" class="body">Slave Workers · diagnostics</text>
   <path d="M1028 224v27" class="line"/>
 
   <rect x="913" y="374" width="231" height="92" rx="16" fill="#fff" stroke="#cbd5e1" filter="url(#shadow)"/>
@@ -101,13 +101,13 @@
   <path d="M1028 345v27" class="line"/>
 
   <rect x="913" y="495" width="231" height="92" rx="16" fill="#ecfdf5" stroke="#6ee7b7" filter="url(#shadow)"/>
-  <text x="936" y="527" class="label">Validate &amp; Integrate</text>
-  <text x="936" y="551" class="body">acceptance · journal · result</text>
-  <text x="936" y="572" class="body">work navigator / thread drill-down</text>
+  <text x="936" y="527" class="label">Evidence Completion Gate</text>
+  <text x="936" y="551" class="body">commands · outputs · validation</text>
+  <text x="936" y="572" class="body">integration · postcondition · result</text>
   <path d="M1028 466v27" class="line"/>
 
   <path d="M913 541H885v75H171v-265" class="line"/>
   <rect x="330" y="600" width="535" height="48" rx="24" fill="#fff" stroke="#cbd5e1"/>
   <circle cx="362" cy="624" r="8" fill="#22c55e"/>
-  <text x="381" y="630" class="body">Work navigator shows Run structure and opens owning Codex threads.</text>
+  <text x="381" y="630" class="body">Work navigator lists Masters, shows Slave graphs, and opens owning Codex threads.</text>
 </svg>

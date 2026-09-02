@@ -27,6 +27,7 @@ Control Plane daemon은 SQLite Registry의 단일 논리 writer다. MCP proxy, d
 | thread knowledge | `thread_knowledge_snapshots`, `thread_knowledge_claims`, `thread_lineage` | source digest 기반 지식 snapshot, claim 연결과 fork/supersede 계보 |
 | thread lifecycle | `thread_lifecycle`, `thread_lifecycle_events`, `thread_budgets` | 실행 상태와 분리된 수명주기 projection, 전이 감사, project/role 생성 예산 revision |
 | routing evidence | `routing_decisions` | 후보, 선택 근거, 제외 사유와 decision fingerprint |
+| Turn dispatch | `turn_dispatches`, 공통 `events` | thread 확보, submission intent, turn binding, owner/cancel fencing과 reconciliation evidence |
 | global orchestration | `global_runs`, `global_run_revisions`, `global_run_projects`, `cross_project_dependencies`, `global_run_results` | 전역 목표 revision, Project Run membership/dependency와 terminal projection |
 | audit | `events` | entity별 append-only 상태·결정 기록 |
 
@@ -76,6 +77,7 @@ Global Run graph도 하나의 outer `BEGIN IMMEDIATE` transaction에서 revision
 
 - execution contract, contract version/fingerprint/revision, validation status/time/error, routing decision, failure history
 - Run origin, dispatch phase, scheduler/orchestrator identity
+- durable TurnDispatch의 prompt/contract fingerprint, thread/turn identity, owner token, cancellation generation과 probe evidence
 - worktree baseline, artifact, integration result
 - durable integration journal과 적용 evidence
 - context pack provenance
@@ -86,7 +88,7 @@ JSON에 새 필드를 추가할 때는 missing field를 정상으로 처리하�
 
 Registry는 `PRAGMA user_version`으로 schema version을 관리한다.
 
-현재 schema version `7`은 canonical Project ID, Context Claim·ThreadKnowledge, immutable Context Snapshot, Global Run, durable cross-project handoff/receipt와 thread lifecycle/budget을 포함한다. v6→v7 migration은 기존 Agent 상태를 candidate/active/idle/archived lifecycle로 backfill하고 기존 routing decision CHECK를 wait/ephemeral까지 확장한다. Run, Task, Agent, Plan과 memory는 호환 `cwd`와 함께 nullable `project_id`를 저장한다. 실제로 canonicalize할 수 없는 과거 경로는 ID를 추측하지 않고 `migration_attention`에 남긴다. 기존 `project_memories`는 `legacy_unverified + candidate` Context Claim으로 이관되며 자동으로 active 지식이 되지 않는다.
+현재 schema version `8`은 v7의 canonical Project ID, Context Claim·ThreadKnowledge, immutable Context Snapshot, Global Run, durable cross-project handoff/receipt와 thread lifecycle/budget에 `turn_dispatches`를 추가한다. v6→v7 migration은 기존 Agent 상태를 candidate/active/idle/archived lifecycle로 backfill하고 기존 routing decision CHECK를 wait/ephemeral까지 확장한다. Run, Task, Agent, Plan과 memory는 호환 `cwd`와 함께 nullable `project_id`를 저장한다. 실제로 canonicalize할 수 없는 과거 경로는 ID를 추측하지 않고 `migration_attention`에 남긴다. 기존 `project_memories`는 `legacy_unverified + candidate` Context Claim으로 이관되며 자동으로 active 지식이 되지 않는다.
 
 Context Claim은 candidate로 생성한 뒤 provenance source를 저장해야 active/disputed로 전이할 수 있다. SQLite trigger도 source 없는 활성화와 active claim의 마지막 source 삭제를 거부한다. authority가 낮은 claim은 높은 authority claim을 supersede할 수 없으며 사용자 명시 결정은 다른 사용자 명시 결정만 supersede할 수 있다.
 
@@ -119,3 +121,5 @@ Context Claim은 candidate로 생성한 뒤 provenance source를 저장해야 ac
 - committed Global Run graph의 root release와 child 상태 projection을 복구하고, graph commit 전 중단된 preparation은 구조화된 terminal failure로 수렴
 
 복구가 결과를 안전하게 확정할 수 없고 Task에 side effect가 있으면 자동 재실행하지 않는다.
+
+schema version 8의 `turn_dispatches`는 [TURN_DISPATCH.md](./TURN_DISPATCH.md)의 identity·ownership·cancellation·recovery 필드, subject/purpose/revision uniqueness와 owner-token conditional update를 제공한다.

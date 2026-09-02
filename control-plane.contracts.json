@@ -10,11 +10,27 @@
       "supersedes": ["claim_product_run_start_policy_v1"]
     },
     {
-      "id": "result_access_policy_v1",
+      "id": "result_access_policy_v3",
       "kind": "decision",
       "subject": "result_access",
+      "revision": 3,
+      "body": "The work navigator is the durable status and result surface. Its top-level work list contains one navigable Master Worker per user request. A simple Master opens its actual Codex work thread. A Master Orchestrator opens its actual Codex thread with a subordinate Slave Worker task graph, whose nodes navigate to the corresponding Slave Codex threads. Planner, Validator, and Synthesizer TurnDispatches remain diagnostic evidence rather than peer top-level work items. The daemon is a non-chat scheduler identity and never appends a terminal result to the requesting thread.",
+      "supersedes": ["result_access_policy_v2", "claim_product_result_access_policy_v1"]
+    },
+    {
+      "id": "durable_turn_dispatch_v1",
+      "kind": "architecture",
+      "subject": "turn_dispatch",
       "revision": 1,
-      "body": "The work navigator is the durable status and result surface. It lists active and terminal Runs, exposes orchestration structure for complex Runs, and opens the selected Orchestrator or Data Plane Codex thread. The daemon never appends a terminal result to the requesting thread.",
+      "body": "Planner, Orchestrator, Data Plane, Validator, and Synthesizer commands use durable TurnDispatch records. Thread acquisition is not work completion; submission intent is persisted before turn/start, thread and turn identity are fenced by owner and cancellation generation, restart reconciles before resend, and terminal or cancelled parents cannot launch a new Turn.",
+      "supersedes": []
+    },
+    {
+      "id": "evidence_based_completion_v1",
+      "kind": "architecture",
+      "subject": "task_completion_authority",
+      "revision": 1,
+      "body": "Agent and Orchestrator prose never determines terminal success. One daemon-owned Completion Evaluator must combine hydrated terminal Turn items, command and test results, materialized declared outputs, workspace mutation, validation, integration journal, and required destination postconditions. Normal execution and restart reconciliation use the same verdict function, and lower-priority narrative cannot override higher-priority machine evidence.",
       "supersedes": []
     }
   ]

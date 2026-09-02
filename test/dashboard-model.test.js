@@ -113,6 +113,37 @@ test("dashboard exposes a graphless dispatch failure before worker creation", ()
   registry.close();
 });
 
+test("dashboard diagnostics expose durable TurnDispatch state without embedding output", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  registry.createRun({ id: "dispatch_dashboard", cwd: "/repo", status: "running" });
+  const dispatch = registry.createTurnDispatch({
+    subjectType: "run", subjectId: "dispatch_dashboard", purpose: "orchestration",
+    parentRunId: "dispatch_dashboard", promptFingerprint: "prompt_hash", submissionKey: "submission_hash",
+    status: "turn_running", threadId: "thread_dashboard", turnId: "turn_dashboard",
+    deadlineAt: new Date(Date.now() + 60_000).toISOString(), evidence: { result: { output: "large private output" } },
+  });
+  for (const [purpose, threadId] of [["planning", "thread_planner"], ["execution", "thread_worker"], ["validation", "thread_validator"], ["synthesis", "thread_dashboard"]]) {
+    registry.createTurnDispatch({
+      subjectType: purpose === "planning" ? "plan" : purpose === "execution" || purpose === "validation" ? "task" : "run",
+      subjectId: `${purpose}_subject`, purpose, parentRunId: "dispatch_dashboard",
+      promptFingerprint: `${purpose}_prompt`, submissionKey: `${purpose}_submission`,
+      status: "completed", threadId, turnId: `${purpose}_turn`,
+    });
+  }
+  const snapshot = buildDashboardSnapshot(registry, { cwd: "/repo", runId: "dispatch_dashboard", getGraph: buildRunGraph.bind(null, registry) });
+  const activeDispatch = snapshot.turnDispatches.find((item) => item.id === dispatch.id);
+  assert.equal(activeDispatch.status, "turn_running");
+  assert.equal(activeDispatch.turnId, "turn_dashboard");
+  assert.doesNotMatch(JSON.stringify(snapshot.turnDispatches), /large private output/);
+  assert.equal(snapshot.runThreads.length, 4);
+  assert.equal(snapshot.runThreads[0].threadId, "thread_dashboard");
+  assert.equal(snapshot.runThreads[0].displayRole, "Orchestrator · Synthesizer");
+  assert.equal(snapshot.runThreads[0].active, true);
+  assert.deepEqual(new Set(snapshot.runThreads.flatMap((item) => item.purposes)), new Set(["planning", "orchestration", "execution", "validation", "synthesis"]));
+  assert.equal(getDashboardDetail(registry, "turn_dispatch", dispatch.id).submissionKey, "submission_hash");
+  registry.close();
+});
+
 test("dashboard reconciles a stale terminal Run consistently across card, list, and graph", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createTaskGraph({ id: "stale_dashboard", cwd: "/repo", status: "running" }, [

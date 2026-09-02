@@ -12,20 +12,25 @@
 6. [adr/ADR-003-THREAD-LIFECYCLE.md](./adr/ADR-003-THREAD-LIFECYCLE.md) — 스레드 생성·재사용·압축·보관 정책
 7. [adr/ADR-004-RESULT-AUTHORITY.md](./adr/ADR-004-RESULT-AUTHORITY.md) — Orchestrator, Synthesizer와 사용자-visible 결과 정본
 8. [adr/ADR-005-AUTOMATIC-RUN-START.md](./adr/ADR-005-AUTOMATIC-RUN-START.md) — 사용자 요청 1회 승인과 graph 검증 후 자동 시작
-9. [contracts/CONTEXT_RESOLUTION.md](./contracts/CONTEXT_RESOLUTION.md) — 지식 수집, authority, 충돌과 Context Snapshot
-10. [contracts/CONTRACT_AUTHORITY.md](./contracts/CONTRACT_AUTHORITY.md) — 제품 계약 manifest, 권위, revision과 실행 전 충돌 차단
-11. [contracts/GLOBAL_RUNS.md](./contracts/GLOBAL_RUNS.md) — Global Run 상태, 권한, 프로젝트 간 dependency
-12. [contracts/TARGET_PERSISTENCE.md](./contracts/TARGET_PERSISTENCE.md) — 목표 schema, 원자성, migration과 호환성
-13. [contracts/STATE_MACHINES.md](./contracts/STATE_MACHINES.md) — 현재 Run, Task, Agent, Lease의 상태와 전이
-14. [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md) — 권한, sandbox, workspace, 부작용 계약
-15. [contracts/PERSISTENCE.md](./contracts/PERSISTENCE.md) — 현재 SQLite 소유권, 원자성, 멱등성, 저장 모델
-16. [contracts/RESULT_DELIVERY.md](./contracts/RESULT_DELIVERY.md) — 결과 종합, 알림, 원래 대화로의 전달
-17. [operations/FAILURE_RECOVERY.md](./operations/FAILURE_RECOVERY.md) — 실패 분류, 재시도, 재시작 복구, worktree 복구
-18. [operations/RUNTIME_LIFECYCLE.md](./operations/RUNTIME_LIFECYCLE.md) — 런타임 identity, 데몬 handover, 배포·재설치
-19. [STABILIZATION_GATE.md](./STABILIZATION_GATE.md) — 1~8단계 안정화의 최종 E2E 검증 근거
-20. [GLOBAL_ORCHESTRATION_GATE.md](./GLOBAL_ORCHESTRATION_GATE.md) — 새 설계의 구현 순서와 최종 E2E 게이트
-21. [G7_E2E_EVIDENCE.md](./G7_E2E_EVIDENCE.md) — 최종 12개 시나리오의 자동 검증 evidence
-22. [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) — 현재 설계에서 다음 점검 때 결정해야 할 항목
+9. [adr/ADR-007-DURABLE-TURN-DISPATCH.md](./adr/ADR-007-DURABLE-TURN-DISPATCH.md) — 스레드 확보·명령 제출·복구를 하나로 묶는 결정
+10. [adr/ADR-008-EVIDENCE-BASED-COMPLETION.md](./adr/ADR-008-EVIDENCE-BASED-COMPLETION.md) — Agent 문구가 아닌 실행 증거로 성공을 판정하는 결정
+11. [contracts/EXECUTION_FLOW_CONTRACT.md](./contracts/EXECUTION_FLOW_CONTRACT.md) — 요청부터 결과 접근까지 단계별 gate와 evidence 매트릭스
+12. [contracts/TURN_DISPATCH.md](./contracts/TURN_DISPATCH.md) — TurnDispatch 상태, 영속 필드, 취소·재시작 판정
+13. [contracts/COMPLETION_GATE.md](./contracts/COMPLETION_GATE.md) — Turn·명령·output·workspace·validation·integration 증거의 단일 완료 판정
+14. [contracts/CONTEXT_RESOLUTION.md](./contracts/CONTEXT_RESOLUTION.md) — 지식 수집, authority, 충돌과 Context Snapshot
+15. [contracts/CONTRACT_AUTHORITY.md](./contracts/CONTRACT_AUTHORITY.md) — 제품 계약 manifest, 권위, revision과 실행 전 충돌 차단
+16. [contracts/GLOBAL_RUNS.md](./contracts/GLOBAL_RUNS.md) — Global Run 상태, 권한, 프로젝트 간 dependency
+17. [contracts/TARGET_PERSISTENCE.md](./contracts/TARGET_PERSISTENCE.md) — 목표 schema, 원자성, migration과 호환성
+18. [contracts/STATE_MACHINES.md](./contracts/STATE_MACHINES.md) — 현재 Run, Task, Agent, Lease의 상태와 전이
+19. [contracts/EXECUTION_CONTRACT.md](./contracts/EXECUTION_CONTRACT.md) — 권한, sandbox, workspace, 부작용 계약
+20. [contracts/PERSISTENCE.md](./contracts/PERSISTENCE.md) — 현재 SQLite 소유권, 원자성, 멱등성, 저장 모델
+21. [contracts/RESULT_DELIVERY.md](./contracts/RESULT_DELIVERY.md) — 결과 projection, 알림과 작업 스레드 접근
+22. [operations/FAILURE_RECOVERY.md](./operations/FAILURE_RECOVERY.md) — 실패 분류, 재시도, 재시작 복구, worktree 복구
+23. [operations/RUNTIME_LIFECYCLE.md](./operations/RUNTIME_LIFECYCLE.md) — 런타임 identity, 데몬 handover, 배포·재설치
+24. [STABILIZATION_GATE.md](./STABILIZATION_GATE.md) — 1~8단계 안정화의 최종 E2E 검증 근거
+25. [GLOBAL_ORCHESTRATION_GATE.md](./GLOBAL_ORCHESTRATION_GATE.md) — 새 설계의 구현 순서와 최종 E2E 게이트
+26. [G7_E2E_EVIDENCE.md](./G7_E2E_EVIDENCE.md) — 최종 12개 시나리오의 자동 검증 evidence
+27. [REVIEW_CHECKLIST.md](./REVIEW_CHECKLIST.md) — 현재 설계에서 다음 점검 때 결정해야 할 항목
 
 ## 문서의 권위와 변경 규칙
 
@@ -44,7 +49,9 @@
 | 실행 계약 | `src/execution-contracts.js` | `test/execution-contracts.test.js` |
 | 상태와 원자적 claim | `src/registry.js`, `src/run-controller.js` | `test/registry.test.js`, `test/run-controller.test.js` |
 | 라우팅과 agent lease | `src/router.js`, `src/mcp-server.js` | `test/registry.test.js`, `test/mcp-server.test.js` |
+| Durable Turn Dispatch | `src/turn-dispatcher.js`, `src/domain-states.js`, `src/registry.js` schema v8 | `test/turn-dispatcher.test.js`, migration·MCP·dashboard tests |
 | 검증 | `src/result-validator.js` | `test/result-validator.test.js` |
+| Completion Gate | `src/completion-evaluator.js`, final Turn hydration, 정상·복구 공통 verdict, integration postcondition | `test/completion-evaluator.test.js`, App Server 누락 event, 빈 diff, restart integration, synthesis mismatch tests |
 | worktree와 통합 | `src/worktree-manager.js` | `test/worktree-manager.test.js` |
 | 결과 접근과 알림 | `src/dashboard-model.js`, `src/mcp-server.js`, `src/notification-policy.js` | `test/dashboard-model.test.js`, `test/mcp-server.test.js`, `test/notification-policy.test.js` |
 | 데몬과 generation | `src/daemon.js`, `src/daemon-client.js`, `src/build-info.js` | `test/daemon.test.js`, `test/reinstall-preflight.test.js` |

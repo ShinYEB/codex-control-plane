@@ -4,11 +4,11 @@
 
 Control Plane의 사용자 표면은 결과를 원래 요청 스레드로 밀어 넣는 전달함이 아니라, 현재 및 종료된 작업을 탐색하는 **작업 탐색기**다.
 
-- 작업 탐색기는 active·terminal Run을 함께 상태 목록으로 보여준다.
-- Run을 선택하면 해당 Run의 진행률과 실행 구조를 보여준다.
-- 복잡한 Run은 Orchestrator와 Data Plane Task DAG를 계층적으로 보여준다.
-- Orchestrator 또는 Task를 선택하면 그 작업을 실제로 소유한 Codex 스레드로 이동한다.
-- 단순 Run도 담당 Task 스레드로 이동할 수 있다.
+- 작업 탐색기는 사용자 요청을 대표하는 active·terminal Master Worker를 상태 목록으로 보여준다.
+- 단순 Master Worker를 선택하면 작업을 수행한 실제 Codex 스레드로 이동한다.
+- Master Orchestrator를 선택하면 실제 Codex 실행 기록과 Slave Worker Task DAG를 계층적으로 보여준다.
+- Slave 노드를 선택하면 그 작업을 실제로 소유한 Codex 스레드로 이동한다.
+- Planner, Validator, Synthesizer는 고급 진단 evidence이며 Master와 동급인 최상위 사용자 작업으로 표시하지 않는다.
 - daemon은 terminal 결과를 요청을 만든 스레드에 자동 append하지 않는다.
 - 결과 요약은 Registry의 durable Result projection으로 남으며 작업 탐색기에서 조회한다.
 
@@ -20,11 +20,10 @@ Control Plane의 사용자 표면은 결과를 원래 요청 스레드로 밀어
 
 ```text
 작업 목록
-  -> Run 선택
-     -> 단순 Run: Task 스레드 선택 -> Codex 스레드 이동
-     -> 복잡한 Run
-        -> Orchestrator 스레드 선택 -> Codex 스레드 이동
-        -> Task DAG 노드 선택 -> Data Plane 스레드 이동
+  -> Master Worker 선택 -> Codex 스레드 이동
+     -> 단순 Master: 일반 실행 기록
+     -> Master Orchestrator: 일반 실행 기록 + Slave Task DAG
+        -> Slave 노드 선택 -> Slave Codex 스레드 이동
 ```
 
 ## 불변조건

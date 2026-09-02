@@ -8,6 +8,7 @@ import {
   LEASE_STATUSES,
   RUN_STATUSES,
   TASK_STATUSES,
+  TURN_DISPATCH_STATUSES,
   deriveRunStatus,
   deriveGlobalRunStatus,
   statusSemantics,
@@ -18,6 +19,7 @@ import {
   transitionRun,
   transitionGlobalRun,
   transitionTask,
+  transitionTurnDispatch,
 } from "../src/domain-states.js";
 
 test("domain state transitions reject illegal rewinds and allow explicit repair", () => {
@@ -33,6 +35,8 @@ test("domain state transitions reject illegal rewinds and allow explicit repair"
   assert.equal(transitionDelivery("pending", "delivering"), "delivering");
   assert.equal(transitionDelivery("delivering", "direct_delivered"), "direct_delivered");
   assert.throws(() => transitionDelivery("delivered", "retry_waiting"), /Illegal Delivery transition/);
+  assert.equal(transitionTurnDispatch("thread_created", "turn_submitting"), "turn_submitting");
+  assert.throws(() => transitionTurnDispatch("completed", "turn_running"), /Illegal TurnDispatch transition/);
 });
 
 test("Global Run transitions and required/optional aggregation are centralized", () => {
@@ -59,6 +63,7 @@ test("every centralized state declares terminal, retry, recovery, and attention 
     agent: AGENT_STATUSES,
     lease: LEASE_STATUSES,
     delivery: DELIVERY_STATUSES,
+    turn_dispatch: TURN_DISPATCH_STATUSES,
   })) {
     for (const status of statuses) {
       const semantics = statusSemantics(entity, status);

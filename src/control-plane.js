@@ -23,6 +23,23 @@ function recoveredOutput(turn) {
     .join("\n");
 }
 
+function mergeTurnItems(...groups) {
+  const merged = [];
+  const positions = new Map();
+  for (const item of groups.flat()) {
+    if (!item) continue;
+    const identity = item.id ?? `${item.type ?? item.kind ?? "item"}:${JSON.stringify(item)}`;
+    if (positions.has(identity)) {
+      const index = positions.get(identity);
+      merged[index] = { ...merged[index], ...item };
+    } else {
+      positions.set(identity, merged.length);
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
 export class CodexControlPlane {
   constructor(client, options = {}) {
     this.client = client;
@@ -156,7 +173,7 @@ export class CodexControlPlane {
     return this.client.request("thread/read", {
       threadId,
       includeTurns: options.includeTurns ?? false,
-    });
+    }, options.timeoutMs);
   }
 
   async runTask(threadId, prompt, options = {}) {
@@ -230,6 +247,7 @@ export class CodexControlPlane {
               executionItems: recoveredTurn.items ?? [],
               completionMethod: "thread/read-recovery",
               recoveredFromRead: true,
+              evidenceComplete: true,
             };
             options.onCompleted?.(recovered);
             return recovered;
@@ -246,8 +264,35 @@ export class CodexControlPlane {
         status: completion.params.turn?.status ?? notificationStatus,
         ...(completion.params.error && !completion.params.turn?.error ? { error: completion.params.error } : {}),
       };
-      const executionItems = observedItems.filter((entry) => !entry.turnId || entry.turnId === turnId).map((entry) => entry.item);
-      const completed = { threadId, turnId, output, turn, executionItems, completionMethod: completion.method };
+      const liveItems = observedItems.filter((entry) => !entry.turnId || entry.turnId === turnId).map((entry) => entry.item);
+      let hydratedTurn = null;
+      let hydrationError = null;
+      try {
+        hydratedTurn = terminalTurnFromRead(await this.inspectAgent(threadId, {
+          includeTurns: true,
+          timeoutMs: Math.max(1, Math.min(options.evidenceHydrationTimeoutMs ?? 5_000, deadline - Date.now())),
+        }), turnId);
+      } catch (error) {
+        hydrationError = error;
+      }
+      const executionItems = mergeTurnItems(liveItems, hydratedTurn?.items ?? []);
+      const finalTurn = hydratedTurn ? {
+        ...turn,
+        ...hydratedTurn,
+        status: hydratedTurn.status ?? turn.status,
+        items: executionItems,
+        ...(turn.error && !hydratedTurn.error ? { error: turn.error } : {}),
+      } : { ...turn, items: executionItems };
+      const completed = {
+        threadId,
+        turnId,
+        output: recoveredOutput(hydratedTurn) || output,
+        turn: finalTurn,
+        executionItems,
+        completionMethod: hydratedTurn ? `${completion.method}+thread/read` : completion.method,
+        evidenceComplete: Boolean(hydratedTurn),
+        ...(hydrationError ? { hydrationError: hydrationError.message } : {}),
+      };
       options.onCompleted?.(completed);
       return completed;
     } finally {
