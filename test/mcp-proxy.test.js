@@ -40,7 +40,7 @@ test("MCP proxy keeps caller identity input separate from authoritative host ori
   proxy.close();
 });
 
-test("MCP proxy attaches Control Plane origin identity to dispatch and result reads", async () => {
+test("MCP proxy attaches Control Plane origin identity to dispatch and work navigation reads", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
   const observed = [];
@@ -56,7 +56,7 @@ test("MCP proxy attaches Control Plane origin identity to dispatch and result re
   input.write(`${JSON.stringify({ id: 3, method: "tools/call", params: { name: "dispatch_control_request", arguments: { objective: "work", cwd: "/repo" } } })}\n`);
   await first;
   const second = new Promise((resolve) => output.once("data", resolve));
-  input.write(`${JSON.stringify({ id: 4, method: "tools/call", params: { name: "drain_control_results", arguments: { cwd: "/repo" } } })}\n`);
+  input.write(`${JSON.stringify({ id: 4, method: "tools/call", params: { name: "list_runs", arguments: { cwd: "/repo" } } })}\n`);
   await second;
   assert.equal(observed[0]._meta["codex/origin"].threadId, "control_origin");
   assert.equal(observed[0]._meta["codex/origin"].turnId, "turn_origin");

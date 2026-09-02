@@ -195,7 +195,7 @@ GlobalResult는 다음을 포함한다.
 - warning, failure, attention과 nextAction
 - 누락 또는 충돌한 scope
 
-GlobalResult가 사용자-visible terminal 결과의 정본이다. Project Run 결과는 근거로 연결한다. 기존 durable origin delivery를 재사용하며 dashboard는 결과 전달의 필수 경로가 아니다.
+GlobalResult가 사용자-visible terminal 결과의 정본이다. Project Run 결과는 근거로 연결한다. 작업 탐색기는 Global Run에서 Project Run, Orchestrator와 Task 스레드로 이동하는 결과 접근 경로다.
 
 ## 재시작 복구
 

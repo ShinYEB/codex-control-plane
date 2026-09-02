@@ -152,6 +152,10 @@ function runSummary(run, taskByRunId = new Map(), agentById = new Map(), result 
     globalRun: globalRunSummary(parentGlobalRun),
     schedulerIdentity: run.metadata?.schedulerIdentity ?? null,
     orchestratorSessionIdentity: run.metadata?.orchestratorSessionIdentity ?? null,
+    resultAccess: {
+      mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+      automaticOriginAppend: false,
+    },
     executionParticipants: {
       orchestrator: orchestratorId ? { id: orchestratorId, name: orchestrator?.name ?? null, role: orchestrator?.role ?? "orchestrator", status: orchestrator?.status ?? "unknown" } : null,
       dataAgents: dataAgentIds.map((id) => {

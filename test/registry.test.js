@@ -34,7 +34,7 @@ test("terminal Run state always owns the projected dispatch phase", () => {
   registry.close();
 });
 
-test("Control Plane result delivery is durable, idempotent, and retryable", () => {
+test("legacy Control Plane delivery rows remain durable for migration compatibility", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createRun({ id: "run_delivery", cwd: "/repo", status: "completed" });
   const created = registry.enqueueControlDelivery({

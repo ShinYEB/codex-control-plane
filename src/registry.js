@@ -1002,12 +1002,6 @@ export class ControlRegistry {
       ) LIMIT 1
     `).get(threadId);
     if (unresolved) throw Object.assign(new Error(`Thread ${threadId} has unresolved Task ${unresolved.id} (${unresolved.status})`), { code: "THREAD_LIFECYCLE_UNRESOLVED_TASK" });
-    const delivery = this.db.prepare(`
-      SELECT delivery.id FROM control_result_deliveries delivery
-      JOIN tasks task ON task.run_id = delivery.run_id
-      WHERE task.agent_id = ? AND delivery.status NOT IN ('direct_delivered', 'delivered') LIMIT 1
-    `).get(threadId);
-    if (delivery) throw Object.assign(new Error(`Thread ${threadId} has unresolved delivery ${delivery.id}`), { code: "THREAD_LIFECYCLE_UNRESOLVED_DELIVERY" });
     return true;
   }
 
@@ -3203,8 +3197,8 @@ export class ControlRegistry {
       this.createNotification({
         projectKey: run?.cwd ?? "workspace", runId: delivery.runId,
         kind: NOTIFICATION_KINDS.ATTENTION_REQUIRED,
-        title: "결과 전달 확인 필요",
-        body: "완료 결과를 원래 Control Plane 스레드에 자동 전달하지 못했습니다. 다음 요청에서 안전하게 회수할 수 있습니다.",
+        title: "이전 결과 기록 확인 필요",
+        body: "이전 버전에서 남은 결과 전달 기록입니다. 작업 탐색기의 해당 Run과 담당 스레드에서 결과를 확인하세요.",
         dedupeKey: `${delivery.deliveryKey}:attention`,
       });
     }

@@ -66,17 +66,17 @@
 
     <rect x="956" y="130" width="196" height="214" rx="18" fill="#fff"/>
     <circle cx="986" cy="160" r="17" fill="#16a34a"/><text x="981" y="165" class="num">5</text>
-    <text x="1012" y="166" class="label">결과 전달</text>
+    <text x="1012" y="166" class="label">작업 탐색</text>
     <rect x="974" y="193" width="160" height="65" rx="10" fill="#ecfdf5"/>
     <text x="987" y="216" class="code">one Result projection</text>
-    <text x="987" y="237" class="code">→ origin / inbox</text>
+    <text x="987" y="237" class="code">→ Run / thread</text>
     <text x="974" y="293" class="body">project evidence 종합</text>
-    <text x="974" y="314" class="body">origin에 한 번만 전달</text>
+    <text x="974" y="314" class="body">선택한 작업 스레드로 이동</text>
   </g>
 
   <path d="M250 237h25" class="arrow"/>
   <path d="M476 237h25" class="arrow"/>
   <path d="M702 237h25" class="arrow"/>
   <path d="M928 237h25" class="arrow"/>
-  <text x="52" y="389" class="sub">관찰: 대시보드는 Registry의 상태를 읽을 뿐 실행을 시작하거나 성공으로 바꾸지 않습니다.</text>
+  <text x="52" y="389" class="sub">작업 탐색기는 상태와 구조를 보여주고, 선택한 Orchestrator 또는 Task 스레드를 엽니다.</text>
 </svg>

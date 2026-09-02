@@ -32,7 +32,7 @@ import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STA
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/agent-dashboard-v4.html";
+const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v5.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const execFile = promisify(execFileCallback);
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -484,29 +484,12 @@ const TOOLS = [
         role: { type: "string", description: "Preferred role for an explicitly direct request." },
         capabilities: { type: "array", items: { type: "string" }, maxItems: 30 },
         acceptanceCriteria: { type: "array", items: { type: "string" }, maxItems: 30 },
-        originThreadId: { type: "string", description: "Calling Control Plane thread identity. The MCP proxy fills this automatically when Codex exposes it." },
-        originTurnId: { type: "string", description: "Optional calling turn identity used for result-delivery provenance." },
+        originThreadId: { type: "string", description: "Calling Control Plane thread identity retained as request provenance. The MCP proxy fills this automatically when Codex exposes it." },
+        originTurnId: { type: "string", description: "Optional calling turn identity retained as request provenance." },
         threadId: { type: "string", description: "Deprecated compatibility input; ignored for Run tasks." },
         orchestratorThreadId: { type: "string", description: "Optional actual Orchestrator Codex thread identity, recorded separately from the Daemon Scheduler." },
       },
       required: ["objective", "cwd"],
-      additionalProperties: false,
-    },
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-  },
-  {
-    name: "drain_control_results",
-    title: "Drain completed Control Plane results",
-    description: "Return and acknowledge durable Run results waiting for the calling Control Plane thread. The MCP proxy supplies the thread identity when Codex exposes it.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        originThreadId: { type: "string" },
-        originTurnId: { type: "string" },
-        cwd: { type: "string" },
-        limit: { type: "integer", minimum: 1, maximum: 50, default: 10 },
-      },
-      required: ["cwd"],
       additionalProperties: false,
     },
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
@@ -858,8 +841,8 @@ const TOOLS = [
   },
   {
     name: "get_dashboard_state",
-    title: "Refresh the control dashboard",
-    description: "Return a revisioned lightweight dashboard snapshot or delta for an authorized control-plane dashboard view.",
+    title: "Refresh the work navigator",
+    description: "Return a revisioned lightweight snapshot or delta for an authorized Control Plane work navigator.",
     inputSchema: {
       type: "object",
       properties: {
@@ -888,8 +871,8 @@ const TOOLS = [
   },
   {
     name: "show_agent_dashboard",
-    title: "Show the agent control dashboard",
-    description: "Render the interactive control dashboard inside the current Codex conversation by default. Use the local web fallback only when the host cannot render MCP Apps UI or the user explicitly requests a web page.",
+    title: "Show the Control Plane work navigator",
+    description: "Render the interactive Run list, orchestration structure, and Codex thread navigation inside the current conversation. Use the local web fallback only when the host cannot render MCP Apps UI or the user explicitly requests a web page.",
     inputSchema: {
       type: "object",
       properties: {
@@ -975,7 +958,6 @@ export class McpControlServer {
     this.pollPromise = null;
     this.controlDispatches = new Map();
     this.runFinalizations = new Map();
-    this.controlDeliveryFlights = new Set();
     this.reconciliationTtlMs = options.reconciliationTtlMs ?? 5 * 60_000;
     this.projectReconciliations = new Map();
     this.dashboardViewLeaseTtlMs = options.dashboardViewLeaseTtlMs ?? 30 * 60_000;
@@ -989,8 +971,6 @@ export class McpControlServer {
       if (recovered) this.registry.recordEvent("system", null, "system.recovered", { interruptedTasks: recovered });
       const recoveredAgentLeases = this.registry.recoverExpiredAgentLeases?.() ?? 0;
       if (recoveredAgentLeases) this.registry.recordEvent("system", null, "system.agent_leases_recovered", { agentLeases: recoveredAgentLeases });
-      const recoveredDeliveries = this.registry.recoverControlDeliveries?.() ?? 0;
-      if (recoveredDeliveries) this.registry.recordEvent("system", null, "system.control_deliveries_recovered", { deliveries: recoveredDeliveries });
       const recoveredGlobalRuns = this.registry.recoverGlobalRuns?.() ?? null;
       if (recoveredGlobalRuns && Object.values(recoveredGlobalRuns).some(Boolean)) this.registry.recordEvent("system", null, "system.global_runs_recovered", recoveredGlobalRuns);
     }
@@ -1090,7 +1070,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex thread writer. Chat is the primary Control Plane surface; dispatch returns quickly, the dashboard is optional, and terminal results return through a durable origin-thread delivery contract. The daemon atomically persists the graph, then automatically starts the Run without READY placeholders or a dashboard Start button. Complex Runs receive one durable Orchestrator thread, and each task leases a compatible reusable Data Plane thread or creates a new one when no safe match exists.",
+        instructions: "Use this daemon as the single Codex thread writer. Dispatch returns quickly and the work navigator is the durable status surface: users select a Run, inspect its orchestration graph, and open the Orchestrator or Data Plane Codex thread that owns the work. The daemon never appends terminal results to the requesting thread. It atomically persists the graph, then automatically starts the Run without READY placeholders or a dashboard Start button.",
       };
     }
     if (message.method === "ping") return {};
@@ -1099,9 +1079,9 @@ export class McpControlServer {
       return {
         resources: [{
           uri: DASHBOARD_URI,
-          name: "agent-dashboard",
-          title: "Codex Agent Control Dashboard",
-          description: "Interactive status dashboard for Codex data-plane agents and tasks.",
+          name: "work-navigator",
+          title: "Codex Control Plane Work Navigator",
+          description: "Interactive Run status, orchestration structure, and owning-thread navigation.",
           mimeType: "text/html;profile=mcp-app",
         }],
       };
@@ -1223,21 +1203,6 @@ export class McpControlServer {
         result = await this.#prepareAgentRun({ ...args, autoStart: true });
       } else if (name === "dispatch_control_request") {
         result = await this.#enqueueControlRequest(args, context);
-      } else if (name === "drain_control_results") {
-        const originThreadId = context.hostOrigin?.threadId ?? args.originThreadId ?? this.registry.getSetting(`control_plane_owner:${args.cwd ?? "*"}`) ?? null;
-        const deliveries = originThreadId ? this.registry.listControlDeliveries({
-          originThreadId,
-          status: ["pending", "retry_waiting", "pending_attention"],
-          limit: args.limit ?? 10,
-        }).filter((delivery) => !args.cwd || this.registry.getRun(delivery.runId)?.cwd === args.cwd) : [];
-        for (const delivery of deliveries) {
-          this.registry.markControlDeliveryDelivered(delivery.id, context.hostOrigin?.turnId ?? args.originTurnId ?? "mcp_result_handoff");
-          if (delivery.payload?.notificationId) {
-            this.registry.markNotificationRead(delivery.payload.notificationId, delivery.originThreadId);
-            this.registry.markNotificationRead(delivery.payload.notificationId);
-          }
-        }
-        result = { deliveries };
       } else if (name === "get_run_graph") {
         result = this.runController.graph(args.runId);
       } else if (name === "prepare_global_run") {
@@ -2026,8 +1991,9 @@ export class McpControlServer {
         accepted: true,
         idempotent: true,
         controlPlaneStatus: "available",
+        resultAccess: { mode: "dashboard_thread_navigation" },
         detailsAvailable: true,
-        message: "This request was already accepted. The Control Plane is ready for another request.",
+        message: "This request was already accepted. Track it in the work navigator and open the owning Codex thread from its Run structure.",
       };
     }
     const runId = `run_${randomUUID()}`;
@@ -2045,7 +2011,7 @@ export class McpControlServer {
       originTurnId: context.hostOrigin?.turnId ?? args.originTurnId ?? null,
       callerOriginInput: { threadId: args.originThreadId ?? null, turnId: args.originTurnId ?? null },
       originIdentitySource: context.hostOrigin?.threadId ? "host" : args.originThreadId ? "legacy_caller_input" : "registry_owner",
-      resultDelivery: originThreadId ? "origin_thread" : "durable_inbox",
+      resultAccess: "dashboard_thread_navigation",
       threadId: args.threadId ?? null,
       orchestratorThreadId: args.orchestratorThreadId ?? null,
     };
@@ -2062,7 +2028,7 @@ export class McpControlServer {
             threadId: originThreadId,
             turnId: context.hostOrigin?.turnId ?? args.originTurnId ?? null,
             source: context.hostOrigin?.threadId ? "host" : args.originThreadId ? "legacy_caller_input" : "registry_owner",
-            deliveryPolicy: originThreadId ? "origin_thread_then_inbox" : "durable_inbox",
+            deliveryPolicy: "dashboard_navigation",
           },
           acceptedAt: new Date().toISOString(),
           schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId },
@@ -2078,9 +2044,9 @@ export class McpControlServer {
       status: "accepted",
       accepted: true,
       controlPlaneStatus: "available",
-      resultDelivery: originThreadId ? { mode: "origin_thread_then_inbox", originThreadId } : { mode: "durable_inbox" },
+      resultAccess: { mode: "dashboard_thread_navigation" },
       detailsAvailable: true,
-      message: "Request accepted. Planning and execution continue automatically in the background; the result will return to this Control Plane thread when the host releases it. Open the dashboard only when details are needed.",
+      message: "Request accepted. Planning and execution continue automatically in the background. Track it in the work navigator; select a Run to see its orchestration structure and open the owning Codex thread.",
     };
   }
 
@@ -2471,8 +2437,6 @@ export class McpControlServer {
       this.registry.recoverExpiredAgentLeases?.();
       await this.reconcileStaleTasks();
       await this.#resumeTerminalFinalizations();
-      this.#queueAttentionDeliveries();
-      await this.#processControlDeliveries();
       if (this.closing) return;
       const slots = Math.max(this.schedulerConcurrency - this.runningTaskIds.size, 0);
       if (!slots) return;
@@ -2721,7 +2685,6 @@ export class McpControlServer {
     const terminal = this.registry.listRuns({ scope: "all", limit: 100 })
       .filter((run) => ["completed", "failed", "cancelled"].includes(run.status)
         && run.metadata?.controlRequest
-        && (run.metadata?.origin?.threadId || run.metadata?.controlRequest?.originThreadId)
         && !run.metadata?.controlResultFinalizedAt);
     for (const run of terminal) await this.#finalizeRun(run.id);
   }
@@ -2736,8 +2699,6 @@ export class McpControlServer {
       await this.#maybeNotifyOrchestrator(run);
       result = this.registry.getRunResult(runId) ?? result;
       const plan = run.planId ? this.registry.getPlan(run.planId) : null;
-      const origin = run.metadata?.origin ?? {};
-      const originThreadId = origin.threadId ?? run.metadata?.controlRequest?.originThreadId ?? null;
       const payload = {
         runId: run.id,
         name: run.name,
@@ -2767,81 +2728,12 @@ export class McpControlServer {
         payload.notificationType = notificationKind;
         payload.notificationId = notification.id;
       }
-      if (originThreadId) {
-        this.registry.enqueueControlDelivery({
-          runId: run.id,
-          originThreadId,
-          originTurnId: origin.turnId ?? run.metadata?.controlRequest?.originTurnId ?? null,
-          payload,
-        });
-      }
-      run = this.registry.updateRun(run.id, { metadata: { controlResultFinalizedAt: new Date().toISOString(), resultDeliveryQueued: Boolean(originThreadId) } });
-      this.registry.recordEvent("run", run.id, "run.control_result_ready", { originThreadId, deliveryQueued: Boolean(originThreadId) });
-      await this.#processControlDeliveries();
+      run = this.registry.updateRun(run.id, { metadata: { controlResultFinalizedAt: new Date().toISOString(), resultAccess: "dashboard_thread_navigation", resultDeliveryQueued: false } });
+      this.registry.recordEvent("run", run.id, "run.control_result_ready", { resultAccess: "dashboard_thread_navigation", deliveryQueued: false });
       return { run, result, payload };
     })().finally(() => this.runFinalizations.delete(runId));
     this.runFinalizations.set(runId, flight);
     return flight;
-  }
-
-  async #processControlDeliveries() {
-    const deliveries = this.registry.listControlDeliveries({ status: ["pending", "retry_waiting"], ready: true, limit: 10 });
-    if (!deliveries.length) return { attempted: 0, delivered: 0 };
-    let delivered = 0;
-    for (const delivery of deliveries) {
-      if (this.controlDeliveryFlights.has(delivery.id)) continue;
-      this.controlDeliveryFlights.add(delivery.id);
-      try {
-        const control = await this.#getControl();
-        await control.resumeAgent(delivery.originThreadId, { cwd: this.registry.getRun(delivery.runId)?.cwd, sandbox: "read-only", approvalPolicy: "never" });
-        const requiresUserAction = delivery.payload?.notificationType === NOTIFICATION_KINDS.ATTENTION_REQUIRED;
-        const completed = await control.runTask(delivery.originThreadId, [
-          requiresUserAction ? "[BACKGROUND CONTROL PLANE ATTENTION]" : "[BACKGROUND CONTROL PLANE RESULT]",
-          requiresUserAction ? "A background Run needs the user's judgment. Present the reason and required decision clearly without continuing the work." : "A delegated background Run has finished. Present the result below directly to the user as a concise normal final response.",
-          "Do not start, retry, or modify any work. Mention the verdict, concrete changed files or tests when reported, failures, and unresolved risks. Details remain available in the dashboard.",
-          JSON.stringify(delivery.payload),
-        ].join("\n\n"), { cwd: this.registry.getRun(delivery.runId)?.cwd, approvalPolicy: "never", timeoutMs: 180_000 });
-        this.registry.markControlDeliveryDirectDelivered(delivery.id, completed.turnId ?? null);
-        if (delivery.payload?.notificationId) {
-          this.registry.markNotificationRead(delivery.payload.notificationId, delivery.originThreadId);
-          this.registry.markNotificationRead(delivery.payload.notificationId);
-        }
-        this.registry.recordEvent("run", delivery.runId, "run.control_result_delivered", { originThreadId: delivery.originThreadId, turnId: completed.turnId ?? null });
-        delivered += 1;
-      } catch (error) {
-        const retryDelayMs = Math.min(5 * 60_000, 30_000 * (2 ** Math.min(delivery.attempt, 4)));
-        this.registry.deferControlDelivery(delivery.id, error, retryDelayMs);
-        this.registry.recordEvent("run", delivery.runId, "run.control_result_deferred", { originThreadId: delivery.originThreadId, error: error.message, retryDelayMs });
-      } finally {
-        this.controlDeliveryFlights.delete(delivery.id);
-      }
-    }
-    return { attempted: deliveries.length, delivered };
-  }
-
-  #queueAttentionDeliveries() {
-    const notifications = this.registry.listNotifications({ unread: true, limit: 100 })
-      .filter((notification) => notification.kind === NOTIFICATION_KINDS.ATTENTION_REQUIRED);
-    for (const notification of notifications) {
-      const run = notification.runId ? this.registry.getRun(notification.runId) : null;
-      const originThreadId = run?.metadata?.origin?.threadId ?? run?.metadata?.controlRequest?.originThreadId ?? null;
-      if (!run || !originThreadId) continue;
-      this.registry.enqueueControlDelivery({
-        runId: run.id,
-        originThreadId,
-        originTurnId: run.metadata?.origin?.turnId ?? run.metadata?.controlRequest?.originTurnId ?? null,
-        deliveryKey: `notification:${notification.id}:${originThreadId}`,
-        payload: {
-          notificationId: notification.id,
-          notificationType: notification.kind,
-          runId: run.id,
-          name: run.name,
-          status: run.status,
-          summary: notification.body,
-          requiredAction: notification.title,
-        },
-      });
-    }
   }
 
   async #syncAgents(control, args = {}) {
@@ -3046,9 +2938,9 @@ export class McpControlServer {
       content.push({
         type: "resource_link",
         uri: value.dashboardUrl,
-        name: "codex-agent-dashboard",
-        title: "Open live Codex agent dashboard",
-        description: "Monitor or cancel the automatically started run from this dashboard.",
+        name: "codex-work-navigator",
+        title: "Open the live Codex work navigator",
+        description: "Inspect Run status and open its Orchestrator or Data Plane Codex threads.",
         mimeType: "text/html",
       });
     }

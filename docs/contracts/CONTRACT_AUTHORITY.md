@@ -47,6 +47,15 @@ user decision / repository manifest / validated evidence
 - dashboard open과 refresh는 실행을 시작하지 않는다.
 - 기존 “별도 명시적 Start 필요” 결정은 새 사용자 결정이 supersede한다.
 
+## 확정된 결과 접근 계약
+
+`result_access`의 최종 계약은 [ADR-006](../adr/ADR-006-WORK-NAVIGATOR-RESULT-ACCESS.md)이다.
+
+- 작업 탐색기가 active·terminal Run의 durable 상태 표면이다.
+- 복잡한 Run은 Orchestrator와 Task DAG를 보여준다.
+- 사용자가 Orchestrator 또는 Task를 선택하면 실제 Codex 스레드로 이동한다.
+- daemon은 terminal 결과를 요청 스레드에 자동 append하지 않는다.
+
 ## 변경 체크리스트
 
 제품 계약을 바꿀 때는 한 변경에서 다음을 함께 갱신한다.

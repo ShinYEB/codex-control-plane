@@ -48,7 +48,7 @@ Codex를 오래 사용할수록 프로젝트와 작업별 스레드가 계속 �
 5. **Global goal, local authority:** Global Run은 조정을 소유하지만 프로젝트별 실행 계약과 권한 경계를 우회하지 않는다.
 6. **Threads are bounded resources:** Task 기록을 영속화하기 위해 항상 새 영구 스레드를 만들 필요는 없다. 생성·재사용·압축·대체·보관은 명시적 정책을 따른다.
 7. **Selection is explainable:** Agent, 스레드와 맥락을 선택한 이유를 사용자와 감사 로그가 확인할 수 있어야 한다.
-8. **Execution safety remains foundational:** 계약 검증, 상태 머신, claim, retry, recovery, integration과 delivery 불변조건은 전역 오케스트레이션에서도 그대로 적용한다.
+8. **Execution safety remains foundational:** 계약 검증, 상태 머신, claim, retry, recovery, integration과 Result projection 불변조건은 전역 오케스트레이션에서도 그대로 적용한다.
 
 ## 현재 구현 판정
 

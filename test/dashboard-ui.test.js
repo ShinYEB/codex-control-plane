@@ -45,17 +45,16 @@ test("run cards select details directly and obsolete management controls are abs
   assert.match(html, /실패 범주/);
 });
 
-test("chat-first dashboard keeps history and internals collapsed by default", async () => {
+test("work navigator keeps the run list and selected run structure visible by default", async () => {
   const html = await readFile(dashboardPath, "utf8");
-  assert.match(html, /<div class="run-label">현재 작업<\/div>/);
+  assert.match(html, /<div class="run-label">선택한 작업<\/div>/);
   assert.match(html, /id="focus-now"/);
   assert.match(html, /id="focus-result-summary"/);
-  assert.match(html, /<details class="secondary-section" id="history-drawer">/);
-  assert.match(html, /<details class="secondary-section" id="inspector">/);
-  assert.doesNotMatch(html, /<details class="secondary-section" id="(?:history-drawer|inspector)" open>/);
-  assert.match(html, /id="open-inspector">상세 보기/);
+  assert.match(html, /<details class="secondary-section" id="history-drawer" open>/);
+  assert.match(html, /<details class="secondary-section" id="inspector" open>/);
+  assert.match(html, /id="open-inspector">구조 보기/);
   assert.match(html, /el\("inspector"\)\.open = true/);
-  assert.doesNotMatch(html, /<div class="run-label">선택한 실행<\/div>/);
+  assert.match(html, /<h1>작업 목록<\/h1>/);
 });
 
 test("dashboard copy omits redundant helper text", async () => {
@@ -67,12 +66,13 @@ test("dashboard copy omits redundant helper text", async () => {
   assert.doesNotMatch(html, /진행 흐름 · 스레드 · 진단/);
 });
 
-test("dashboard separates results, progress, threads, graph, and advanced diagnostics", async () => {
+test("dashboard defaults to orchestration structure and separates work, threads, and results", async () => {
   const html = await readFile(dashboardPath, "utf8");
-  assert.match(html, /data-tab="results">결과/);
-  assert.match(html, /data-tab="progress">진행/);
+  assert.match(html, /data-tab="graph" class="tab active">구조/);
+  assert.match(html, /data-tab="progress">작업/);
   assert.match(html, /data-tab="sessions">스레드/);
-  assert.match(html, /data-tab="graph">그래프/);
+  assert.match(html, /data-tab="results">결과/);
+  assert.match(html, /tab: "graph"/);
   assert.match(html, /id="diagnostics"/);
   assert.match(html, /id="open-diagnostics"[^>]*>고급 진단/);
   assert.match(html, /Context Snapshot/);
@@ -142,4 +142,6 @@ test("chat navigation opens actual Orchestrator and worker threads through the D
   assert.match(html, /실행 중인 실제 작업 스레드를 읽기 전용으로 엽니다/);
   assert.match(html, /run-card-actors/);
   assert.match(html, /executionParticipants/);
+  assert.match(html, /node\.resultSession\?\.threadId[\s\S]*?openAgentThread\(node\.resultSession\.threadId\)/);
+  assert.match(html, /row\.resultSession\?\.threadId[\s\S]*?openAgentThread\(row\.resultSession\.threadId\)/);
 });

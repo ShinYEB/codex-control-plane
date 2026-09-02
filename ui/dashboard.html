@@ -338,7 +338,7 @@
     <header class="header">
       <div>
         <div class="eyebrow">Control plane</div>
-        <h1>작업 진행 상황</h1>
+        <h1>작업 목록</h1>
         <div class="subtitle" id="scope"></div>
       </div>
       <div class="toolbar">
@@ -348,20 +348,20 @@
 
     <section class="runbar" id="runbar">
       <div class="run-main">
-        <div class="run-label">현재 작업</div>
+        <div class="run-label">선택한 작업</div>
         <div class="run-title-line"><div class="name" id="run-name">준비된 실행</div><span class="run-status-badge" id="run-status-badge">확인 중</span></div>
         <div class="focus-now"><div class="focus-now-label">지금 하는 일</div><div class="focus-now-value" id="focus-now">실행 정보를 불러오는 중입니다.</div></div>
         <div class="focus-result" id="focus-result"><strong>결과 요약</strong><p id="focus-result-summary"></p></div>
       </div>
-      <div class="run-actions"><button class="button primary" id="open-inspector">상세 보기</button><button class="button danger" id="cancel-run">취소</button><button class="button" id="archive-run">보관</button></div>
+      <div class="run-actions"><button class="button primary" id="open-inspector">구조 보기</button><button class="button danger" id="cancel-run">취소</button><button class="button" id="archive-run">보관</button></div>
     </section>
 
     <section class="notification-banner" id="notification-banner" aria-live="polite">
       <div><div class="notification-kind" id="notification-kind"></div><div class="notification-title" id="notification-title"></div><div class="notification-body" id="notification-body"></div></div>
     </section>
 
-    <details class="secondary-section" id="history-drawer">
-      <summary><span>이전 작업 <span id="history-count">0</span></span></summary>
+    <details class="secondary-section" id="history-drawer" open>
+      <summary><span>전체 작업 <span id="history-count">0</span></span></summary>
       <section class="dispatch-board" id="dispatch-board">
         <div class="dispatch-board-head"><div class="dispatch-board-title">작업함</div></div>
         <label class="scope-filter">표시 범위<select id="archive-scope"><option value="active">활성</option><option value="archived">보관됨</option><option value="all">전체</option></select></label>
@@ -369,8 +369,8 @@
       </section>
     </details>
 
-    <details class="secondary-section" id="inspector">
-      <summary><span>실행 상세</span></summary>
+    <details class="secondary-section" id="inspector" open>
+      <summary><span>선택한 작업의 실행 구조</span></summary>
       <div class="inspector-body">
         <section class="metrics">
           <article class="metric"><div class="metric-label">전체</div><div class="metric-value" id="m-agents">—</div></article>
@@ -381,10 +381,10 @@
         <section class="panel">
           <div class="panel-head">
             <div class="tabs">
-              <button class="tab active" data-tab="results">결과</button>
-              <button class="tab" data-tab="progress">진행</button>
+              <button data-tab="graph" class="tab active">구조</button>
+              <button class="tab" data-tab="progress">작업</button>
               <button class="tab" data-tab="sessions">스레드</button>
-              <button class="tab" data-tab="graph">그래프</button>
+              <button class="tab" data-tab="results">결과</button>
             </div>
             <div class="toolbar"><input class="search" id="search" placeholder="작업 또는 스레드 검색" /><button class="button" id="open-diagnostics" type="button">고급 진단</button></div>
           </div>
@@ -423,7 +423,7 @@
     const pageParams = new URLSearchParams(location.search);
     const standalone = window.parent === window && pageParams.has("token");
     const openaiBridge = typeof window !== "undefined" ? window.openai : undefined;
-    const state = { agents: [], tasks: [], plans: [], worktrees: [], roles: [], memories: [], notifications: [], events: [], runs: [], globalRuns: [], run: null, graph: null, threadBudget: null, contextSnapshotDetail: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "results", query: "", updatedAt: null };
+    const state = { agents: [], tasks: [], plans: [], worktrees: [], roles: [], memories: [], notifications: [], events: [], runs: [], globalRuns: [], run: null, graph: null, threadBudget: null, contextSnapshotDetail: null, cwd: pageParams.get("cwd"), runId: pageParams.get("runId"), scope: pageParams.get("scope") || "active", revision: 0, dashboardLeaseToken: null, tab: "graph", query: "", updatedAt: null };
     const pending = new Map();
     let nextId = 1;
     let refreshFlight = null;
@@ -656,9 +656,9 @@
       state.contextSnapshotDetail = payload.detail;
     }
 
-    function renderRunInbox() {
+    function renderWorkList() {
       const runs = state.runs.slice(0, 12);
-      el("history-count").textContent = String(Math.max(0, state.runs.length - (state.runId ? 1 : 0)));
+      el("history-count").textContent = String(state.runs.length);
       if (!runs.length) {
         el("run-lanes").innerHTML = '<div class="meta">실행 없음</div>';
         return;
@@ -682,10 +682,13 @@
         state.run = null;
         state.graph = null;
         state.revision = 0;
+        state.tab = "graph";
+        document.querySelectorAll(".tab").forEach((item) => item.classList.toggle("active", item.dataset.tab === "graph"));
         pageParams.set("runId", state.runId);
         if (standalone) history.replaceState(null, "", `${location.pathname}?${pageParams.toString()}`);
         await refresh();
-        el("history-drawer").open = false;
+        el("inspector").open = true;
+        el("inspector").scrollIntoView({ behavior: "smooth", block: "start" });
         if (standalone) connectEventStream();
       }));
     }
@@ -736,7 +739,7 @@
           <div class="graph-node-agent">담당 · ${escapeHtml(agentLabel)}</div>
           <div class="graph-node-dependencies">${dependencies.length ? `선행 작업 · ${escapeHtml(dependencies.join(" · "))}` : "선행 작업 없음 · 바로 시작 가능"}</div>
           ${active ? '<div class="graph-node-pulse"></div>' : ''}
-          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${escapeHtml(verdict || `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`)}</strong></div>
+          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${node.resultSession?.threadId ? "선택하여 스레드 열기" : escapeHtml(verdict || `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`)}</strong></div>
         </button>`;
       };
       const dependencyFlow = columns.map((column, level) => `${level ? '<div class="dependency-connector"><strong>↓</strong><span>선행 단계 완료 후 시작</span></div>' : ""}<section class="dependency-level"><div class="dependency-level-head"><strong>단계 ${level + 1}</strong><span>${column.length > 1 ? `${column.length}개 작업 병렬 실행` : "1개 작업"}</span></div><div class="dependency-grid">${column.map(renderNode).join("")}</div></section>`).join("");
@@ -770,12 +773,16 @@
         ${planeFlow}
         <div class="graph-board" aria-label="작업 의존 순서">${dependencyFlow}</div>
       </div>`;
-      [...document.querySelectorAll(".graph-node")].forEach((button) => button.addEventListener("click", () => showDetail(nodesById.get(button.dataset.nodeId))));
+      [...document.querySelectorAll(".graph-node")].forEach((button) => button.addEventListener("click", async () => {
+        const node = nodesById.get(button.dataset.nodeId);
+        if (node.resultSession?.threadId) await openAgentThread(node.resultSession.threadId);
+        else await showDetail(node);
+      }));
       bindAgentLinks();
     }
 
     function render() {
-      renderRunInbox();
+      renderWorkList();
       renderNotification();
       const graphNodes = state.graph?.nodes ?? [];
       const active = graphNodes.filter((node) => ["running", "agent_done", "validating", "integration_pending"].includes(node.status)).length;
@@ -840,7 +847,7 @@
           <div><div class="name">${escapeHtml(row.title || row.prompt || `Task ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.failure?.cause || row.id)}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
           <div><div class="meta">Agent ${escapeHtml(shortId(row.agentId))} · ${escapeHtml(`${row.attempt || 0}/${row.maxAttempts || 1}`)}</div><span class="pill">${escapeHtml(row.failure?.nextAction ? failureActionLabel(row.failure.nextAction) : row.role || row.mode || "pending")}</span></div>
-          <div class="meta">${date(row.completedAt || row.startedAt || row.createdAt)}</div>
+          <div class="row-actions">${row.resultSession?.threadId ? threadLink(row.resultSession.threadId, "스레드 열기", { readOnly: !row.resultSession.available }) : '<span class="meta">배정 전</span>'}</div>
         </div>` : state.tab === "plans" ? `
         <div class="row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.objective)}</div><div class="meta">${escapeHtml(row.id)} · v${escapeHtml(row.version)}</div></div>
@@ -870,7 +877,12 @@
           <div class="meta">${date(row.createdAt)}</div>
         </div>`).join("");
 
-      [...document.querySelectorAll(".row")].forEach((row) => row.addEventListener("click", () => showDetail(rows[Number(row.dataset.index)])));
+      [...document.querySelectorAll(".row")].forEach((element) => element.addEventListener("click", async () => {
+        const row = rows[Number(element.dataset.index)];
+        if (state.tab === "sessions" && row.id) await openAgentThread(row.id);
+        else if (state.tab === "progress" && row.resultSession?.threadId) await openAgentThread(row.resultSession.threadId);
+        else await showDetail(row);
+      }));
       bindAgentLinks();
       [...document.querySelectorAll(".register-agent")].forEach((button) => button.addEventListener("click", (event) => {
         event.stopPropagation();

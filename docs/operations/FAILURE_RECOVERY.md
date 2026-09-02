@@ -118,7 +118,7 @@ configuration failure의 권장 복구는 동일 계약 retry가 아니라 명�
 - `recovery_attention`: 기존 side effect가 실제 발생했는지 불확실
 - `integration_blocked`: artifact를 어느 기준선에 어떻게 적용할지 필요
 - `blocked_by_policy`: 별도 권한과 실행 범위가 필요
-- 반복 delivery failure: origin thread 상태 또는 host 문제 확인 필요
+- 작업 탐색기에서 스레드 이동 실패: Desktop navigation 지원과 thread identity 확인 필요
 - runtime generation mismatch: 새 대화 또는 승인된 배포 handover 필요
 
 이때 시스템은 `attention_required` 또는 `policy_blocked` notification을 만들고 작업을 임의로 계속하지 않는다.

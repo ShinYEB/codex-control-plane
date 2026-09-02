@@ -177,7 +177,7 @@ test("task DTO exposes dependencies, runnable state, and current work", () => {
   registry.close();
 });
 
-test("run inbox DTO names Orchestrator and Data Plane threads", () => {
+test("work navigator DTO names Orchestrator and Data Plane threads", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.upsertAgent({ id: "orch", name: "[🤖 orchestrator] 결제 개선", cwd: "/repo", status: "idle" }, { role: "orchestrator" });
   registry.upsertAgent({ id: "worker", name: "[🤖 qa] 회귀 테스트", cwd: "/repo", status: "idle" }, { role: "qa" });
@@ -187,6 +187,7 @@ test("run inbox DTO names Orchestrator and Data Plane threads", () => {
   }, [{ id: "participant_task", prompt: "test", status: "completed", agentId: "worker", turnId: "turn_done" }]);
   const snapshot = buildDashboardSnapshot(registry, { cwd: "/repo", runId: "participant_run", getGraph: buildRunGraph.bind(null, registry) });
   const participants = snapshot.runs[0].executionParticipants;
+  assert.deepEqual(snapshot.runs[0].resultAccess, { mode: "dashboard_thread_navigation", automaticOriginAppend: false });
   assert.equal(participants.orchestrator.name, "[🤖 orchestrator] 결제 개선");
   assert.deepEqual(participants.dataAgents.map(({ id, name, role }) => ({ id, name, role })), [
     { id: "worker", name: "[🤖 qa] 회귀 테스트", role: "qa" },
@@ -196,7 +197,7 @@ test("run inbox DTO names Orchestrator and Data Plane threads", () => {
   registry.close();
 });
 
-test("run inbox resolves a worktree agent outside the project cwd scope", () => {
+test("work navigator resolves a worktree agent outside the project cwd scope", () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.upsertAgent({ id: "isolated", name: "[🤖 qa] 격리 검증", cwd: "/tmp/control-plane-worktrees/task", status: "idle" }, { role: "qa" });
   registry.createTaskGraph({ id: "isolated_run", cwd: "/repo", status: "completed", metadata: { dispatchPath: "direct" } }, [

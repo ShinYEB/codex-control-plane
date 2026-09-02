@@ -13,7 +13,7 @@
 | 7 | repair 후 새 계약 실행 | `repair_task_contract preserves failure history and requeues with a new explicit contract` |
 | 8 | daemon 재시작 후 active Task 복구 | restart reconciliation/requeue tests와 recorded integration journal Task finalization test |
 | 9 | integration 단계별 강제 종료 복구 | applying/applied/recording forced-stop tests; patch 중복 적용 금지 검증 |
-| 10 | terminal 결과의 origin 전달과 drain fallback | direct origin delivery, host origin precedence, drain acknowledgement tests |
+| 10 | terminal 결과의 durable projection과 작업 스레드 이동 | dashboard navigation, host provenance, no-origin-append tests |
 
 추가 storage/runtime 게이트:
 

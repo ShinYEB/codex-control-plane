@@ -34,8 +34,8 @@ test("MCP initialize advertises tools and safety instructions", async () => {
   const listed = await server.handleRequest({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "codex-control-plane");
   assert.match(initialized.instructions, /single Codex thread writer/);
-  assert.match(initialized.instructions, /compatible reusable Data Plane thread/);
-  assert.match(initialized.instructions, /durable Orchestrator thread/);
+  assert.match(initialized.instructions, /work navigator is the durable status surface/);
+  assert.match(initialized.instructions, /never appends terminal results/);
   assert.deepEqual(listed.tools.map((tool) => tool.name), [
     "list_agents",
     "archive_agent",
@@ -56,7 +56,6 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "dispatch_agent_task",
     "prepare_agent_run",
     "dispatch_control_request",
-    "drain_control_results",
     "get_run_graph",
     "list_runs",
     "prepare_global_run",
@@ -714,7 +713,7 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
     params: { uri: resources.resources[0].uri },
   });
   assert.equal(result.contents[0].mimeType, "text/html;profile=mcp-app");
-  assert.match(result.contents[0].text, /작업 진행 상황/);
+  assert.match(result.contents[0].text, /작업 목록/);
   assert.match(result.contents[0].text, /data-tab="graph"/);
   assert.match(result.contents[0].text, /Codex 스레드는 플러그인을 실행할 때 자동으로 등록/);
   assert.match(result.contents[0].text, /callTool\("open_desktop_thread"/);
@@ -781,8 +780,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.cwd, "/repo");
   assert.equal(result.structuredContent.dashboardPresentation, "embedded");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/agent-dashboard-v4.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/agent-dashboard-v4.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v5.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v5.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -1041,7 +1040,7 @@ test("dispatch_control_request has no advanced manual mode and starts automatica
   await server.close();
 });
 
-test("host origin identity overrides and audits untrusted caller origin input", async () => {
+test("host origin identity is provenance only and results stay in the work navigator", async () => {
   const planner = { plan: async () => ({ id: "origin_plan", version: 1, plan: { summary: "origin", tasks: [{ key: "work", prompt: "work", role: "qa", dependsOn: [] }] } }) };
   const dashboardServer = { start: async () => {}, url: () => "http://dashboard", close: async () => {} };
   const server = fakeServer({ connect: async () => {} }, { planner, dashboardServer, schedulerConcurrency: 0 });
@@ -1054,12 +1053,14 @@ test("host origin identity overrides and audits untrusted caller origin input", 
     },
   });
   const run = server.registry.getRun(accepted.structuredContent.runId);
-  assert.deepEqual(run.metadata.origin, { threadId: "host_thread", turnId: "host_turn", deliveryPolicy: "origin_thread_then_inbox", source: "host" });
+  assert.deepEqual(run.metadata.origin, { threadId: "host_thread", turnId: "host_turn", deliveryPolicy: "dashboard_navigation", source: "host" });
   assert.deepEqual(run.metadata.controlRequest.callerOriginInput, { threadId: "spoofed", turnId: "spoofed_turn" });
+  assert.equal(run.metadata.controlRequest.resultAccess, "dashboard_thread_navigation");
+  assert.deepEqual(accepted.structuredContent.resultAccess, { mode: "dashboard_thread_navigation" });
   await server.close();
 });
 
-test("terminal Control Plane runs deliver a durable final result back to their origin thread", async () => {
+test("terminal Control Plane runs finalize for dashboard navigation without appending to the origin thread", async () => {
   const calls = [];
   const control = {
     connect: async () => {},
@@ -1078,24 +1079,19 @@ test("terminal Control Plane runs deliver a durable final result back to their o
     completedAt: new Date().toISOString(),
     metadata: {
       controlRequest: { objective: "work", cwd: "/repo", originThreadId: "control_origin" },
-      origin: { threadId: "control_origin", turnId: "turn_request", deliveryPolicy: "origin_thread_then_inbox" },
+      origin: { threadId: "control_origin", turnId: "turn_request", deliveryPolicy: "dashboard_navigation" },
     },
   });
   server.startBackground();
-  const delivery = await waitUntil(() => server.registry.listControlDeliveries({ runId: "run_origin_delivery" })[0]?.status === "direct_delivered"
-    ? server.registry.listControlDeliveries({ runId: "run_origin_delivery" })[0] : null);
-  assert.equal(delivery.originThreadId, "control_origin");
-  assert.equal(delivery.deliveredTurnId, "turn_delivered");
-  assert.equal(delivery.deliveryMethod, "direct_origin_append");
-  assert.equal(delivery.acknowledgedAt, null);
-  assert.equal(delivery.payload.notificationType, "completed");
+  const finalized = await waitUntil(() => server.registry.getRun("run_origin_delivery")?.metadata?.controlResultFinalizedAt);
+  assert.equal(Boolean(finalized), true);
+  assert.deepEqual(server.registry.listControlDeliveries({ runId: "run_origin_delivery" }), []);
   assert.equal(server.registry.listNotifications({ runId: "run_origin_delivery" })[0].kind, "completed");
-  assert.deepEqual(calls.map((entry) => entry.slice(0, 2)), [["resume", "control_origin"], ["result", "control_origin"]]);
-  assert.match(calls[1][2], /BACKGROUND CONTROL PLANE RESULT/);
+  assert.deepEqual(calls, []);
   await server.close();
 });
 
-test("attention notifications return to the origin thread before the run is terminal", async () => {
+test("attention notifications remain visible in the dashboard without writing to the origin thread", async () => {
   const prompts = [];
   const control = {
     connect: async () => {},
@@ -1115,24 +1111,10 @@ test("attention notifications return to the origin thread before the run is term
     title: "판단 필요", body: "작업의 부작용 여부를 선택하세요.", dedupeKey: "run_attention:decision",
   });
   server.startBackground();
-  const delivered = await waitUntil(() => server.registry.listControlDeliveries({ runId: "run_attention" })[0]?.status === "direct_delivered");
-  assert.equal(delivered, true);
-  assert.match(prompts[0], /BACKGROUND CONTROL PLANE ATTENTION/);
-  assert.equal(server.registry.listNotifications({ runId: "run_attention" })[0].readAt !== null, true);
-  await server.close();
-});
-
-test("the next Control Plane turn can drain a result when Desktop kept the origin thread busy", async () => {
-  const server = fakeServer({ connect: async () => {} }, { schedulerConcurrency: 0 });
-  server.registry.createRun({ id: "run_pending_result", cwd: "/repo", status: "completed" });
-  server.registry.setSetting("control_plane_owner:/repo", "control_owner");
-  server.registry.enqueueControlDelivery({ runId: "run_pending_result", originThreadId: "control_owner", payload: { summary: "finished safely" } });
-  const drained = await server.handleRequest({ method: "tools/call", params: { name: "drain_control_results", arguments: { cwd: "/repo", originTurnId: "next_turn" } } });
-  assert.equal(drained.structuredContent.deliveries[0].payload.summary, "finished safely");
-  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].status, "delivered");
-  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].deliveredTurnId, "next_turn");
-  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].deliveryMethod, "drain_acknowledgement");
-  assert.equal(server.registry.listControlDeliveries({ runId: "run_pending_result" })[0].directDeliveredAt, null);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(server.registry.listControlDeliveries({ runId: "run_attention" }), []);
+  assert.deepEqual(prompts, []);
+  assert.equal(server.registry.listNotifications({ runId: "run_attention" })[0].readAt, null);
   await server.close();
 });
 

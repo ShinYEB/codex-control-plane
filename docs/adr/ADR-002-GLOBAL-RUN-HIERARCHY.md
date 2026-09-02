@@ -76,12 +76,12 @@ persist GlobalRun(accepted)
 
 전체 project graph와 전달 계약이 유효해지기 전에 worker, Agent turn 또는 worktree를 만들지 않는다.
 
-## 결과 전달
+## 결과 접근
 
 - terminal 사용자 결과의 정본은 GlobalRun synthesis 하나다.
 - ProjectRun 결과와 artifact는 상세 evidence로 유지한다.
-- origin delivery는 기존 durable delivery contract를 재사용한다.
-- 일부 프로젝트 결과만 도착한 상태를 전체 성공으로 전달하지 않는다.
+- 작업 탐색기에서 Global Run → Project Run → Orchestrator/Task 스레드 계층으로 접근한다.
+- 일부 프로젝트 결과만 도착한 상태를 전체 성공으로 표시하지 않는다.
 
 ## 기각한 대안
 

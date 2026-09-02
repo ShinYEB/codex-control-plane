@@ -46,7 +46,7 @@
 | 라우팅과 agent lease | `src/router.js`, `src/mcp-server.js` | `test/registry.test.js`, `test/mcp-server.test.js` |
 | 검증 | `src/result-validator.js` | `test/result-validator.test.js` |
 | worktree와 통합 | `src/worktree-manager.js` | `test/worktree-manager.test.js` |
-| 결과 전달과 알림 | `src/registry.js`, `src/mcp-server.js`, `src/notification-policy.js` | `test/registry.test.js`, `test/mcp-server.test.js`, `test/notification-policy.test.js` |
+| 결과 접근과 알림 | `src/dashboard-model.js`, `src/mcp-server.js`, `src/notification-policy.js` | `test/dashboard-model.test.js`, `test/mcp-server.test.js`, `test/notification-policy.test.js` |
 | 데몬과 generation | `src/daemon.js`, `src/daemon-client.js`, `src/build-info.js` | `test/daemon.test.js`, `test/reinstall-preflight.test.js` |
 | Project identity와 legacy claim migration | `src/project-identity.js`, `src/registry.js` schema v2 | `test/project-identity.test.js`, `test/registry.test.js` migration/project tests |
 | Claim·ThreadKnowledge·routing evidence | `src/context-claims.js`, `src/context-manager.js`, `src/registry.js`, `src/router.js` | `test/context-claims.test.js`, `test/context-manager.test.js`, routing tests |

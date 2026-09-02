@@ -122,6 +122,10 @@ export function buildRunGraph(registry, runId, options = {}) {
         role: orchestratorAgent?.role ?? "orchestrator",
         status: orchestratorAgent?.status ?? "unknown",
       } : null,
+      resultAccess: {
+        mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+        automaticOriginAppend: false,
+      },
       createdAt: run.createdAt,
       startedAt: run.startedAt,
       completedAt: run.completedAt,

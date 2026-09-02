@@ -28,7 +28,7 @@ Codex를 오래 사용할수록 스레드는 늘어나지만, 중요한 결정�
 1. 플러그인을 처음 설치하거나 runtime을 갱신했다면 Codex Desktop에서 새 대화를 엽니다.
 2. 대상 프로젝트에서 `/mcp`를 열어 `codex_control_plane` 연결을 확인합니다.
 3. 원하는 목표, 대상 범위, 완료 조건을 자연어로 전달합니다.
-4. 접수된 Run은 대시보드와 관계없이 백그라운드에서 실행되며, 최종 결과는 요청한 대화로 돌아옵니다.
+4. 접수된 Run은 백그라운드에서 실행됩니다. 작업 탐색기에서 상태를 확인하고 Run의 Orchestrator 또는 Task를 선택해 실제 작업 스레드로 이동합니다.
 
 다음 예시를 그대로 시작점으로 사용할 수 있습니다.
 
@@ -60,15 +60,16 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 현재 프로젝트의 에이전트 대시보드를 보여줘.
 ```
 
-기본값은 현재 Codex 대화 안의 embedded dashboard입니다. 별도 페이지는 `웹 대시보드로 열어줘`라고 요청합니다. 대시보드는 다음 정보를 제공합니다.
+기본값은 현재 Codex 대화 안의 embedded 작업 탐색기입니다. 별도 페이지는 `웹 대시보드로 열어줘`라고 요청합니다. 작업 탐색기는 다음 정보를 제공합니다.
 
 - Global Run과 Project Run 진행률
 - Task dependency와 현재 runnable 상태
 - 배정된 Agent 스레드와 routing 근거
 - Validator, retry, integration과 failure의 next action
 - Context Snapshot과 실행 계약의 고급 진단
+- 완료된 작업에서 실제 결과를 보유한 Codex 스레드로 이동
 
-대시보드는 Registry를 관찰하는 선택형 화면입니다. 열기·새로고침·닫기는 작업을 시작하거나 완료하지 않습니다.
+작업 탐색기는 상태·결과 확인과 실제 작업 스레드 이동의 기본 화면입니다. 열기·새로고침·닫기는 작업을 시작하거나 완료하지 않습니다.
 
 ## 아키텍처
 
@@ -82,19 +83,19 @@ backend와 frontend 두 프로젝트의 사용자 프로필 계약을 변경해�
 | **Orchestration Plane** | DAG, 라우팅, 계약, claim/lease, retry, recovery, integration | Planner의 설명을 권한으로 해석하지 않음 |
 | **Data Plane** | 할당된 Codex 스레드에서 단일 Task 수행과 evidence 생성 | 형제 Task나 전체 Run 상태를 임의로 변경하지 않음 |
 
-MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니다. 하나의 데몬이 Registry, scheduler, App Server writer와 delivery worker를 소유해 여러 Codex 대화가 같은 상태를 안전하게 공유합니다.
+MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니다. 하나의 데몬이 Registry, scheduler와 App Server writer를 소유해 여러 Codex 대화가 같은 상태를 안전하게 공유합니다.
 
 ## 요청이 실행되는 과정
 
-![사용자 요청이 맥락 고정, 계획과 계약 검증, 분산 실행, 결과 전달로 이어지는 다섯 단계](./docs/assets/request-flow.svg)
+![사용자 요청이 맥락 고정, 계획과 계약 검증, 분산 실행, 작업 탐색으로 이어지는 흐름](./docs/assets/request-flow.svg)
 
-1. 사용자 목표와 origin thread를 durable Run으로 기록합니다.
+1. 사용자 목표와 요청 provenance를 durable Run으로 기록합니다.
 2. 관련 Context Claim을 해석하고 immutable Context Snapshot을 확정합니다. 해결되지 않은 동급 충돌은 여기서 차단합니다.
 3. Planner가 Global Run → Project Run → Task DAG를 만들고 전체 그래프를 원자적으로 저장합니다.
 4. 각 Task의 실행 계약을 compile·validate하고 policy와 workspace preflight를 통과시킵니다.
 5. 검증된 Task만 claim하며 Router가 기존 스레드 재사용, fork, 새 스레드, ephemeral 실행 또는 대기를 결정합니다.
 6. Worker 결과를 Validator가 검사하고, 필요한 artifact를 managed worktree에서 프로젝트로 통합합니다.
-7. 하나의 Result projection을 만들어 origin thread로 직접 전달하거나 durable inbox에서 한 번만 회수합니다.
+7. 하나의 Result projection을 만들고 작업 탐색기에서 Run 구조와 담당 스레드를 통해 접근합니다.
 
 ## 핵심 도메인 모델
 
@@ -118,7 +119,8 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 - **No identical configuration retry:** 같은 configuration fingerprint로 실패한 계약은 자동 재시도하지 않습니다.
 - **Artifact preservation:** 통합되지 않았거나 충돌한 worktree와 artifact는 retain 또는 quarantine합니다.
 - **Global goal, local authority:** Global Run도 프로젝트별 sandbox와 authorization 경계를 우회하지 않습니다.
-- **One result authority:** 대시보드, 직접 전달, inbox fallback은 같은 durable Result projection을 사용합니다.
+- **One result authority:** 작업 목록, 구조, 결과 요약과 담당 스레드가 같은 durable Result projection을 사용합니다.
+- **No origin append:** terminal 결과는 요청 스레드에 자동으로 끼워 넣지 않습니다.
 - **Dashboard independence:** 대시보드를 열거나 닫는 동작은 실행의 시작·완료 조건이 아닙니다.
 
 세부 규칙은 [아키텍처 정본](./docs/ARCHITECTURE.md)과 [실행 계약](./docs/contracts/EXECUTION_CONTRACT.md)을 따릅니다.
@@ -142,19 +144,19 @@ MCP 프로세스는 host-facing transport만 담당하는 얇은 프록시입니
 - managed worktree, 직렬 integration, crash-safe journal과 quarantine
 - daemon 재시작 후 active Task, delivery와 handoff 복구
 
-### 다중 프로젝트와 결과 전달
+### 다중 프로젝트와 결과 탐색
 
 - canonical Project identity와 Global Run / Project Run 계층
 - required·optional Project Run 실패 집계
 - schema-versioned cross-project artifact handoff와 중복 수신 방지
-- origin thread 직접 전달과 durable drain fallback
+- Global/Project Run 목록과 Orchestrator/Data Plane 스레드 drill-down
 - 하나의 전역 결과와 프로젝트별 evidence 보존
 
 ### 관찰 표면
 
 - SQLite 기반 Agent, Run, Task, lease, memory, event Registry
-- 선택형 MCP Apps 대시보드와 로컬 HTTP/SSE fallback
-- Run DAG, 현재 작업, 결과, 스레드, 고급 계약 진단
+- MCP Apps 작업 탐색기와 로컬 HTTP/SSE fallback
+- Run 목록, DAG, 현재 작업, 결과, 담당 스레드 이동, 고급 계약 진단
 - 대시보드 없이도 계속되는 background execution
 
 ## 로컬 소스에서 실행
@@ -261,7 +263,7 @@ scripts/  runtime parity, deployment, reinstall preflight
 - 로컬 Codex App Server와 프로젝트를 조정하는 도구이며, 별도 클라우드 오케스트레이션 서비스가 아닙니다.
 - 외부 서비스 변경과 파괴적 작업은 Global Run이나 repair UI가 자동 승인하지 않습니다.
 - Desktop 사이드바의 폴더·그룹 구조는 host 소유입니다. 이 프로젝트는 스레드 이름, pin 시도, native thread ID handoff를 제공합니다.
-- 대시보드는 관찰과 진단을 위한 선택형 표면이며 실행 권한이나 수동 Start gate가 아닙니다.
+- 작업 탐색기는 상태·결과·스레드 이동 표면이며 실행 권한이나 수동 Start gate가 아닙니다.
 
 ## 참고
 

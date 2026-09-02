@@ -193,6 +193,6 @@
 9. [x] optional Project Run 실패의 warning 포함 완료
 10. [x] daemon 재시작 후 context/global graph/handoff 복구
 11. [x] 전역 취소와 부분 integration 결과 보존
-12. [x] terminal GlobalResult의 origin 전달과 drain fallback
+12. [x] terminal GlobalResult의 작업 탐색기 표시와 Project/Task 스레드 이동
 
 최종 게이트는 기존 [STABILIZATION_GATE.md](./STABILIZATION_GATE.md)의 10개 시나리오를 모두 포함한다. 새 기능 통과가 기존 계약 안정화 회귀를 허용하지 않는다.

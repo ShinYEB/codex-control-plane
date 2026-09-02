@@ -4,7 +4,7 @@
 
 | 표준 용어 | 의미 | 사용 예 | 사용하지 않는 표현 |
 |---|---|---|---|
-| Control Plane 스레드 | 여러 프로젝트의 요청을 접수하고 결과를 받는 사용자의 Codex 대화 | “Control Plane 스레드로 결과 반환” | Control Plane 세션 |
+| Control Plane 스레드 | 여러 프로젝트의 요청을 접수하고 작업 탐색기를 여는 사용자의 Codex 대화 | “Control Plane에서 작업 목록 확인” | Control Plane 세션 |
 | 에이전트 스레드 | 역할과 맥락이 부여되어 재사용·포크할 수 있는 영구 Codex 대화 | “기존 QA 스레드 재사용” | 에이전트 세션 |
 | Orchestrator 스레드 | 복합 Run 하나의 조정과 종합을 기록하는 에이전트 스레드 | “Orchestrator 스레드 열기” | 조정 세션 |
 | Data Plane 스레드 | Task를 실제로 수행하는 에이전트 스레드 | “작업 스레드 3개” | 작업 세션 |
@@ -13,7 +13,7 @@
 | Task(작업) | Run 내부 DAG의 실행 노드 한 개 | “선행 작업 완료” | Run과 혼용 |
 | Turn(턴) | 한 스레드 안의 요청·응답 한 회 | “완료 턴” | 스레드와 혼용 |
 | 에이전트 | 역할, capability, 권한 계약과 현재 배정 상태를 포함한 논리적 작업 주체 | “QA 에이전트” | 스레드 ID 자체와 동일시 |
-| 데몬 스케줄러 | Run·Task·lease·재시도·결과 전달을 소유하는 로컬 프로세스 | “데몬이 작업을 배정” | Codex 에이전트 또는 스레드 |
+| 데몬 스케줄러 | Run·Task·lease·재시도·결과 projection을 소유하는 로컬 프로세스 | “데몬이 작업을 배정” | Codex 에이전트 또는 스레드 |
 | 실행 계약 | Task의 sandbox, network, workspace, side effect, 통합 방식을 결정하는 구조화된 권한 계약 | “실행 계약 preflight” | 역할 이름이나 prompt |
 | Claim | 특정 데몬 worker가 Task 상태를 바꿀 수 있게 하는 `worker_id + claim_token` 소유권 | “claim을 회수함” | Agent lease와 혼용 |
 | Agent lease | 한 Agent 스레드를 한 Task에 독점 배정하는 TTL 소유권 | “Agent lease 해제” | worktree lease와 혼용 |

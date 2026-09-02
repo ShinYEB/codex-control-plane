@@ -8,6 +8,14 @@
       "revision": 2,
       "body": "After an atomic task graph is prepared, the daemon starts the Run automatically. Opening or refreshing the dashboard never starts work.",
       "supersedes": ["claim_product_run_start_policy_v1"]
+    },
+    {
+      "id": "result_access_policy_v1",
+      "kind": "decision",
+      "subject": "result_access",
+      "revision": 1,
+      "body": "The work navigator is the durable status and result surface. It lists active and terminal Runs, exposes orchestration structure for complex Runs, and opens the selected Orchestrator or Data Plane Codex thread. The daemon never appends a terminal result to the requesting thread.",
+      "supersedes": []
     }
   ]
 }

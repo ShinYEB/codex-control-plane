@@ -4,7 +4,7 @@
 
 ## 범위
 
-이 시스템은 Codex App Server 스레드와 여러 프로젝트의 지식·실행 상태를 관리하는 로컬 Control Plane이다. 현재 구현은 영구 스레드를 재사용 가능한 작업 주체로 다루며, 하나의 데몬이 영속 Registry, 스케줄링, App Server writer, 결과 전달을 소유하고 각 Codex 대화에서 시작되는 MCP 프로세스는 얇은 프록시로 동작한다. 목표 설계에서는 구조화된 Registry 지식을 맥락의 정본으로 삼고 스레드는 실행 주체와 provenance로 사용한다.
+이 시스템은 Codex App Server 스레드와 여러 프로젝트의 지식·실행 상태를 관리하는 로컬 Control Plane이다. 현재 구현은 영구 스레드를 재사용 가능한 작업 주체로 다루며, 하나의 데몬이 영속 Registry, 스케줄링과 App Server writer를 소유하고 각 Codex 대화에서 시작되는 MCP 프로세스는 얇은 프록시로 동작한다. 작업 탐색기는 Run 상태와 실행 구조를 보여주고 실제 작업 스레드로 이동시키는 사용자 표면이다.
 
 현재 설계가 책임지는 범위는 다음과 같다.
 
@@ -50,7 +50,7 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 | Component | 소유하는 것 | 소유하면 안 되는 것 |
 |---|---|---|
 | MCP proxy | host-facing MCP transport, caller identity 전달 | Registry, scheduler, daemon 교체 |
-| Control Plane daemon | SQLite Registry, project queue, claim, lease, App Server writer, delivery worker | 사용자-facing 계획 판단 |
+| Control Plane daemon | SQLite Registry, project queue, claim, lease, App Server writer, Result projection | 사용자-facing 계획 판단 |
 | Planner | 목표 분해와 immutable Task graph 제안 | 권한 부여, Task 실행 |
 | RunController | Run projection, start/cancel orchestration | 두 번째 scheduler 또는 worker writer |
 | Router | 명시적 요구에 맞는 Agent 선택 | sandbox 또는 side-effect 권한 변경 |
@@ -72,7 +72,7 @@ Control Plane은 다음 사용자 요청을 받을 수 있는 상태를 유지�
 8. **Durable terminal delivery:** terminal Run을 먼저 projection한다. writer conflict는 delivery를 defer하며 대체 summary 스레드를 만들지 않는다.
 9. **Dashboard independence:** dashboard를 열고 새로 고치거나 닫는 동작은 작업을 시작하거나 완료하지 않는다.
 10. **No automatic external authority:** `external`, `destructive` side effect는 별도 사용자 요청이 필요하며 Task repair나 dashboard action으로 승인할 수 없다.
-11. **One result authority:** dashboard, direct delivery와 drain fallback은 같은 durable Result projection을 사용한다. Orchestrator prose는 terminal 상태나 결과 정본을 덮어쓰지 않는다.
+11. **One result authority:** 작업 목록, 결과 요약과 thread drill-down은 같은 durable Result projection을 사용한다. Orchestrator prose는 terminal 상태나 결과 정본을 덮어쓰지 않는다.
 12. **No unresolved contract execution:** 권한·계약·workspace에 active 충돌이 있으면 Planner, Task, Agent, lease, worktree, attempt 생성 전에 차단한다.
 
 ## 기본 요청 흐름
@@ -90,7 +90,7 @@ Control Plane request
   -> optional artifact integration
   -> terminalize Tasks and Run
   -> project/synthesize result
-  -> origin thread delivery or durable inbox
+  -> work navigator -> owning Codex thread
 ```
 
 정상 경로에는 placeholder `READY` turn과 dashboard Start gate가 없다.
@@ -127,12 +127,12 @@ Runtime deployment는 `src`, `ui`, `scripts`, `package.json`을 staging하고 di
 
 ## Dashboard 계약
 
-Control Plane만 dashboard lease와 polling loop를 소유한다. Worker와 Orchestrator 스레드는 poll하지 않는다. dispatch는 dashboard를 자동으로 열지 않는다. 기본 화면은 선택한 Run 하나의 현재 작업 또는 terminal 결과를 보여준다. history는 접고 inspector는 결과, 진행, 스레드, 그래프 네 탭으로 나눈다. 실행 계약, 내부 event, raw state는 별도 고급 진단에 둔다. Task approval tab이나 manual Start 경로는 없다.
+Control Plane만 dashboard lease와 polling loop를 소유한다. Worker와 Orchestrator 스레드는 poll하지 않는다. dispatch는 작업 탐색기를 자동으로 열지 않는다. 기본 화면은 Run 목록과 선택한 Run의 실행 구조를 함께 펼친다. 복잡한 Run은 Orchestrator와 Task DAG를, 단순 Run은 담당 Task를 보여주며 각 항목 선택은 실제 Codex 스레드 이동으로 이어진다. 결과, 작업, 스레드는 보조 탭이고 실행 계약, 내부 event, raw state는 별도 고급 진단에 둔다. Task approval tab이나 manual Start 경로는 없다.
 
-사용자-visible notification은 `completed`, `failed`, `attention_required`, `policy_blocked` 네 종류뿐이다. running, queued, retrying, validation 같은 정상 진행은 notification을 만들지 않는다. attention도 최종 결과와 같은 durable origin-thread delivery queue를 사용하며 policy stop은 제품·infrastructure failure와 구분한다.
+사용자-visible notification은 `completed`, `failed`, `attention_required`, `policy_blocked` 네 종류뿐이다. running, queued, retrying, validation 같은 정상 진행은 notification을 만들지 않는다. notification은 작업 탐색기에 표시하며 policy stop은 제품·infrastructure failure와 구분한다.
 
-## 결과 전달 계약
+## 결과 접근 계약
 
-모든 control request는 origin thread와 host가 제공하면 origin turn을 기록한다. terminal projection, synthesis, delivery payload, retry state, receipt는 durable하다. daemon은 origin thread를 안전하게 획득한 뒤에만 결과를 append한다. active-writer conflict는 bounded backoff로 defer하고 대체 summary 스레드를 만들지 않는다. `drain_control_results`는 다음 Control Plane turn의 deterministic fallback이며 결과를 한 번 acknowledge한다. 최종 결과를 받거나 이해하는 데 dashboard가 필요하지 않다.
+모든 control request는 요청 thread와 host가 제공하면 origin turn을 provenance로 기록한다. terminal projection, synthesis와 notification은 durable하다. daemon은 요청 스레드에 결과를 append하지 않는다. 사용자는 작업 탐색기에서 active·terminal Run을 확인하고, 복잡한 Run의 Orchestrator와 Task DAG 또는 단순 Run의 Task를 선택해 실제 Codex 스레드로 이동한다. 기존 delivery row는 migration 호환 데이터일 뿐 새 Run에는 생성하지 않는다.
 
 Responsive contract는 360, 600, 800, 1000, 1200px에서 검증한다. 좁은 화면은 1열 흐름을 사용하고 한국어 단어를 불필요하게 분리하지 않으며 primary container가 document-level 가로 overflow를 만들면 안 된다.

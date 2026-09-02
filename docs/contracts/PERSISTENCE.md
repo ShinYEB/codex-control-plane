@@ -18,7 +18,8 @@ Control Plane daemon은 SQLite Registry의 단일 논리 writer다. MCP proxy, d
 | 작업 주체 | `agents`, `role_templates`, `agent_leases` | thread profile, 전문화, 단일 Task lease |
 | 실행 | `runs`, `tasks`, `task_dependencies`, `plans`, `plan_revisions` | 요청, DAG, 계획과 revision |
 | 조정 | `project_queue_items`, `worktree_leases`, `dashboard_leases`, `approvals` | project serialization, workspace/화면 소유권, 호환 승인 기록 |
-| 결과 | `run_results`, `notifications`, `notification_receipts`, `control_result_deliveries` | terminal projection, 사용자 알림, durable delivery |
+| 결과 | `run_results`, `notifications`, `notification_receipts` | terminal projection과 작업 탐색기 알림 |
+| legacy 결과 전달 | `control_result_deliveries` | 이전 버전 migration·감사 호환; 새 Run은 row를 만들지 않음 |
 | workspace | `managed_worktrees` | branch, path, baseline, artifact, integration 상태 |
 | context | `project_memories`, `settings` | 프로젝트 지식과 Control Plane owner 등 설정 |
 | project identity | `projects`, `project_path_mappings`, `migration_attention` | canonical project 경계, 관측 경로와 모호한 migration 격리 |
@@ -52,7 +53,7 @@ Global Run graph도 하나의 outer `BEGIN IMMEDIATE` transaction에서 revision
 - `plans.request_key`는 unique다.
 - 동일 request key의 control request는 기존 Run을 반환한다.
 - Task 계약의 `idempotencyKey`는 execution fingerprint와 함께 retry 판단에 사용한다.
-- delivery는 기본 `${runId}:${originThreadId}` key의 unique row다.
+- legacy delivery row는 `${runId}:${originThreadId}` unique key를 유지한다.
 - notification은 `dedupe_key` unique constraint를 사용한다.
 - notification receipt는 `(notification_id, audience_id)` 복합 key다.
 
@@ -112,7 +113,7 @@ Context Claim은 candidate로 생성한 뒤 provenance source를 저장해야 ac
 재시작과 조회 시 다음 불일치를 복구한다.
 
 - 모든 Task가 terminal인데 parent Run이 running인 경우 `refreshRun()`으로 terminalize
-- `delivering` 중 daemon이 종료된 delivery를 `retry_waiting`으로 복구
+- legacy `delivering` row는 감사용으로 보존하며 새 daemon은 origin append를 재개하지 않음
 - stale active Task를 Codex `thread/read` 결과와 대조
 - 만료 queue/lease owner를 조건부로 회수
 - committed Global Run graph의 root release와 child 상태 projection을 복구하고, graph commit 전 중단된 preparation은 구조화된 terminal failure로 수렴

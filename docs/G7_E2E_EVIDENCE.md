@@ -20,7 +20,7 @@
 | 9 | optional Project Run 실패 | 같은 집계 테스트 | Global Run `completed`, warning 보존 |
 | 10 | daemon 재시작 복구 | building Context Snapshot, committed Global graph, handoff receipt reopen/idempotency tests | 안전한 graph만 release; handoff 중복 적용 없음 |
 | 11 | 전역 취소와 부분 integration 보존 | `global cancellation preserves already completed integration evidence`; cancellation fencing test | Global Run `cancelled`; 완료 artifact/evidence 유지 |
-| 12 | origin 전달과 drain fallback | direct origin delivery, busy-origin fallback, drain acknowledgement MCP tests | direct 또는 durable inbox; 별도 summary thread 없음 |
+| 12 | 결과 탐색과 스레드 이동 | dashboard navigation, host provenance, no-origin-append MCP tests | Global/Project/Task 구조에서 실제 스레드 이동 |
 
 ## 공개 계약 version
 
