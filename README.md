@@ -191,6 +191,7 @@ git diff --check
 ```
 
 See [G7 E2E Evidence](./docs/G7_E2E_EVIDENCE.md) for terminal-state and next-action evidence.
+The latest clean-clone release check is recorded in [Release Candidate E2E Evidence](./docs/RELEASE_E2E_EVIDENCE.md).
 
 ## Repository layout
 

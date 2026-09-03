@@ -20,7 +20,7 @@ This roadmap communicates direction, not a promise of dates. Contract safety, du
 - [x] Contribution, governance, security, and support policies
 - [x] Pull-request and required-check protection for `main`
 - [ ] English source-of-truth contract and operations documentation
-- [ ] Clean-install verification from a fresh clone
+- [x] Clean-install verification from a fresh clone
 - [ ] First-run and dashboard navigation E2E on the packaged runtime
 - [ ] Versioned GitHub release with checksums and release notes
 
