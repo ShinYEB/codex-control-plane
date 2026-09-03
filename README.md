@@ -1,6 +1,6 @@
-# RUVORA
+# RUVORA Codex ThreadHub
 
-> A durable, local-first control plane for complex Codex work.
+> A local-first hub for orchestrating complex work across Codex threads and projects.
 
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](./package.json)
 [![Version](https://img.shields.io/badge/version-0.14.0-2563eb)](./package.json)
@@ -140,8 +140,8 @@ See [Architecture](./docs/ARCHITECTURE.md) and the [Execution Contract](./docs/c
 Requirements: Node.js 22 or later and an authenticated Codex CLI. There are no external npm runtime dependencies.
 
 ```bash
-git clone https://github.com/ruvora/ruvora.git
-cd ruvora
+git clone https://github.com/ruvora/codex-threadhub.git
+cd codex-threadhub
 node --test
 ```
 
