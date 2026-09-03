@@ -6,6 +6,8 @@ The project follows Semantic Versioning while acknowledging that releases before
 
 ## Unreleased
 
+## 0.14.0 - 2026-09-03
+
 ### Changed
 
 - Adopted the RUVORA project identity and canonical GitHub organization.
