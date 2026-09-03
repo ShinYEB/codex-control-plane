@@ -3,7 +3,7 @@
   "version": "0.14.0",
   "private": true,
   "type": "module",
-  "description": "A control plane for complex Codex work",
+  "description": "A local-first hub for orchestrating complex work across Codex threads and projects",
   "bin": {
     "ruvora": "./src/cli.js",
     "ruvora-mcp": "./src/mcp-proxy.js",
@@ -27,10 +27,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ruvora/ruvora.git"
+    "url": "git+https://github.com/ruvora/codex-threadhub.git"
   },
-  "homepage": "https://github.com/ruvora/ruvora#readme",
+  "homepage": "https://github.com/ruvora/codex-threadhub#readme",
   "bugs": {
-    "url": "https://github.com/ruvora/ruvora/issues"
+    "url": "https://github.com/ruvora/codex-threadhub/issues"
   }
 }
