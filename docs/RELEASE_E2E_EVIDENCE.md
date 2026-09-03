@@ -1,8 +1,8 @@
 # Release candidate E2E evidence
 
 Date: 2026-09-03  
-Candidate: PR #3 (`chore/open-source-release-readiness`)
-Source: `ruvora/codex-threadhub`, branch `chore/open-source-release-readiness`
+Candidate: `v0.14.0`
+Source: `ruvora/codex-threadhub`, merge commit `b24e188afb18a69a03e9d22daaa6ba0d2ba70a72`
 
 ## Environment
 
@@ -27,6 +27,8 @@ Source: `ruvora/codex-threadhub`, branch `chore/open-source-release-readiness`
 | State isolation | Pass | temporary Registry created; user Registry was not used |
 
 The suite was rerun after the App Server compatibility fixes: **262 tests passed, 0 failed**.
+
+The merged source was revalidated for the release branch with a frozen dependency install, all syntax checks, and the same full result of **262 tests passed, 0 failed**.
 
 ## Real Codex App Server gate
 
@@ -100,3 +102,5 @@ The full suite covers strict contracts, pre-claim rejection, state transitions, 
 ## Remaining release boundary
 
 The source-level real Codex gate is complete. Installing the candidate plugin runtime remains an intentional post-merge release action; this evidence does not mutate the user's active runtime. Embedded dashboard navigation and packaged-daemon parity must be rechecked after that controlled deployment.
+
+For the `v0.14.0` release decision, reinstall-dependent verification was explicitly deferred because two live Codex MCP proxy processes still owned the installed plugin cache. The deployment preflight refused removal as designed. The personal plugin source was staged and validated separately, but the installed cache was not replaced; no packaged-runtime result is claimed by this release evidence.
