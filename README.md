@@ -181,7 +181,7 @@ Plugin deployment must first check active work and runtime generation. Follow [R
 | Cross-project handoff schema | v1 |
 | Implementation gates | G0–G7 complete |
 | Final E2E | 12 scenarios passing |
-| Full test suite | 260/260 passing |
+| Full test suite | 262/262 passing |
 | Runtime | Node.js ≥22, no external npm dependencies |
 
 ```bash
@@ -232,3 +232,7 @@ scripts/  runtime parity, deployment, and reinstall preflight
 
 - [Official Codex App Server documentation](https://learn.chatgpt.com/docs/app-server)
 - [Contributing](./CONTRIBUTING.md) · [Code of Conduct](./CODE_OF_CONDUCT.md) · [Security](./SECURITY.md) · [License](./LICENSE)
+
+## Author
+
+Created and maintained by [ShinYEB](https://github.com/ShinYEB).
