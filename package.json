@@ -2,6 +2,7 @@
   "name": "ruvora",
   "version": "0.14.0",
   "private": true,
+  "license": "Apache-2.0",
   "type": "module",
   "description": "A local-first hub for orchestrating complex work across Codex threads and projects",
   "bin": {

@@ -11,3 +11,4 @@ The project follows Semantic Versioning while acknowledging that releases before
 - Adopted the RUVORA project identity and canonical GitHub organization.
 - Added open-source contribution, governance, support, security, and CI foundations.
 - Added `ruvora`, `ruvora-mcp`, and `ruvorad` command names while retaining the legacy command aliases for compatibility.
+- Licensed the project under Apache-2.0 and documented release-readiness and roadmap policy.
