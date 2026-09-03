@@ -103,10 +103,10 @@ const TASK_TRANSITIONS = new Map([
 ]);
 
 const AGENT_TRANSITIONS = new Map([
-  ["unknown", new Set(["available", "idle", "leased", "running"])],
-  ["available", new Set(["unknown", "idle", "leased", "running"])],
-  ["idle", new Set(["unknown", "available", "leased", "running"])],
-  ["leased", new Set(["unknown", "available", "idle", "running"])],
+  ["unknown", new Set(["available", "idle", "leased", "running", "approval_waiting"])],
+  ["available", new Set(["unknown", "idle", "leased", "running", "approval_waiting"])],
+  ["idle", new Set(["unknown", "available", "leased", "running", "validating", "approval_waiting"])],
+  ["leased", new Set(["unknown", "available", "idle", "running", "approval_waiting"])],
   ["running", new Set(["unknown", "available", "idle", "validating", "approval_waiting"])],
   ["validating", new Set(["unknown", "available", "idle", "running", "approval_waiting"])],
   ["approval_waiting", new Set(["unknown", "available", "idle", "running", "validating"])],
@@ -159,8 +159,14 @@ export function assertAgentStatus(status) {
   return assertKnown(status, AGENT_STATUSES, "Agent");
 }
 
-export function normalizeAgentStatus(status) {
+export function normalizeAgentStatus(status, activeFlags = []) {
   if (status === "notLoaded") return "available";
+  if (status === "systemError") return "unknown";
+  if (status === "active") {
+    return activeFlags.includes("waitingOnApproval") || activeFlags.includes("waitingOnUserInput")
+      ? "approval_waiting"
+      : "running";
+  }
   return status ?? "unknown";
 }
 

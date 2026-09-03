@@ -3178,7 +3178,8 @@ export class McpControlServer {
         return;
       }
       if (message.method === "thread/status/changed") {
-        const status = normalizeStatus(message.params?.status?.type ?? message.params?.status);
+        const rawStatus = message.params?.status;
+        const status = normalizeStatus(rawStatus?.type ?? rawStatus, rawStatus?.activeFlags ?? []);
         if (threadId && this.registry.getAgent(threadId)) this.registry.updateAgent(threadId, { status });
         this.registry.recordEvent("agent", threadId, message.method, { status });
       }

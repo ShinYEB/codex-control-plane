@@ -760,12 +760,47 @@ test("completed_with_warnings is terminal, unblocks dependencies, and completes 
   const warningClaim = registry.claimTask("warning", "worker_warning");
   registry.markClaimAgentDone("warning", "worker_warning", warningClaim.claimToken, { output: "done with warning" });
   registry.markClaimValidating("warning", "worker_warning", warningClaim.claimToken);
-  registry.finishValidationClaim("warning", "worker_warning", warningClaim.claimToken, { decision: "accept_with_warnings", summary: "minor warning" });
+  const warning = registry.finishValidationClaim("warning", "worker_warning", warningClaim.claimToken, { decision: "accept_with_warnings", summary: "minor warning" });
+  assert.equal(warning.workerId, null);
+  assert.equal(warning.claimToken, null);
+  assert.equal(warning.heartbeatAt, null);
   registry.refreshBlockedTasks();
   assert.equal(registry.getTask("downstream").status, "queued");
   const downstreamClaim = registry.claimTask("downstream", "worker_downstream");
   registry.completeClaim("downstream", "worker_downstream", downstreamClaim.claimToken, { output: "done" });
   assert.equal(registry.refreshRun("run_warning").status, "completed");
+  registry.close();
+});
+
+test("every direct terminal claim outcome releases ownership", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+
+  for (const status of ["completed", "failed", "interrupted"]) {
+    const taskId = `terminal_${status}`;
+    registry.createTask({ id: taskId, prompt: status });
+    const claim = registry.claimTask(taskId, `worker_${status}`);
+    const terminal = status === "completed"
+      ? registry.completeClaim(taskId, `worker_${status}`, claim.claimToken, { output: "done" })
+      : registry.finishTurnClaim(taskId, `worker_${status}`, claim.claimToken, { status });
+
+    assert.equal(terminal.status, status);
+    assert.equal(terminal.workerId, null, status);
+    assert.equal(terminal.claimToken, null, status);
+    assert.equal(terminal.heartbeatAt, null, status);
+    assert.equal(registry.isClaimOwner(taskId, `worker_${status}`, claim.claimToken), false, status);
+  }
+
+  registry.createTask({ id: "validated", prompt: "validated" });
+  const validatedClaim = registry.claimTask("validated", "worker_validated");
+  registry.markClaimAgentDone("validated", "worker_validated", validatedClaim.claimToken, { output: "done" });
+  registry.markClaimValidating("validated", "worker_validated", validatedClaim.claimToken);
+  const validated = registry.finishValidationClaim("validated", "worker_validated", validatedClaim.claimToken, { decision: "accept", summary: "accepted" });
+  assert.equal(validated.status, "completed");
+  assert.equal(validated.workerId, null);
+  assert.equal(validated.claimToken, null);
+  assert.equal(validated.heartbeatAt, null);
+  assert.equal(registry.isClaimOwner("validated", "worker_validated", validatedClaim.claimToken), false);
+
   registry.close();
 });
 
