@@ -32,3 +32,5 @@ pnpm test
 - Write source-of-truth documentation and user-facing defaults in English. Korean localization belongs in the release-matched `ruvora-ko` repository after it is created.
 
 Maintainers merge changes only after the required checks pass. A pull request is not authority to widen filesystem, network, side-effect, or integration scope.
+
+Release preparation follows [RELEASING.md](./RELEASING.md). Contributors may propose release changes, but only maintainers create tags and GitHub Releases.

@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   AGENT_STATUSES,
   GLOBAL_RUN_STATUSES,
+  normalizeAgentStatus,
   DELIVERY_STATUSES,
   LEASE_STATUSES,
   RUN_STATUSES,
@@ -22,6 +23,15 @@ import {
   transitionTurnDispatch,
 } from "../src/domain-states.js";
 
+test("Codex App Server thread states normalize at the domain boundary", () => {
+  assert.equal(normalizeAgentStatus("notLoaded"), "available");
+  assert.equal(normalizeAgentStatus("idle"), "idle");
+  assert.equal(normalizeAgentStatus("active"), "running");
+  assert.equal(normalizeAgentStatus("active", ["waitingOnApproval"]), "approval_waiting");
+  assert.equal(normalizeAgentStatus("active", ["waitingOnUserInput"]), "approval_waiting");
+  assert.equal(normalizeAgentStatus("systemError"), "unknown");
+});
+
 test("domain state transitions reject illegal rewinds and allow explicit repair", () => {
   assert.equal(transitionTask("queued", "running"), "running");
   assert.throws(() => transitionTask("completed", "queued"), /Illegal Task transition/);
@@ -29,7 +39,8 @@ test("domain state transitions reject illegal rewinds and allow explicit repair"
   assert.throws(() => transitionRun("completed", "running"), /Illegal Run transition/);
   assert.equal(transitionRun("completed", "running", { allowRepair: true }), "running");
   assert.equal(transitionAgent("idle", "leased"), "leased");
-  assert.throws(() => transitionAgent("idle", "validating"), /Illegal Agent transition/);
+  assert.equal(transitionAgent("idle", "validating"), "validating");
+  assert.equal(transitionAgent("idle", "approval_waiting"), "approval_waiting");
   assert.equal(transitionLease("active", "released"), "released");
   assert.throws(() => transitionLease("released", "expired"), /Illegal Lease transition/);
   assert.equal(transitionDelivery("pending", "delivering"), "delivering");

@@ -3907,11 +3907,12 @@ export class ControlRegistry {
     const row = this.db.prepare(`
       UPDATE tasks
       SET status = 'completed', output = ?, turn_id = COALESCE(?, turn_id),
-          completed_at = ?, updated_at = ?, heartbeat_at = ?, version = version + 1
+          completed_at = ?, updated_at = ?, worker_id = NULL,
+          claim_token = NULL, heartbeat_at = NULL, version = version + 1
       WHERE id = ? AND worker_id = ? AND claim_token = ?
         AND status IN ('running', 'approval_waiting', 'integration_pending')
       RETURNING *
-    `).get(changes.output ?? null, changes.turnId ?? null, timestamp, timestamp, timestamp, taskId, workerId, claimToken);
+    `).get(changes.output ?? null, changes.turnId ?? null, timestamp, timestamp, taskId, workerId, claimToken);
     if (!row) return null;
     this.recordEvent("task", taskId, "task.completed", { workerId, attempt: row.attempt });
     return this.getTask(taskId);
@@ -3984,7 +3985,8 @@ export class ControlRegistry {
     delete metadata.failure;
     if (metadata.rework?.current) metadata.rework = { ...metadata.rework, current: null };
     const row = this.db.prepare(`
-      UPDATE tasks SET status = ?, error = ?, completed_at = ?, heartbeat_at = ?,
+      UPDATE tasks SET status = ?, error = ?, completed_at = ?,
+        worker_id = NULL, claim_token = NULL, heartbeat_at = NULL,
         updated_at = ?, version = version + 1,
         metadata_json = ?
       WHERE id = ? AND worker_id = ? AND claim_token = ? AND status IN ('validating', 'integration_pending')
@@ -3992,7 +3994,6 @@ export class ControlRegistry {
     `).get(
       status,
       accepted ? null : (validation?.summary ?? "Acceptance criteria were not satisfied"),
-      timestamp,
       timestamp,
       timestamp,
       json(metadata, {}),
@@ -4011,7 +4012,8 @@ export class ControlRegistry {
     const row = this.db.prepare(`
       UPDATE tasks
       SET status = ?, output = ?, error = ?, turn_id = COALESCE(?, turn_id),
-          completed_at = ?, updated_at = ?, heartbeat_at = ?, version = version + 1
+          completed_at = ?, updated_at = ?, worker_id = NULL,
+          claim_token = NULL, heartbeat_at = NULL, version = version + 1
       WHERE id = ? AND worker_id = ? AND claim_token = ?
         AND status IN ('running', 'approval_waiting')
       RETURNING *
@@ -4020,7 +4022,6 @@ export class ControlRegistry {
       changes.output ?? null,
       changes.error ?? `Agent turn ended with status: ${changes.status}`,
       changes.turnId ?? null,
-      timestamp,
       timestamp,
       timestamp,
       taskId,

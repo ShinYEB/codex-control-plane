@@ -973,13 +973,17 @@ test("prepare_agent_run atomically starts and binds a leased session per task", 
 
 test("complex runs automatically provision an Orchestrator before workers", async () => {
   let sequence = 0;
+  const turns = [];
   const control = {
     connect: async () => {},
     spawnAgent: async () => ({ id: `agent_${++sequence}`, cwd: "/repo", status: "idle", ephemeral: false }),
     nameAgent: async () => {},
     pinAgent: async () => {},
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
-    runTask: async () => ({ output: "READY", turn: { status: "completed" } }),
+    runTask: async (threadId, prompt) => {
+      turns.push({ threadId, prompt });
+      return { output: "Run accepted; waiting for Data Plane results.", turnId: "turn_kickoff", turn: { id: "turn_kickoff", status: "completed" } };
+    },
   };
   const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
   const server = fakeServer(control, { dashboardServer, schedulerConcurrency: 0 });
@@ -1003,6 +1007,16 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   assert.equal(graph.run.complexity.taskCount, 2);
   assert.deepEqual(graph.run.orchestratorSession, { type: "codex_session", agentId: "agent_1" });
   assert.equal(sequence, 1, "automatic start creates only the Orchestrator before workers are scheduled");
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0].threadId, "agent_1");
+  assert.match(turns[0].prompt, /waiting for the daemon-managed Data Plane results/);
+  assert.equal(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestratorKickoff.turnId, "turn_kickoff");
+  const kickoffDispatch = server.registry.listTurnDispatches({
+    subjectType: "run", subjectId: prepared.structuredContent.runId, purpose: "orchestration", limit: 10,
+  });
+  assert.equal(kickoffDispatch.length, 1);
+  assert.equal(kickoffDispatch[0].revision, 1);
+  assert.equal(kickoffDispatch[0].status, "completed");
   await server.close();
 });
 

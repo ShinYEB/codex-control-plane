@@ -5,6 +5,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A522-339933?logo=nodedotjs&logoColor=white)](./package.json)
 [![Version](https://img.shields.io/badge/version-0.14.0-2563eb)](./package.json)
 [![E2E](https://img.shields.io/badge/G7_E2E-passing-16a34a)](./docs/G7_E2E_EVIDENCE.md)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](./LICENSE)
 
 Long-running Codex use creates more threads while decisions and constraints become scattered across conversations and projects. RUVORA is not a tool for creating even more threads. It is a central control layer that records **which context was selected and why, then coordinates work under validated execution contracts**.
 
@@ -190,6 +191,7 @@ git diff --check
 ```
 
 See [G7 E2E Evidence](./docs/G7_E2E_EVIDENCE.md) for terminal-state and next-action evidence.
+The latest clean-clone release check is recorded in [Release Candidate E2E Evidence](./docs/RELEASE_E2E_EVIDENCE.md).
 
 ## Repository layout
 
@@ -216,6 +218,8 @@ scripts/  runtime parity, deployment, and reinstall preflight
 | How are schema and migrations managed? | [Persistence](./docs/contracts/PERSISTENCE.md) |
 | How do retry, recovery, and integration work? | [Failure Recovery](./docs/operations/FAILURE_RECOVERY.md) |
 | How are deployment and daemon handover managed? | [Runtime Lifecycle](./docs/operations/RUNTIME_LIFECYCLE.md) |
+| What is planned next? | [Roadmap](./ROADMAP.md) |
+| How is a release verified and published? | [Release Process](./RELEASING.md) |
 
 ## Product boundaries
 
@@ -227,3 +231,4 @@ scripts/  runtime parity, deployment, and reinstall preflight
 ## Reference
 
 - [Official Codex App Server documentation](https://learn.chatgpt.com/docs/app-server)
+- [Contributing](./CONTRIBUTING.md) · [Code of Conduct](./CODE_OF_CONDUCT.md) · [Security](./SECURITY.md) · [License](./LICENSE)
