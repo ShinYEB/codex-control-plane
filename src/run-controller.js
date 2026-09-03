@@ -107,14 +107,14 @@ export function buildRunGraph(registry, runId, options = {}) {
       dispatchPath: run.metadata?.dispatchPath ?? (tasks.length === 1 ? "direct" : "orchestrated"),
       complexity: run.metadata?.complexity ?? null,
       dispatchPhase: run.metadata?.dispatchPhase ?? null,
-      failure: run.metadata?.dispatchError ? {
+      failure: run.metadata?.failure ?? (run.metadata?.dispatchError ? {
         type: "configuration",
         category: "configuration",
         stage: run.metadata?.dispatchPhase ?? "dispatch",
         cause: run.metadata.dispatchError,
         nextAction: "repair_contract",
         retryable: false,
-      } : null,
+      } : null),
       workspacePreflight: run.metadata?.workspacePreflight ?? null,
       scheduler: run.metadata?.schedulerIdentity ?? null,
       orchestratorSession: orchestratorSessionIdentity,

@@ -965,10 +965,13 @@ export class McpControlServer {
     this.pollPromise = null;
     this.controlDispatches = new Map();
     this.runFinalizations = new Map();
+    this.runStarts = new Map();
+    this.preparedRunRecovery = null;
     this.reconciliationTtlMs = options.reconciliationTtlMs ?? 5 * 60_000;
     this.projectReconciliations = new Map();
     this.dashboardViewLeaseTtlMs = options.dashboardViewLeaseTtlMs ?? 30 * 60_000;
     this.dashboardViewLeases = new Map();
+    this.pinCapability = "unknown";
     this.dashboardServer = options.dashboardServer ?? null;
     this.runtime = options.runtime ?? dataPlaneRuntime();
     this.ownsDashboardServer = !options.dashboardServer;
@@ -992,10 +995,61 @@ export class McpControlServer {
 
   startBackground() {
     if (this.schedulerTimer) return;
-    this.schedulerTimer = setInterval(() => void this.#pollTasks(), this.schedulerIntervalMs);
+    this.schedulerTimer = setInterval(() => void this.#recoverPreparedRuns().finally(() => this.#pollTasks()), this.schedulerIntervalMs);
     this.schedulerTimer.unref?.();
     queueMicrotask(() => void this.#recoverIntegrations().finally(() => this.#pollTasks()));
-    queueMicrotask(() => void this.#reconcileTurnDispatches().finally(() => this.#resumeControlDispatches()));
+    queueMicrotask(() => void this.#reconcileTurnDispatches()
+      .then(() => this.#recoverPreparedRuns())
+      .finally(() => this.#resumeControlDispatches()));
+  }
+
+  async #recoverPreparedRuns() {
+    if (this.preparedRunRecovery) return this.preparedRunRecovery;
+    const recovery = (async () => {
+      const runs = this.registry.listRuns({ status: "preparing", scope: "all", limit: 500 });
+      let released = 0;
+      let failed = 0;
+      let pending = 0;
+      for (const run of runs) {
+        // Global Run membership owns release ordering and cross-project handoff
+        // gates; its preparing children are not standalone startup remnants.
+        if (run.metadata?.globalRunId) continue;
+        if (this.controlDispatches.has(run.id) || this.runStarts.has(run.id)) {
+          pending += 1;
+          continue;
+        }
+        const dispatch = this.registry.listTurnDispatches({
+          subjectType: "run", subjectId: run.id, purpose: "orchestration", limit: 1,
+        })[0] ?? null;
+        if (dispatch && ["turn_submitting", "turn_running", "cancelling"].includes(dispatch.status)) {
+          pending += 1;
+          continue;
+        }
+        if (dispatch && ["failed", "interrupted", "cancelled", "recovery_attention"].includes(dispatch.status)) {
+          const error = Object.assign(new Error(dispatch.failure?.message ?? `Orchestrator kickoff ${dispatch.status}`), {
+            code: dispatch.failure?.code,
+            retryable: dispatch.failure?.retryable,
+          });
+          this.#failRunPreparation(run.id, error, "orchestrator_kickoff");
+          failed += 1;
+          continue;
+        }
+        const result = await this.#startRun(run.id, { source: "daemon_recovery" });
+        if (result.status === "failed") failed += 1;
+        else if (result.status === "running") released += 1;
+        else pending += 1;
+      }
+      if (released || failed) {
+        this.registry.recordEvent("system", null, "system.prepared_runs_recovered", { checked: runs.length, released, failed, pending });
+      }
+      return { checked: runs.length, released, failed, pending };
+    })();
+    this.preparedRunRecovery = recovery;
+    try {
+      return await recovery;
+    } finally {
+      if (this.preparedRunRecovery === recovery) this.preparedRunRecovery = null;
+    }
   }
 
   async #reconcileTurnDispatches() {
@@ -2356,22 +2410,31 @@ export class McpControlServer {
       contextSnapshot,
       autoStart: true,
     });
-    this.registry.recordEvent("run", runId, "run.control_plane_prepared", {
+    this.registry.recordEvent("run", runId, result.status === "failed" ? "run.control_plane_start_failed" : "run.control_plane_prepared", {
       dispatchPath: estimate.dispatchPath,
-      autoStarted: true,
+      autoStarted: result.status !== "failed",
       requiresExplicitStart: false,
+      ...(result.failure ? { failure: result.failure } : {}),
     });
     return { ...result, plan, estimate };
   }
 
   async #decorateAgent(control, agent, name, pin) {
     if (control.nameAgent) await control.nameAgent(agent.id, name);
-    if (pin && !agent.ephemeral && control.pinAgent) {
+    if (pin && !agent.ephemeral && control.pinAgent && this.pinCapability !== "unsupported") {
       try {
         await control.pinAgent(agent.id, true);
+        this.pinCapability = "supported";
       } catch (error) {
-        this.logger(`Pinning agent ${agent.id} is not supported by this Codex build: ${error.message}`);
-        this.registry.recordEvent("agent", agent.id, "agent.pin_unsupported", { error: error.message });
+        const unsupported = /metadata update must include at least one field|unknown field.*ispinned|ispinned.*(?:unsupported|invalid)/i.test(String(error.message));
+        if (unsupported) {
+          this.pinCapability = "unsupported";
+          this.logger(`Thread pinning is not supported by this Codex build; disabling the optional pin hint: ${error.message}`);
+          this.registry.recordEvent("agent", agent.id, "agent.pin_unsupported", { error: error.message, capabilityCached: true });
+        } else {
+          this.logger(`Could not pin agent ${agent.id}: ${error.message}`);
+          this.registry.recordEvent("agent", agent.id, "agent.pin_failed", { error: error.message });
+        }
       }
     }
   }
@@ -2526,44 +2589,63 @@ export class McpControlServer {
       agents: [],
       tasks: startResult?.tasks ?? finalTasks,
       idempotent: graph.idempotent,
-      autoStarted: true,
-      message: "The atomic graph was prepared and started automatically. Monitor it in the embedded Codex dashboard.",
+      autoStarted: finalRun.status !== "failed",
+      ...(startResult?.failure ? { failure: startResult.failure } : {}),
+      message: finalRun.status === "failed"
+        ? "The graph was persisted, but Run startup failed before any task attempt was consumed. Inspect the structured failure and retry with a new Run."
+        : "The atomic graph was prepared and started automatically. Monitor it in the embedded Codex dashboard.",
     };
   }
 
   async #ensureRunOrchestrator(run) {
     if (run.metadata?.dispatchPath !== "orchestrated") return null;
     const existingId = run.metadata?.orchestratorSessionIdentity?.agentId ?? run.metadata?.orchestratorAgentId;
-    if (existingId) return this.registry.getAgent(existingId);
     const control = await this.#getControl();
-    const template = this.roleTemplates.resolve("orchestrator");
-    const agent = await control.spawnAgent({
-      cwd: run.cwd,
-      sandbox: "read-only",
-      approvalPolicy: "never",
-      model: template.model,
-      developerInstructions: `${template.developerInstructions}\n\nYou own orchestration context and final synthesis for Run ${run.id}. The daemon scheduler owns queue mechanics, claims, fencing, retries, and approvals. Do not edit files or open the Control Plane dashboard.`,
-      ephemeral: false,
-    });
-    const name = agentDisplayName("orchestrator", run.name ?? run.id);
-    await this.#decorateAgent(control, agent, name, true);
-    const stored = this.#storeAgent({ ...agent, name }, {
-      role: "orchestrator",
-      capabilities: template.capabilities,
-      metadata: {
-        tools: template.tools ?? [],
-        executionPlane: "orchestrator",
-        orchestrationPlane: true,
-        controlPlaneManaged: true,
-        runId: run.id,
-      },
-    });
-    this.registry.updateRun(run.id, { metadata: {
-      orchestratorAgentId: stored.id,
-      orchestratorSessionIdentity: { type: "codex_session", agentId: stored.id },
-      orchestratorProvisionedAt: new Date().toISOString(),
-    } });
-    this.registry.recordEvent("agent", stored.id, "orchestrator.provisioned", { runId: run.id });
+    let stored = existingId ? this.registry.getAgent(existingId) : null;
+    if (!stored) {
+      const template = this.roleTemplates.resolve("orchestrator");
+      const agent = await control.spawnAgent({
+        cwd: run.cwd,
+        sandbox: "read-only",
+        approvalPolicy: "never",
+        model: template.model,
+        developerInstructions: `${template.developerInstructions}\n\nYou own orchestration context and final synthesis for Run ${run.id}. The daemon scheduler owns queue mechanics, claims, fencing, retries, and approvals. Do not edit files or open the Control Plane dashboard.`,
+        ephemeral: false,
+      });
+      const name = agentDisplayName("orchestrator", run.name ?? run.id);
+      await this.#decorateAgent(control, agent, name, true);
+      stored = this.#storeAgent({ ...agent, name }, {
+        role: "orchestrator",
+        capabilities: template.capabilities,
+        metadata: {
+          tools: template.tools ?? [],
+          executionPlane: "orchestrator",
+          orchestrationPlane: true,
+          controlPlaneManaged: true,
+          runId: run.id,
+        },
+      });
+      this.registry.updateRun(run.id, { metadata: {
+        orchestratorAgentId: stored.id,
+        orchestratorSessionIdentity: { type: "codex_session", agentId: stored.id },
+        orchestratorProvisionedAt: new Date().toISOString(),
+      } });
+      this.registry.recordEvent("agent", stored.id, "orchestrator.provisioned", { runId: run.id });
+    }
+    const completedKickoff = this.registry.listTurnDispatches({
+      subjectType: "run", subjectId: run.id, purpose: "orchestration", status: "completed", limit: 1,
+    })[0] ?? null;
+    if (completedKickoff) {
+      if (run.metadata?.orchestratorKickoff?.status !== "completed") {
+        this.registry.updateRun(run.id, { metadata: { orchestratorKickoff: {
+          status: "completed",
+          turnId: completedKickoff.turnId ?? null,
+          recordedAt: completedKickoff.terminalAt ?? new Date().toISOString(),
+          recovered: true,
+        } } });
+      }
+      return stored;
+    }
     const taskSummary = this.registry.listTasks({ runId: run.id, limit: 1000 }).map((task) => ({
       id: task.id,
       title: task.metadata?.title ?? task.prompt.slice(0, 80),
@@ -2607,13 +2689,46 @@ export class McpControlServer {
     return stored;
   }
 
+  #failRunPreparation(runId, error, stage) {
+    const classified = classifyFailure(error, stage);
+    const failure = {
+      ...classified,
+      stage,
+      repairable: true,
+      nextAction: "retry_run",
+    };
+    const failed = this.registry.failPreparedRun(runId, failure);
+    this.registry.recordEvent("run", runId, "run.preparation_failed", { stage, failure: failed.failure });
+    return failed;
+  }
+
   async #startRun(runId, details = {}) {
-    const run = this.registry.getRun(runId);
-    if (!run) throw new Error(`Run not found: ${runId}`);
-    await this.#ensureRunOrchestrator(run);
-    const result = this.runController.start(runId, details);
-    this.registry.updateRun(runId, { metadata: { schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId } } });
-    return { ...result, run: this.registry.getRun(runId) };
+    if (this.runStarts.has(runId)) return this.runStarts.get(runId);
+    const start = (async () => {
+      const run = this.registry.getRun(runId);
+      if (!run) throw new Error(`Run not found: ${runId}`);
+      if (["completed", "failed", "cancelled"].includes(run.status)) {
+        return { runId, status: run.status, run, tasks: this.registry.listTasks({ runId, limit: 1000 }), releasedTasks: 0 };
+      }
+      try {
+        await this.#ensureRunOrchestrator(run);
+        const result = this.runController.start(runId, details);
+        this.registry.updateRun(runId, { metadata: { schedulerIdentity: { type: "daemon_scheduler", instanceId: this.instanceId } } });
+        return { ...result, run: this.registry.getRun(runId) };
+      } catch (error) {
+        const current = this.registry.getRun(runId);
+        if (!current || !["preparing", "agents_prepared", "awaiting_user_start"].includes(current.status)) throw error;
+        const stage = current.metadata?.dispatchPath === "orchestrated" ? "orchestrator_kickoff" : "run_release";
+        const failed = this.#failRunPreparation(runId, error, stage);
+        return { runId, status: "failed", run: failed.run, tasks: failed.tasks, failure: failed.failure, releasedTasks: 0 };
+      }
+    })();
+    this.runStarts.set(runId, start);
+    try {
+      return await start;
+    } finally {
+      if (this.runStarts.get(runId) === start) this.runStarts.delete(runId);
+    }
   }
 
   async #cancelRun(_control, runId) {

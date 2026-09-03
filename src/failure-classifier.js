@@ -1,11 +1,19 @@
 export function classifyFailure(error, stage = "execution") {
   const message = String(error?.message ?? error ?? "Unknown failure");
-  const code = error?.code ?? null;
+  let code = error?.code ?? null;
   const value = `${code ?? ""} ${message}`.toLowerCase();
   let type = stage === "validation" ? "validation" : "worker";
   let retryable = Boolean(error?.retryable);
 
-  if (/execution_contract|execution contract|read-only|read only|insufficient sandbox|cannot (?:write|modify|edit)|missing required (?:tool|capability)/.test(value)) {
+  if (/unexpected status 404 not found.*(?:backend-api\/codex\/responses|codex\/responses)/.test(value)) {
+    type = "infrastructure";
+    code ??= "APP_SERVER_UPSTREAM_404";
+    retryable = true;
+  } else if (/\breconnecting(?:\.\.\.)?\s*\d+\/\d+/.test(value)) {
+    type = "infrastructure";
+    code ??= "APP_SERVER_RECONNECT_INTERRUPTED";
+    retryable = true;
+  } else if (/execution_contract|execution contract|read-only|read only|insufficient sandbox|cannot (?:write|modify|edit)|missing required (?:tool|capability)/.test(value)) {
     type = "configuration";
     retryable = false;
   } else if (/timed? out|timeout/.test(value)) {
