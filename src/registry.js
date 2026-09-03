@@ -2415,6 +2415,91 @@ export class ControlRegistry {
     return this.getRun(runId);
   }
 
+  failPreparedRun(runId, failure = {}) {
+    const run = this.getRun(runId);
+    if (!run) throw new Error(`Run not found: ${runId}`);
+    if (TERMINAL_RUN_STATUSES.has(run.status)) return { run, tasks: this.listTasks({ runId, limit: 1000 }), idempotent: true };
+    if (!["preparing", "agents_prepared", "awaiting_user_start"].includes(run.status)) {
+      throw Object.assign(new Error(`Run ${runId} cannot fail preparation from ${run.status}`), { code: "RUN_NOT_IN_PREPARATION" });
+    }
+    const tasks = this.listTasks({ runId, limit: 1000 });
+    const unsafe = tasks.find((task) => !TERMINAL_TASK_STATUSES.has(task.status)
+      && (task.attempt !== 0 || task.workerId || task.claimToken || task.agentId));
+    if (unsafe) {
+      throw Object.assign(new Error(`Task ${unsafe.id} has execution ownership and cannot be terminalized as a preparation failure`), {
+        code: "PREPARATION_FAILURE_AFTER_EXECUTION_STARTED",
+      });
+    }
+    for (const task of tasks) {
+      if (!TERMINAL_TASK_STATUSES.has(task.status)) transitionTask(task.status, "failed");
+    }
+    transitionRun(run.status, "failed");
+
+    const timestamp = now();
+    const record = {
+      type: failure.type ?? "infrastructure",
+      category: failure.category ?? "environment",
+      stage: failure.stage ?? "orchestrator_kickoff",
+      code: failure.code ?? "RUN_PREPARATION_FAILED",
+      cause: failure.cause ?? failure.message ?? "Run preparation failed",
+      message: failure.message ?? failure.cause ?? "Run preparation failed",
+      retryable: Boolean(failure.retryable),
+      repairable: failure.repairable ?? Boolean(failure.retryable),
+      nextAction: failure.nextAction ?? "retry_run",
+      attemptBudget: { used: 0, max: 0, remaining: 0 },
+      at: failure.at ?? timestamp,
+    };
+    const nestedTransaction = this.db.isTransaction;
+    this.db.exec(nestedTransaction ? "SAVEPOINT fail_prepared_run" : "BEGIN IMMEDIATE");
+    try {
+      const updateTask = this.db.prepare(`
+        UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, updated_at = ?,
+          worker_id = NULL, heartbeat_at = NULL, next_retry_at = NULL, claim_token = NULL,
+          version = version + 1, metadata_json = ? WHERE id = ?
+      `);
+      for (const task of tasks) {
+        if (TERMINAL_TASK_STATUSES.has(task.status)) continue;
+        const metadata = {
+          ...task.metadata,
+          failure: record,
+          failureHistory: [...(task.metadata?.failureHistory ?? []), record],
+        };
+        updateTask.run(record.cause, timestamp, timestamp, json(metadata, {}), task.id);
+      }
+      const runMetadata = {
+        ...run.metadata,
+        dispatchPhase: "failed",
+        dispatchError: record.cause,
+        failure: record,
+        failureHistory: [...(run.metadata?.failureHistory ?? []), record],
+      };
+      this.db.prepare(`
+        UPDATE runs SET status = 'failed', completed_at = ?, updated_at = ?, metadata_json = ? WHERE id = ?
+      `).run(timestamp, timestamp, json(runMetadata, {}), runId);
+      this.db.exec(nestedTransaction ? "RELEASE fail_prepared_run" : "COMMIT");
+    } catch (error) {
+      if (nestedTransaction) this.db.exec("ROLLBACK TO fail_prepared_run; RELEASE fail_prepared_run");
+      else this.db.exec("ROLLBACK");
+      throw error;
+    }
+    for (const task of tasks) {
+      if (!TERMINAL_TASK_STATUSES.has(task.status)) {
+        this.recordEvent("task", task.id, "task.failed", { previousStatus: task.status, preClaim: true, failure: record });
+      }
+    }
+    this.recordEvent("run", runId, "run.failed", { previousStatus: run.status, preparationFailure: true, failure: record });
+    this.projectRunResult(runId);
+    this.createNotification({
+      projectKey: run.cwd ?? "workspace",
+      runId,
+      kind: NOTIFICATION_KINDS.FAILED,
+      title: "작업 시작 실패",
+      body: `${run.name ?? runId} 작업을 시작하지 못했습니다. 실행 시도는 소비되지 않았습니다.`,
+      dedupeKey: `${runId}:${NOTIFICATION_KINDS.FAILED}`,
+    });
+    return { run: this.getRun(runId), tasks: this.listTasks({ runId, limit: 1000 }), failure: record, idempotent: false };
+  }
+
   refreshRun(runId) {
     const run = this.getRun(runId);
     if (!run) return null;

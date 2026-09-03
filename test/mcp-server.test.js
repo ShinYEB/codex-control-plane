@@ -1020,6 +1020,139 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   await server.close();
 });
 
+test("unsupported App Server pin metadata is probed once and then cached", async () => {
+  let sequence = 0;
+  let pinCalls = 0;
+  const control = {
+    connect: async () => {},
+    spawnAgent: async () => ({ id: `pin_agent_${++sequence}`, cwd: "/repo", status: "idle", ephemeral: false }),
+    nameAgent: async () => {},
+    pinAgent: async () => {
+      pinCalls += 1;
+      throw new Error("thread metadata update must include at least one field");
+    },
+    runTask: async () => ({ output: "waiting", turnId: `pin_turn_${sequence}`, turn: { id: `pin_turn_${sequence}`, status: "completed" } }),
+  };
+  const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
+  const server = fakeServer(control, { dashboardServer, schedulerConcurrency: 0, logger: () => {} });
+  for (const suffix of ["one", "two"]) {
+    const response = await server.handleRequest({ method: "tools/call", params: { name: "prepare_agent_run", arguments: {
+      name: `pin ${suffix}`,
+      cwd: "/repo",
+      requestKey: `pin-${suffix}`,
+      dispatchPath: "orchestrated",
+      tasks: [
+        { key: `build-${suffix}`, prompt: "build", role: "implementer", routingMode: "new" },
+        { key: `review-${suffix}`, prompt: "review", role: "reviewer", dependsOn: [`build-${suffix}`], routingMode: "new" },
+      ],
+    } } });
+    assert.equal(response.structuredContent.status, "running");
+  }
+  assert.equal(pinCalls, 1);
+  assert.equal(server.registry.listEvents({ limit: 100 }).filter((event) => event.eventType === "agent.pin_unsupported").length, 1);
+  await server.close();
+});
+
+test("orchestrator kickoff failure terminalizes the prepared graph without consuming task attempts", async () => {
+  const upstream = Object.assign(new Error("unexpected status 404 Not Found: Unknown error, url: https://chatgpt.com/backend-api/codex/responses"), {
+    retryable: true,
+  });
+  const control = {
+    connect: async () => {},
+    spawnAgent: async () => ({ id: "orchestrator_404", cwd: "/repo", status: "idle", ephemeral: false }),
+    nameAgent: async () => {},
+    pinAgent: async () => {},
+    runTask: async () => { throw upstream; },
+  };
+  const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };
+  const server = fakeServer(control, { dashboardServer, schedulerConcurrency: 0 });
+
+  const prepared = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "prepare_agent_run", arguments: {
+      name: "kickoff failure",
+      cwd: "/repo",
+      tasks: [
+        { key: "build", prompt: "build", role: "implementer", routingMode: "new" },
+        { key: "review", prompt: "review", role: "reviewer", dependsOn: ["build"], routingMode: "new" },
+      ],
+    } },
+  });
+
+  assert.equal(prepared.isError, undefined);
+  assert.equal(prepared.structuredContent.status, "failed");
+  const run = server.registry.getRun(prepared.structuredContent.runId);
+  assert.equal(run.status, "failed");
+  assert.equal(run.metadata.failure.stage, "orchestrator_kickoff");
+  assert.equal(run.metadata.failure.code, "APP_SERVER_UPSTREAM_404");
+  assert.equal(run.metadata.failure.category, "environment");
+  assert.equal(run.metadata.failure.nextAction, "retry_run");
+  const tasks = server.registry.listTasks({ runId: run.id, limit: 10 });
+  assert.deepEqual(tasks.map((task) => task.status), ["failed", "failed"]);
+  assert.deepEqual(tasks.map((task) => task.attempt), [0, 0]);
+  assert.ok(tasks.every((task) => task.agentId === null && task.workerId === null && task.claimToken === null));
+  assert.ok(tasks.every((task) => task.metadata.failure.code === "APP_SERVER_UPSTREAM_404"));
+  const dispatch = server.registry.listTurnDispatches({ parentRunId: run.id, purpose: "orchestration", limit: 10 })[0];
+  assert.equal(dispatch.status, "failed");
+  await server.close();
+});
+
+test("daemon recovery terminalizes a legacy preparing Run whose kickoff dispatch already failed", async () => {
+  const server = fakeServer({ connect: async () => { throw new Error("control must not be opened for a terminal kickoff"); } }, {
+    schedulerConcurrency: 0,
+    schedulerIntervalMs: 5,
+  });
+  const contract = compileExecutionContract({ key: "legacy", taskKind: "analysis", mutatesWorkspace: false });
+  server.registry.createTaskGraph({
+    id: "legacy_preparing_run",
+    name: "legacy preparing run",
+    cwd: "/repo",
+    status: "preparing",
+    metadata: {
+      dispatchPath: "orchestrated",
+      orchestratorAgentId: "legacy_orchestrator",
+      orchestratorSessionIdentity: { type: "codex_session", agentId: "legacy_orchestrator" },
+    },
+  }, [{
+    id: "legacy_staged_task",
+    status: "staged",
+    prompt: "inspect",
+    cwd: "/repo",
+    metadata: { executionContract: contract, execution: { executionContract: contract } },
+  }]);
+  server.registry.upsertAgent({ id: "legacy_orchestrator", cwd: "/repo", status: "idle" }, { role: "orchestrator" });
+  server.registry.createTurnDispatch({
+    id: "legacy_failed_kickoff",
+    subjectType: "run",
+    subjectId: "legacy_preparing_run",
+    parentRunId: "legacy_preparing_run",
+    purpose: "orchestration",
+    promptFingerprint: "legacy_prompt",
+    submissionKey: "legacy_submission",
+    status: "failed",
+    failure: {
+      category: "environment",
+      code: "APP_SERVER_UPSTREAM_404",
+      message: "unexpected status 404 Not Found: Unknown error, url: https://chatgpt.com/backend-api/codex/responses",
+      retryable: true,
+    },
+  });
+
+  server.startBackground();
+  const run = await waitUntil(() => {
+    const current = server.registry.getRun("legacy_preparing_run");
+    return current.status === "failed" ? current : null;
+  });
+  const task = server.registry.getTask("legacy_staged_task");
+  assert.equal(run.metadata.failure.code, "APP_SERVER_UPSTREAM_404");
+  assert.equal(run.metadata.failure.nextAction, "retry_run");
+  assert.equal(task.status, "failed");
+  assert.equal(task.attempt, 0);
+  assert.equal(task.workerId, null);
+  assert.equal(task.claimToken, null);
+  await server.close();
+});
+
 test("prepared run records an actual Orchestrator thread separately from the Daemon Scheduler", async () => {
   const control = { connect: async () => {} };
   const dashboardServer = { start: async () => {}, url: ({ runId }) => `http://127.0.0.1/dashboard?runId=${runId}`, close: async () => {} };

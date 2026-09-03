@@ -10,6 +10,20 @@ test("failure classification separates infrastructure, coordination, validation,
   assert.equal(classifyFailure(new Error("implementation crashed")).type, "worker");
 });
 
+test("Codex response 404 and exhausted reconnects are stable retryable environment failures", () => {
+  const notFound = classifyFailure(new Error("unexpected status 404 Not Found: Unknown error, url: https://chatgpt.com/backend-api/codex/responses"), "orchestrator_kickoff");
+  assert.equal(notFound.code, "APP_SERVER_UPSTREAM_404");
+  assert.equal(notFound.type, "infrastructure");
+  assert.equal(notFound.category, "environment");
+  assert.equal(notFound.retryable, true);
+
+  const reconnect = classifyFailure(new Error("Reconnecting... 2/5"), "validation");
+  assert.equal(reconnect.code, "APP_SERVER_RECONNECT_INTERRUPTED");
+  assert.equal(reconnect.type, "infrastructure");
+  assert.equal(reconnect.category, "environment");
+  assert.equal(reconnect.retryable, true);
+});
+
 test("result assessment rejects completed turns with real command or test failures", () => {
   const commandFailure = assessTaskResult({
     turn: { status: "completed" },
