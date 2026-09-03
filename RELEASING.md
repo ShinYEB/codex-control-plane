@@ -27,7 +27,7 @@ Only a maintainer may publish a RUVORA Codex ThreadHub release. Automation produ
    ```
 
 5. Verify a fresh clone, daemon startup, one read-only Run, one managed-worktree Run, dashboard navigation, and restart recovery.
-   Run the real Codex App Server managed-worktree gate with `pnpm test:app-server-e2e`; this is a manual release gate and is not part of normal CI.
+   Run the real Codex App Server gates with `pnpm test:app-server-e2e` and `pnpm test:app-server-complex-e2e`; these are manual release gates and are not part of normal CI.
 6. Open a pull request containing the exact evidence and known limitations.
 7. Let the maintainer review and merge. Do not enable automatic merge.
 

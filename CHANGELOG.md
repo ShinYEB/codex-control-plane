@@ -14,3 +14,4 @@ The project follows Semantic Versioning while acknowledging that releases before
 - Licensed the project under Apache-2.0 and documented release-readiness and roadmap policy.
 - Aligned Agent state normalization with the current Codex App Server protocol and made every terminal Task transition release claim ownership atomically.
 - Added a repeatable real Codex App Server managed-worktree release gate.
+- Added a complex real-Codex orchestration gate and a durable Orchestrator kickoff turn so newly provisioned master threads can be resumed for final synthesis.

@@ -55,6 +55,42 @@ The repeatable manual gate is `pnpm test:app-server-e2e`. It creates an isolated
 
 All three defects have regression coverage and the same real managed-worktree scenario passed after the fixes.
 
+## Complex real Codex orchestration gate
+
+A second isolated fixture exercised a high-complexity graph through the source control plane:
+
+```text
+Orchestrator
+  ├─ slug implementation ─────┐
+  ├─ word-count implementation ├─ integrated verification
+  └─ final synthesis ◀─────────┘
+```
+
+Successful Run: `run_7a5b00ac-d080-472b-b6c7-b12c82824b4a`
+
+| Gate | Result | Evidence |
+|---|---|---|
+| Dispatch classification | Pass | `orchestrated`, high complexity, 3 Tasks, 2 parallel roots, 2 dependencies, 3 roles |
+| Master thread | Pass | Orchestrator `01a064da-dee4-7c41-a1c3-b44ee437a1e7` recorded kickoff and final synthesis as normal Codex turns |
+| Parallel workers | Pass | Separate slug and word-count Codex threads ran concurrently in separate managed worktrees |
+| Independent validation | Pass | Both implementation Tasks and the downstream verification received separate validator acceptance |
+| Serialized integration | Pass | Both independent patches were integrated without losing either change |
+| A2A handoff | Pass | The downstream worker received both upstream outputs, validation, artifacts, and integration evidence |
+| Downstream verification | Pass | Integrated suite: 7 passed, 0 failed; no workspace mutation |
+| Final synthesis | Pass | Orchestrator reported the durable Run verdict and named every Data Plane thread |
+| Attempt discipline | Pass | All three Tasks completed on attempt 1 |
+| Restart persistence | Pass | Reopened Registry retained completed Run, synthesis, Tasks, and released claims |
+| Thread navigation surface | Pass | Both Orchestrator and downstream worker were readable as ordinary Codex threads |
+
+The gate exposed one product defect: a newly created Orchestrator had no durable rollout before its first final-synthesis resume. Thread identity alone was insufficient. Provisioning now records a bounded kickoff turn through the durable Turn dispatcher; final synthesis becomes the next orchestration revision in the same native thread.
+
+The gate also confirmed two intended safety behaviors before its successful run:
+
+- a contradictory read-only test contract was rejected before Agent creation or attempt consumption;
+- a worker that reported passing tests was still rejected when command evidence or workspace-integrity evidence conflicted with that report.
+
+The repeatable command is `pnpm test:app-server-complex-e2e`. Registry state is kept outside the Git fixture so control-plane persistence cannot be mistaken for a worker workspace mutation.
+
 The first harness invocation ran package commands from `/tmp` instead of the cloned repository and failed to locate `package.json`. This was a test-command working-directory error, not a product failure. The same untouched clone passed after the command was run from its repository root.
 
 ## Covered product paths

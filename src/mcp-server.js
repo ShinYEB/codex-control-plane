@@ -2564,6 +2564,46 @@ export class McpControlServer {
       orchestratorProvisionedAt: new Date().toISOString(),
     } });
     this.registry.recordEvent("agent", stored.id, "orchestrator.provisioned", { runId: run.id });
+    const taskSummary = this.registry.listTasks({ runId: run.id, limit: 1000 }).map((task) => ({
+      id: task.id,
+      title: task.metadata?.title ?? task.prompt.slice(0, 80),
+      role: task.role,
+      dependsOn: task.dependencies.map((dependency) => dependency.taskId),
+    }));
+    const kickoffPrompt = [
+      `You are the Orchestrator for Run ${run.id}.`,
+      `The daemon has accepted this task graph: ${JSON.stringify(taskSummary)}`,
+      "Record that you own final synthesis for this Run and are waiting for the daemon-managed Data Plane results.",
+      "Do not execute tasks, edit files, open the dashboard, or start follow-up work.",
+    ].join("\n\n");
+    const kickoff = await this.turnDispatcher.execute({
+      subjectType: "run",
+      subjectId: run.id,
+      purpose: "orchestration",
+      parentRunId: run.id,
+      prompt: kickoffPrompt,
+      timeoutMs: 180_000,
+      control,
+      threadAction: "spawn",
+      acquireThread: async () => stored,
+      agent: stored,
+      runOptions: {
+        cwd: run.cwd,
+        approvalPolicy: "never",
+        timeoutMs: 180_000,
+      },
+    });
+    this.registry.updateRun(run.id, { metadata: {
+      orchestratorKickoff: {
+        status: "completed",
+        turnId: kickoff.turnId ?? kickoff.turn?.id ?? null,
+        recordedAt: new Date().toISOString(),
+      },
+    } });
+    this.registry.recordEvent("agent", stored.id, "orchestrator.kickoff_completed", {
+      runId: run.id,
+      turnId: kickoff.turnId ?? kickoff.turn?.id ?? null,
+    });
     return stored;
   }
 
