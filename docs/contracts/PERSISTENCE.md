@@ -68,7 +68,7 @@ Global Run graph도 하나의 outer `BEGIN IMMEDIATE` transaction에서 revision
 - 계약·정책 오류는 claim 전에 terminal 처리하므로 attempt, Agent lease, Codex turn, managed worktree를 소비하지 않는다.
 - Task completion에는 `worker_id + claim_token`이 모두 일치해야 한다.
 - Agent lease에는 owner Task와 owner token이 필요하다.
-- dashboard와 worktree lease는 owner/token/TTL을 사용한다.
+- dashboard server와 worktree lease는 단일 owner/token/TTL을 사용한다. 채팅별 dashboard view lease는 process memory의 TTL token이며, 저장된 Control Plane owner는 신원 fallback으로만 사용한다.
 - Run integration은 process 내 repository별 promise queue로 직렬화하고 SQLite integration journal로 crash recovery와 중복 적용 방지를 보장한다.
 
 ## JSON metadata

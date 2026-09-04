@@ -143,7 +143,8 @@ idle/available -> leased -> running -> validating -> idle
 
 - project preparation queue: `queued -> leased -> completed`, 실패 시 `retry_waiting` 또는 terminal failure
 - worktree lease: `active -> released | expired`; worktree entity 자체는 `retained`/`quarantined`가 될 수 있음
-- dashboard lease: project key당 한 owner/token이며 TTL 이후에만 다른 owner가 획득한다.
+- dashboard server lease: project key당 한 daemon owner/token이며 TTL 이후에만 다른 daemon이 획득한다.
+- dashboard view lease: host가 확인한 각 Control Plane 채팅에 TTL token을 발급한다. 저장된 `control_plane_owner`는 host identity가 없을 때의 fallback일 뿐 새 채팅을 막는 영구 소유권이 아니다.
 - 만료 worktree lease는 자동으로 artifact를 삭제하거나 같은 workspace를 재할당하지 않는다.
 - Agent/worktree lease 전이는 `transitionLease()`로 검증하며 terminal lease를 다시 사용할 때만 `active`로 재획득한다.
 

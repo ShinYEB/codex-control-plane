@@ -926,7 +926,7 @@ const TOOLS = [
         scope: { type: "string", enum: ["active", "archived", "all"], default: "active" },
         limit: { type: "integer", minimum: 1, maximum: 100, default: 50 },
         presentation: { type: "string", enum: ["embedded", "web"], default: "embedded", description: "Prefer embedded Codex UI. Select web only as an explicit fallback." },
-        requesterThreadId: { type: "string", description: "Optional calling Codex thread id, used to enforce Control Plane dashboard ownership." },
+        requesterThreadId: { type: "string", description: "Legacy calling-thread identity fallback. The host-provided Codex origin is authoritative when available." },
       },
       additionalProperties: false,
     },
@@ -1555,18 +1555,24 @@ export class McpControlServer {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
       } else if (name === "show_agent_dashboard") {
-        const dashboardRequesterThreadId = this.#assertDashboardRequester(context.hostOrigin?.threadId ?? args.requesterThreadId, args.cwd);
+        const hostRequesterThreadId = context.hostOrigin?.threadId ?? null;
+        const dashboardRequesterThreadId = this.#assertDashboardRequester(
+          hostRequesterThreadId ?? args.requesterThreadId,
+          args.cwd,
+          { identitySource: hostRequesterThreadId ? "host" : args.requesterThreadId ? "legacy_caller_input" : "registry_owner" },
+        );
         if (args.cwd) await this.#reconcileProject(await getControl(), args.cwd);
-        const dashboard = await this.#ensureDashboardServer();
+        const dashboardPresentation = args.presentation ?? "embedded";
+        const dashboard = dashboardPresentation === "web" ? await this.#ensureDashboardServer() : null;
         const dashboardLeaseToken = this.#issueDashboardViewLease(args.cwd, dashboardRequesterThreadId);
         result = { ...buildDashboardSnapshot(this.registry, {
           cwd: args.cwd, runId: args.runId, limit: args.limit ?? 50,
           scope: args.scope,
           getGraph: (runId, options) => this.runController.graph(runId, options),
         }),
-          dashboardPresentation: args.presentation ?? "embedded",
+          dashboardPresentation,
           dashboardLeaseToken,
-          dashboardUrl: dashboard.url({ cwd: args.cwd, runId: args.runId, scope: args.scope }),
+          ...(dashboard ? { dashboardUrl: dashboard.url({ cwd: args.cwd, runId: args.runId, scope: args.scope }) } : {}),
         };
       } else if (name === "get_dashboard_state") {
         this.#assertDashboardViewLease(args.dashboardLeaseToken, args.cwd);
@@ -3394,7 +3400,7 @@ export class McpControlServer {
     });
   }
 
-  #assertDashboardRequester(threadId, cwd) {
+  #assertDashboardRequester(threadId, cwd, options = {}) {
     const ownerKey = `control_plane_owner:${cwd ?? "*"}`;
     const ownerThreadId = this.registry.getSetting(ownerKey);
     if (!threadId) {
@@ -3408,13 +3414,17 @@ export class McpControlServer {
     if (plane === "data" || plane === "orchestrator" || requester?.metadata?.orchestrationPlane) {
       throw Object.assign(new Error("Worker and Orchestrator threads cannot open or query the Control Plane dashboard"), { code: -32003 });
     }
-    if (ownerThreadId && ownerThreadId !== threadId) {
+    if (ownerThreadId && ownerThreadId !== threadId && options.identitySource !== "host") {
       throw Object.assign(new Error(`The Control Plane dashboard is owned by another thread: ${ownerThreadId}`), { code: -32003 });
     }
-    if (!ownerThreadId) {
+    if (ownerThreadId !== threadId) {
       this.registry.setSetting(ownerKey, threadId);
       if (requester) this.registry.updateAgent(threadId, { role: "control-plane", metadata: { executionPlane: "control" } });
-      this.registry.recordEvent("agent", threadId, "control_plane.owner_claimed", { cwd: cwd ?? null });
+      this.registry.recordEvent("agent", threadId, ownerThreadId ? "control_plane.owner_transferred" : "control_plane.owner_claimed", {
+        cwd: cwd ?? null,
+        previousOwnerThreadId: ownerThreadId ?? null,
+        identitySource: options.identitySource ?? null,
+      });
     }
     return threadId;
   }
