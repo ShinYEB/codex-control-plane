@@ -89,10 +89,13 @@ Authority는 claim이 사실인지 단독으로 결정하는 점수가 아니라
 - 사용자가 현재 요청에서 명시한 결정과 제약
 - 프로젝트의 선언된 계약 문서
 - 기존 또는 새 Agent 스레드의 on-demand read
+- 명시적으로 선택해 가져온 ThreadGraph Context Pack
 - artifact와 integration 결과
 - legacy `project_memories` migration
 
 수집 경로는 source identity, 관측 범위, extractor version과 content digest를 제공해야 한다. source 없이 생성된 claim은 `rejected`로 기록하며 active가 될 수 없다.
+
+ThreadGraph 입력은 별도의 [Context Pack 소비자 계약](./THREADGRAPH_CONTEXT_PACK.md)을 따른다. 유효한 팩도 `observed_thread` candidate provenance일 뿐이며, Context Snapshot을 만들거나 검증하지 않고 실행 권한도 부여하지 않는다.
 
 과거 스레드 색인은 사용자가 `requestedThreadIds`로 명시한 스레드에만 수행한다. `thread/read`는 새 turn이나 Agent를 만들지 않으며, 색인에는 source digest, through-turn, topic과 extractor version만 저장한다. 원문 prompt/output은 자동으로 Claim 본문이나 ThreadKnowledge metadata에 복제하지 않는다. 읽기 실패나 현재 digest 부재는 planning 전에 `requested_thread_unavailable` 또는 `requested_thread_knowledge_missing`으로 종료한다.
 

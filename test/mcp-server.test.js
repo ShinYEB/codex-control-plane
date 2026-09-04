@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,6 +49,7 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "upsert_project_memory",
     "list_project_memories",
     "get_project_context",
+    "import_threadgraph_context_pack",
     "delete_project_memory",
     "route_agent",
     "spawn_agent",
@@ -554,6 +555,39 @@ test("project memory tools build an auditable context pack", async () => {
   assert.equal(context.structuredContent.memories[0].id, stored.structuredContent.id);
   assert.ok(context.structuredContent.memories[0].selectionReasons.length > 0);
   assert.equal(server.registry.getMemory(stored.structuredContent.id).lastUsedAt, null);
+});
+
+test("ThreadGraph MCP import creates only a project-scoped candidate with provenance", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "mcp-threadgraph-pack-"));
+  const cwd = join(directory, "project");
+  mkdirSync(cwd);
+  const pack = JSON.parse(readFileSync(new URL("./fixtures/threadgraph-context-pack-v1-alpha.json", import.meta.url), "utf8"));
+  const server = fakeServer({ connect: async () => {} }, {
+    threadGraphContextPackValidationOptions: { currentTime: "2026-09-04T02:00:00.000Z" },
+  });
+  try {
+    const rejected = await server.handleRequest({
+      method: "tools/call",
+      params: { name: "import_threadgraph_context_pack", arguments: { cwd, expectedScopeId: "project:other", pack } },
+    });
+    assert.equal(rejected.structuredContent.code, "CONTEXT_PACK_SCOPE_MISMATCH");
+    assert.equal(server.registry.listContextClaims().length, 0);
+
+    const imported = await server.handleRequest({
+      method: "tools/call",
+      params: { name: "import_threadgraph_context_pack", arguments: { cwd, expectedScopeId: "project:alpha", pack } },
+    });
+    assert.equal(imported.structuredContent.decision, "allow");
+    assert.equal(imported.structuredContent.claimStatus, "candidate");
+    assert.equal(imported.structuredContent.executionAuthority, false);
+    const claim = server.registry.getContextClaim(imported.structuredContent.claimId);
+    assert.equal(claim.status, "candidate");
+    assert.equal(claim.projectId, server.registry.resolveProject(cwd).id);
+    assert.equal(server.registry.listContextSnapshots().length, 0);
+  } finally {
+    await server.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test("run_agent_task forks an existing agent by default", async () => {
