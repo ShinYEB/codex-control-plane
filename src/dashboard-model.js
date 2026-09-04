@@ -137,14 +137,14 @@ function runSummary(run, taskByRunId = new Map(), agentById = new Map(), result 
     unarchiveAllowed: Boolean(run.archivedAt) && TERMINAL_RUN_STATUSES.has(run.status),
     dispatchPath: run.metadata?.dispatchPath ?? null,
     dispatchPhase: run.metadata?.dispatchPhase ?? null,
-    failure: run.metadata?.dispatchError ? {
+    failure: failureSummary(run.metadata?.failure) ?? (run.metadata?.dispatchError ? {
       type: "configuration",
       category: "configuration",
       stage: run.metadata?.dispatchPhase ?? "dispatch",
       cause: run.metadata.dispatchError,
       nextAction: "repair_contract",
       retryable: false,
-    } : null,
+    } : null),
     workspacePreflight: run.metadata?.workspacePreflight ?? null,
     contextSnapshot: registry ? contextSnapshotSummary(
       registry,

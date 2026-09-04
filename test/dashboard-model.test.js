@@ -101,14 +101,22 @@ test("dashboard exposes a graphless dispatch failure before worker creation", ()
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createRun({
     id: "preflight_failed", cwd: "/repo", status: "failed",
-    metadata: { dispatchPhase: "failed", dispatchError: "Task health requires a separate user-authorized external action" },
+    metadata: {
+      dispatchPhase: "failed",
+      dispatchError: "Superseded context claim was not found",
+      failure: {
+        type: "configuration", category: "configuration", cause: "Superseded context claim was not found",
+        nextAction: "repair_contract", retryable: false,
+      },
+    },
   });
   const snapshot = buildDashboardSnapshot(registry, {
     cwd: "/repo", runId: "preflight_failed", getGraph: buildRunGraph.bind(null, registry),
   });
   assert.equal(snapshot.run.failure.category, "configuration");
-  assert.match(snapshot.run.failure.cause, /Task health/);
+  assert.match(snapshot.run.failure.cause, /Superseded context claim/);
   assert.equal(snapshot.graph.run.failure.nextAction, "repair_contract");
+  assert.deepEqual(snapshot.run.failure, snapshot.graph.run.failure);
   assert.equal(snapshot.graph.nodes.length, 0);
   registry.close();
 });

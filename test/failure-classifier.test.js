@@ -10,6 +10,16 @@ test("failure classification separates infrastructure, coordination, validation,
   assert.equal(classifyFailure(new Error("implementation crashed")).type, "worker");
 });
 
+test("product context reference failures are canonical non-retryable configuration failures", () => {
+  const failure = classifyFailure(Object.assign(new Error("Superseded context claim was not found"), {
+    code: "CONTEXT_SUPERSEDE_TARGET_MISSING",
+  }), "control_dispatch");
+  assert.equal(failure.type, "configuration");
+  assert.equal(failure.category, "configuration");
+  assert.equal(failure.retryable, false);
+  assert.equal(failure.nextAction, "repair_contract");
+});
+
 test("Codex response 404 and exhausted reconnects are stable retryable environment failures", () => {
   const notFound = classifyFailure(new Error("unexpected status 404 Not Found: Unknown error, url: https://chatgpt.com/backend-api/codex/responses"), "orchestrator_kickoff");
   assert.equal(notFound.code, "APP_SERVER_UPSTREAM_404");

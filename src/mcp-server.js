@@ -2374,6 +2374,7 @@ export class McpControlServer {
       .catch((error) => {
         const run = this.registry.getRun(runId);
         if (run && !["completed", "failed", "cancelled"].includes(run.status)) {
+          const classified = classifyFailure(error, "control_dispatch");
           this.registry.updateRun(runId, {
             status: "failed",
             completedAt: new Date().toISOString(),
@@ -2381,11 +2382,10 @@ export class McpControlServer {
               dispatchPhase: "failed",
               dispatchError: error.message,
               failure: {
-                code: error.code ?? "CONTROL_DISPATCH_FAILED",
-                category: error.category ?? "infrastructure",
-                cause: error.causeCode ?? error.message,
-                repairable: error.repairable ?? false,
-                nextAction: error.nextAction ?? null,
+                ...classified,
+                code: classified.code ?? "CONTROL_DISPATCH_FAILED",
+                cause: error.causeCode ?? classified.cause,
+                repairable: error.repairable ?? classified.nextAction === "repair_contract",
                 contextSnapshotId: error.contextSnapshotId ?? null,
               },
             },

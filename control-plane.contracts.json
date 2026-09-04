@@ -1,5 +1,9 @@
 {
   "version": 1,
+  "historicalClaimIds": [
+    "claim_product_run_start_policy_v1",
+    "claim_product_result_access_policy_v1"
+  ],
   "claims": [
     {
       "id": "run_start_policy_v2",
@@ -15,7 +19,7 @@
       "subject": "result_access",
       "revision": 3,
       "body": "The work navigator is the durable status and result surface. Its top-level work list contains one navigable Master Worker per user request. A simple Master opens its actual Codex work thread. A Master Orchestrator opens its actual Codex thread with a subordinate Slave Worker task graph, whose nodes navigate to the corresponding Slave Codex threads. Planner, Validator, and Synthesizer TurnDispatches remain diagnostic evidence rather than peer top-level work items. The daemon is a non-chat scheduler identity and never appends a terminal result to the requesting thread.",
-      "supersedes": ["result_access_policy_v2", "claim_product_result_access_policy_v1"]
+      "supersedes": ["claim_product_result_access_policy_v1"]
     },
     {
       "id": "durable_turn_dispatch_v1",

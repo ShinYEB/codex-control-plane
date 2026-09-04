@@ -34,6 +34,8 @@ user decision / repository manifest / validated evidence
 
 - 계약 변경은 기존 claim의 본문을 덮어쓰지 않고 새 claim ID와 revision을 만든다.
 - 새 claim은 대체할 claim ID를 `supersedes`로 명시한다.
+- repository manifest는 정식 과거 product claim ID를 `historicalClaimIds`에 선언한다. `supersedes`는 이 목록의 ID만 참조할 수 있어 오타와 memory ID 혼용을 동기화 전에 차단한다.
+- 신규 설치에서는 선언된 과거 claim이 없을 수 있으므로 해당 대상을 건너뛴다. 기존 Registry에 대상이 존재하면 정상 supersession 검증을 모두 통과해야 하며 inactive·권위 하향·scope 불일치는 차단한다.
 - 명시적 사용자 결정을 supersede할 수 있는 것은 다른 `user_explicit` claim뿐이다.
 - active claim catalog가 바뀌면 같은 objective라도 Context Snapshot cache를 재사용하지 않는다.
 - manifest 본문을 바꾸면서 ID와 revision을 유지하면 ID/content 충돌로 거부한다.
@@ -76,3 +78,4 @@ user decision / repository manifest / validated evidence
 - Planner/MCP schema
 - 상태·retry·recovery projection
 - 충돌, fingerprint, pre-claim 회귀 테스트
+- fresh Registry manifest 동기화와 기존 historical claim supersession 테스트

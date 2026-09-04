@@ -28,12 +28,25 @@ export function loadProductContractManifest(cwd) {
     throw manifestError(`Unsupported product contract manifest version: ${manifest?.version}`, "PRODUCT_CONTRACT_MANIFEST_VERSION_UNSUPPORTED");
   }
   if (!Array.isArray(manifest.claims) || !manifest.claims.length) throw manifestError("Product contract manifest requires claims");
+  const historicalClaimIds = manifest.historicalClaimIds ?? [];
+  if (!Array.isArray(historicalClaimIds) || historicalClaimIds.some((id) => typeof id !== "string" || !/^claim_product_[A-Za-z0-9_-]+$/.test(id))) {
+    throw manifestError("Product contract historicalClaimIds must contain canonical product claim IDs", "PRODUCT_CONTRACT_HISTORY_INVALID");
+  }
+  const knownHistoricalClaimIds = new Set(historicalClaimIds);
   const subjects = new Set();
   for (const claim of manifest.claims) {
     if (!claim?.id || !claim?.subject || !claim?.body || !["decision", "constraint", "architecture"].includes(claim.kind)) {
       throw manifestError("Each product contract claim requires id, subject, body, and a contract-bearing kind");
     }
     if (subjects.has(claim.subject)) throw manifestError(`Duplicate product contract subject: ${claim.subject}`);
+    if (claim.supersedes !== undefined && (!Array.isArray(claim.supersedes) || claim.supersedes.some((id) => typeof id !== "string"))) {
+      throw manifestError(`Product contract claim ${claim.id} has invalid supersedes`, "PRODUCT_CONTRACT_SUPERSEDES_INVALID");
+    }
+    for (const targetId of claim.supersedes ?? []) {
+      if (!knownHistoricalClaimIds.has(targetId)) {
+        throw manifestError(`Product contract claim ${claim.id} references undeclared historical claim ${targetId}`, "PRODUCT_CONTRACT_SUPERSEDE_UNKNOWN");
+      }
+    }
     subjects.add(claim.subject);
   }
   return { path, manifest, fingerprint: createHash("sha256").update(stable(manifest)).digest("hex") };
@@ -64,7 +77,8 @@ export function syncProductContractManifest(registry, cwd) {
       revision: entry.revision ?? 1,
       digest: loaded.fingerprint,
     });
-    if (claim.status === "candidate") registry.activateContextClaim(claim.id, { supersedes: entry.supersedes ?? [] });
+    const existingHistoricalTargets = (entry.supersedes ?? []).filter((targetId) => registry.getContextClaim(targetId));
+    if (claim.status === "candidate") registry.activateContextClaim(claim.id, { supersedes: existingHistoricalTargets });
   }
   return { ...loaded, projectId: project.id };
 }

@@ -168,6 +168,7 @@ nextAction
 ```
 
 invalid snapshot은 실패를 원래 Control Plane에 전달하기 위한 graphless terminal Run만 남길 수 있다. 실행 Task, attempt, Agent lease, turn 또는 worktree는 만들지 않는다.
+graphless dispatch failure는 Registry에 저장된 canonical failure 하나를 Run 카드와 graph projection이 함께 사용한다. Context/Product Contract 참조 무결성 오류는 `configuration`, `retryable=false`, `nextAction=repair_contract`로 기록하며 `dispatchError` 문자열로 다시 분류하지 않는다.
 
 ## Fingerprint
 

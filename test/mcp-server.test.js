@@ -1253,6 +1253,37 @@ test("prepared run records an actual Orchestrator thread separately from the Dae
   await server.close();
 });
 
+test("control dispatch persists one canonical product-contract failure before creating work", async () => {
+  const error = Object.assign(new Error("Superseded context claim was not found"), {
+    code: "CONTEXT_SUPERSEDE_TARGET_MISSING",
+  });
+  const server = fakeServer({ connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) }, {
+    contextResolver: { resolve: () => { throw error; } },
+  });
+  const accepted = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "dispatch_control_request", arguments: { objective: "verify contracts", cwd: "/repo", mode: "orchestrated" } },
+  });
+  const run = await waitUntil(() => {
+    const current = server.registry.getRun(accepted.structuredContent.runId);
+    return current.status === "failed" ? current : null;
+  });
+  assert.equal(run.metadata.failure.type, "configuration");
+  assert.equal(run.metadata.failure.category, "configuration");
+  assert.equal(run.metadata.failure.nextAction, "repair_contract");
+  assert.equal(run.metadata.failure.retryable, false);
+  assert.equal(run.metadata.failure.repairable, true);
+  assert.equal(server.registry.listTasks({ runId: run.id, limit: 100 }).length, 0);
+  assert.equal(server.registry.listAgents({ cwd: "/repo", limit: 100 }).length, 0);
+
+  const dashboard = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "show_agent_dashboard", arguments: { cwd: "/repo", runId: run.id } },
+  });
+  assert.deepEqual(dashboard.structuredContent.run.failure, dashboard.structuredContent.graph.run.failure);
+  await server.close();
+});
+
 test("dispatch_control_request returns before planning and automatically starts after atomic preparation", async () => {
   let releasePlan;
   const planning = new Promise((resolve) => { releasePlan = resolve; });
