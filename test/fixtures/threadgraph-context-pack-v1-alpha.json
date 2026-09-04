@@ -1,0 +1,16 @@
+{
+  "packId": "ctx_ajng72rz7qrnpsrjdii7sis4zgfjn3wjkf5pfyxniietmjpi4ima",
+  "schemaVersion": "threadgraph-context-pack/1-alpha",
+  "buildIdentity": "codex-threadgraph/0.1.0",
+  "scopeId": "project:alpha",
+  "graphRevisionId": "revision_20260904",
+  "selectedClaimIds": ["claim_architecture"],
+  "selectedEvidenceIds": ["evidence_test"],
+  "purpose": "continue architecture work",
+  "derivedContent": { "summary": "SQLite is the local graph store." },
+  "unresolvedConflicts": [],
+  "missingSources": [],
+  "observationCutoff": "2026-09-04T00:00:00.000Z",
+  "generatedAt": "2026-09-04T01:00:00.000Z",
+  "contentDigest": "sha256:8f3dab73ee733da4cfd9ceeeab58940cce9f277c83153a16238b6589e7dd5ab7"
+}
