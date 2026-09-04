@@ -31,6 +31,7 @@ import { assertExecutionContract, compileAndValidateExecutionContract, execution
 import { classifyRunNotification, NOTIFICATION_KINDS } from "./notification-policy.js";
 import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+import { ThreadGraphContextPackImporter } from "./threadgraph-context-pack.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
@@ -228,6 +229,48 @@ const TOOLS = [
       additionalProperties: false,
     },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
+    name: "import_threadgraph_context_pack",
+    title: "Import selected ThreadGraph context",
+    description: "Validate a user-selected ThreadGraph Context Pack and store it only as a provenance-backed candidate claim. This never grants execution authority or activates the claim.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        cwd: { type: "string", minLength: 1, description: "ThreadHub project that will receive the candidate context." },
+        expectedScopeId: { type: "string", minLength: 1, description: "ThreadGraph project scope explicitly bound to this import." },
+        allowMissingSources: { type: "boolean", default: false, description: "Allow a partial candidate import while preserving missing-source warnings." },
+        pack: {
+          type: "object",
+          properties: {
+            schemaVersion: { type: "string", const: "threadgraph-context-pack/1-alpha" },
+            packId: { type: "string", minLength: 1 },
+            buildIdentity: { type: "string", minLength: 1 },
+            scopeId: { type: "string", minLength: 1 },
+            graphRevisionId: { type: "string", minLength: 1 },
+            selectedClaimIds: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 500 },
+            selectedEvidenceIds: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 500 },
+            purpose: { type: "string", minLength: 1, maxLength: 1000 },
+            derivedContent: {
+              type: "object",
+              properties: { summary: { type: "string", minLength: 1, maxLength: 6000 } },
+              required: ["summary"],
+              additionalProperties: false,
+            },
+            unresolvedConflicts: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 100 },
+            missingSources: { type: "array", items: { type: "string", minLength: 1 }, maxItems: 100 },
+            observationCutoff: { type: "string", format: "date-time" },
+            generatedAt: { type: "string", format: "date-time" },
+            contentDigest: { type: "string", minLength: 1 },
+          },
+          required: ["schemaVersion", "packId", "buildIdentity", "scopeId", "graphRevisionId", "selectedClaimIds", "selectedEvidenceIds", "purpose", "derivedContent", "unresolvedConflicts", "missingSources", "observationCutoff", "generatedAt", "contentDigest"],
+          additionalProperties: false,
+        },
+      },
+      required: ["cwd", "expectedScopeId", "pack"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   {
     name: "delete_project_memory",
@@ -924,6 +967,8 @@ export class McpControlServer {
     this.contextManager = options.contextManager ?? new ContextManager(this.registry);
     this.contextResolver = options.contextResolver ?? new ContextResolver(this.registry);
     this.threadKnowledgeIndexer = options.threadKnowledgeIndexer ?? new ThreadKnowledgeIndexer(this.registry);
+    this.threadGraphContextPackImporter = options.threadGraphContextPackImporter ?? new ThreadGraphContextPackImporter(this.registry);
+    this.threadGraphContextPackValidationOptions = options.threadGraphContextPackValidationOptions ?? {};
     this.roleTemplates = options.roleTemplates ?? new RoleTemplateManager(this.registry);
     this.roleTemplates.seedBuiltins();
     this.worktreeManager = options.worktreeManager ?? new WorktreeManager(this.registry);
@@ -1299,6 +1344,14 @@ export class McpControlServer {
           touch: false,
         });
         result = { ...contextPack, renderedPrompt: this.contextManager.format(contextPack) };
+      } else if (name === "import_threadgraph_context_pack") {
+        const project = this.registry.resolveProject(args.cwd);
+        result = this.threadGraphContextPackImporter.import(args.pack, {
+          ...this.threadGraphContextPackValidationOptions,
+          scopeId: args.expectedScopeId,
+          projectId: project.id,
+          allowMissingSources: args.allowMissingSources === true,
+        });
       } else if (name === "delete_project_memory") {
         result = this.registry.deleteMemory(args.memoryId);
         if (!result) throw new Error(`Memory not found: ${args.memoryId}`);

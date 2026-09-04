@@ -18,19 +18,20 @@ This directory is the design baseline for the **current implementation** of RUVO
 12. [Turn Dispatch](./contracts/TURN_DISPATCH.md) — TurnDispatch state, durable fields, cancellation, and restart decisions
 13. [Completion Gate](./contracts/COMPLETION_GATE.md) — one decision over Turn, command, output, workspace, validation, and integration evidence
 14. [Context Resolution](./contracts/CONTEXT_RESOLUTION.md) — knowledge collection, authority, conflicts, and snapshots
-15. [Contract Authority](./contracts/CONTRACT_AUTHORITY.md) — manifests, authority, revisions, and pre-execution conflict rejection
-16. [Global Runs](./contracts/GLOBAL_RUNS.md) — Global Run state, authority, and cross-project dependencies
-17. [Target Persistence](./contracts/TARGET_PERSISTENCE.md) — goal schemas, atomicity, migration, and compatibility
-18. [State Machines](./contracts/STATE_MACHINES.md) — Run, Task, Agent, and Lease states and transitions
-19. [Execution Contract](./contracts/EXECUTION_CONTRACT.md) — authority, sandbox, workspace, and side-effect contracts
-20. [Persistence](./contracts/PERSISTENCE.md) — SQLite ownership, atomicity, idempotency, and storage model
-21. [Result Delivery](./contracts/RESULT_DELIVERY.md) — result projection, notifications, and work-thread access
-22. [Failure Recovery](./operations/FAILURE_RECOVERY.md) — failure classes, retry, restart recovery, and worktree recovery
-23. [Runtime Lifecycle](./operations/RUNTIME_LIFECYCLE.md) — runtime identity, daemon handover, deployment, and reinstall
-24. [Stabilization Gate](./STABILIZATION_GATE.md) — final E2E evidence for stabilization stages 1–8
-25. [Global Orchestration Gate](./GLOBAL_ORCHESTRATION_GATE.md) — implementation order and final E2E gate
-26. [G7 E2E Evidence](./G7_E2E_EVIDENCE.md) — automated evidence for the final twelve scenarios
-27. [Review Checklist](./REVIEW_CHECKLIST.md) — decisions required at the next design review
+15. [ThreadGraph Context Pack](./contracts/THREADGRAPH_CONTEXT_PACK.md) — independent validation and provenance-only import
+16. [Contract Authority](./contracts/CONTRACT_AUTHORITY.md) — manifests, authority, revisions, and pre-execution conflict rejection
+17. [Global Runs](./contracts/GLOBAL_RUNS.md) — Global Run state, authority, and cross-project dependencies
+18. [Target Persistence](./contracts/TARGET_PERSISTENCE.md) — goal schemas, atomicity, migration, and compatibility
+19. [State Machines](./contracts/STATE_MACHINES.md) — Run, Task, Agent, and Lease states and transitions
+20. [Execution Contract](./contracts/EXECUTION_CONTRACT.md) — authority, sandbox, workspace, and side-effect contracts
+21. [Persistence](./contracts/PERSISTENCE.md) — SQLite ownership, atomicity, idempotency, and storage model
+22. [Result Delivery](./contracts/RESULT_DELIVERY.md) — result projection, notifications, and work-thread access
+23. [Failure Recovery](./operations/FAILURE_RECOVERY.md) — failure classes, retry, restart recovery, and worktree recovery
+24. [Runtime Lifecycle](./operations/RUNTIME_LIFECYCLE.md) — runtime identity, daemon handover, deployment, and reinstall
+25. [Stabilization Gate](./STABILIZATION_GATE.md) — final E2E evidence for stabilization stages 1–8
+26. [Global Orchestration Gate](./GLOBAL_ORCHESTRATION_GATE.md) — implementation order and final E2E gate
+27. [G7 E2E Evidence](./G7_E2E_EVIDENCE.md) — automated evidence for the final twelve scenarios
+28. [Review Checklist](./REVIEW_CHECKLIST.md) — decisions required at the next design review
 
 ## Authority and change rules
 
