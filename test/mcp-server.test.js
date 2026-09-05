@@ -801,10 +801,10 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
   assert.match(result.contents[0].text, /callTool\("open_desktop_thread"/);
   assert.match(result.contents[0].text, /graph-board/);
   assert.match(result.contents[0].text, /실행 구조/);
-  assert.match(result.contents[0].text, /CONTROL PLANE/);
-  assert.match(result.contents[0].text, /DAEMON SCHEDULER/);
-  assert.match(result.contents[0].text, /ORCHESTRATOR CODEX THREAD/);
-  assert.match(result.contents[0].text, /DATA PLANE/);
+  assert.match(result.contents[0].text, /전체 작업/);
+  assert.match(result.contents[0].text, /하위 작업/);
+  assert.doesNotMatch(result.contents[0].text, /CONTROL PLANE|DAEMON SCHEDULER|ORCHESTRATOR CODEX THREAD/);
+  assert.doesNotMatch(result.contents[0].text, /DATA PLANE/);
   assert.match(result.contents[0].text, /plane-map/);
   assert.match(result.contents[0].text, />작업함</);
   assert.doesNotMatch(result.contents[0].text, /필요할 때만/);
@@ -865,8 +865,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.dashboardUrl, undefined);
   assert.equal(dashboardStarts, 0, "embedded presentation must not start the local web dashboard");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v7.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v7.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v8.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v8.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({

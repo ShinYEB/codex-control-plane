@@ -456,7 +456,7 @@
     const failureActionLabel = (value) => ({ retry: "일시 오류 재시도", rework: "피드백 기반 재작업", repair_contract: "실행 계약 수정 필요", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
     const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "skipped", "interrupted", "canceled", "cancelled", "blocked_by_policy", "integration_blocked"]);
     const isTerminalStatus = (status) => terminalStatuses.has(status);
-    const threadLink = (threadId, label = "Codex 스레드 열기", { readOnly = false } = {}) => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}"${readOnly ? ' data-daemon-managed="true"' : ""} title="${readOnly ? "실행 중인 실제 Codex 스레드를 관찰용으로 엽니다. 명령 입력은 데몬이 관리합니다." : "실제 Codex 스레드를 엽니다"}">${label}</button>`;
+    const threadLink = (threadId, label = "Codex 스레드 열기", { readOnly = false } = {}) => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}"${readOnly ? ' data-daemon-managed="true"' : ""} title="${readOnly ? "실행 중인 실제 Codex 스레드를 관찰용으로 엽니다. 진행 중에는 기록만 확인할 수 있습니다.합니다." : "실제 Codex 스레드를 엽니다"}">${label}</button>`;
     const dispatchStage = (status) => ({ accepted: 0, draft: 0, planning: 1, preparing: 2, agents_prepared: 2, running: 3, completed: 4, failed: 4, cancelled: 4, canceled: 4 })[status] ?? 0;
     const runStage = (status) => ["accepted", "draft", "planning", "preparing", "agents_prepared"].includes(status) ? 0 : ["running"].includes(status) ? 1 : ["completed"].includes(status) ? 3 : 2;
 
@@ -655,6 +655,8 @@
       state.contextSnapshotDetail = payload.detail;
     }
 
+    function publicWorkName(name) { return String(name || "").replace(/^\[🤖[^\]]*\]\s*/, ""); }
+
     function renderWorkList() {
       const runs = state.runs.slice(0, 12);
       el("history-count").textContent = String(state.runs.length);
@@ -665,14 +667,14 @@
       el("run-lanes").innerHTML = runs.map((run) => {
         const stage = dispatchStage(run.status);
         const terminal = ["completed", "failed", "cancelled", "canceled"].includes(run.status);
-        const path = run.dispatchPath === "orchestrated" ? "오케스트레이터 경유" : run.dispatchPath === "direct" ? "작업 에이전트에 바로 전달" : ["accepted", "planning", "preparing"].includes(run.status) ? "실행 경로 결정 중" : "기존 실행";
+        const path = "작업";
         const track = [0, 1, 2, 3].map((index) => `<span class="${terminal || index < stage ? "done" : index === stage ? "current" : ""}"></span>`).join("");
         const participants = run.executionParticipants ?? {};
         const orchestratorName = participants.orchestrator?.name || (participants.orchestrator?.id ? `스레드 ${shortId(participants.orchestrator.id)}` : null);
         const workers = participants.dataAgents ?? [];
         const workerNames = workers.slice(0, 2).map((agent) => agent.name || agent.role || `스레드 ${shortId(agent.id)}`).join(" · ");
         const workerSuffix = workers.length > 2 ? ` 외 ${workers.length - 2}개` : "";
-        const actorLine = `<div class="run-card-actors"><span>${orchestratorName ? `조정 · ${escapeHtml(orchestratorName)}` : run.dispatchPath === "direct" ? "조정 · 직접 실행" : "조정 스레드 준비 중"}</span><span>${workers.length ? `작업 · ${escapeHtml(workerNames)}${escapeHtml(workerSuffix)}` : "작업 에이전트 배정 전"}</span></div>`;
+        const actorLine = `<div class="run-card-actors"><span>${workers.length ? `하위 작업 ${workers.length}개` : "작업 준비 중"}</span></div>`;
         return `<button class="run-card ${run.id === state.runId ? "selected" : ""}" data-run-id="${escapeHtml(run.id)}" aria-pressed="${run.id === state.runId}"><div class="run-card-top"><span class="run-card-name">${escapeHtml(run.name || `실행 ${shortId(run.id)}`)}</span></div><div class="run-card-meta"><span class="run-status-badge">${escapeHtml(statusLabel(run.status))}</span></div><div class="run-card-path">${escapeHtml(path)} · ${date(run.updatedAt || run.createdAt)}</div>${actorLine}<div class="run-card-progress"><div class="dispatch-track" aria-label="접수, 계획, 준비, 실행">${track}</div><small>${Math.min(100, stage * 25)}%</small></div></button>`;
       }).join("");
       [...document.querySelectorAll(".run-card")].forEach((card) => card.addEventListener("click", async () => {
@@ -702,11 +704,11 @@
           const failure = graph.run.failure;
           el("count").textContent = `백그라운드 실행 준비 · ${phase}`;
           const preparingProgress = failed ? 0 : Math.min(92, dispatchStage(graph.run.status) * 28 + 8);
-          const failurePanel = failed ? `<section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">${escapeHtml(failure?.stage === "planning" ? "계획 계약 검증 실패" : "실행 준비 실패")}</div><div class="plane-map-caption">작업 스레드를 만들기 전에 안전하게 중단했습니다.</div></div><span class="pill">실패</span></div><div class="detail-item"><span>원인</span><strong>${escapeHtml(failure?.cause || "실패 원인이 기록되지 않았습니다.")}</strong></div><div class="attention-bar needs-action"><span>${escapeHtml(failureActionLabel(failure?.nextAction || "repair_contract"))}</span><span>워커 생성 0개</span></div></section>` : `<section class="plane-map-wrap"><div class="plane-map-head"><div><div class="plane-map-title">백그라운드 실행 준비</div><div class="plane-map-caption">데몬이 실행 순서와 작업 스레드를 준비하고 있습니다.</div></div><span class="pill">${escapeHtml(phase)}</span></div><div class="plane-map"><div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 접수 완료</div><div class="plane-help">실행 ID 발급 · 경로 결정 · 중앙 계획</div></div><span class="plane-state">접수 가능</span></div><div class="plane-connector"><strong>→</strong><span>계획 전달</span></div><div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">영속 큐와 실행 잠금 관리</div><div class="plane-help">작업 순서 · claim · fencing · 재시도 상태를 관리하는 데몬입니다.</div></div><span class="plane-state">Codex 채팅 아님</span></div><div class="plane-connector"><strong>→</strong><span>스레드 준비</span></div><div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX THREAD</div><div class="plane-name">실제 조정 스레드 준비 중</div><div class="plane-help">복합 실행에서 작업 분해와 결과 종합을 수행하는 별도 Codex 스레드입니다.</div></div><span class="plane-state">준비 중</span></div><div class="plane-connector"><strong>→</strong><span>작업 배정</span></div><div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">에이전트 배정 대기</div><div class="plane-help">전문 Codex 스레드가 실제 작업을 수행합니다.</div></div><span class="plane-state">배정 대기</span></div></div></section>`;
+          const failurePanel = failed ? `<section class="attention-bar needs-action"><strong>실행 준비 실패</strong><span>${escapeHtml(failure?.cause || "작업을 준비하지 못했습니다.")}</span><span>${escapeHtml(failureActionLabel(failure?.nextAction || "repair_contract"))}</span></section>` : `<section class="attention-bar"><span>작업을 준비하고 있습니다.</span></section>`;
           el("list").innerHTML = `<div class="graph-view"><div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "접수된 요청")}</strong><small>${escapeHtml(phase)}</small></div><div class="stage-line"><span class="current">접수</span>→<span>계획</span>→<span>구성</span>→<span>실행</span></div>${graph.run.objective ? `<div class="graph-objective">${escapeHtml(graph.run.objective)}</div>` : ""}<div class="graph-progress-row"><div class="graph-progress"><span style="width:${preparingProgress}%"></span></div><strong>${preparingProgress}%</strong></div></div>${failurePanel}</div>`;
         } else {
           el("count").textContent = "작업 흐름 없음";
-          el("list").innerHTML = '<div class="empty">아직 표시할 실행이 없습니다.<br>컨트롤 플레인 채팅에 작업을 입력하면 바로 접수됩니다.</div>';
+          el("list").innerHTML = '<div class="empty">아직 표시할 실행이 없습니다.<br>채팅에 원하는 작업을 입력하세요.</div>';
         }
         return;
       }
@@ -732,13 +734,13 @@
         const verdict = node.validation?.decision === "accept" ? "검증 통과" : node.validation?.decision === "reject" ? `기준 미충족 ${node.validation.unmetCriteria?.length || 0}` : node.failureSummary?.nextAction ? failureActionLabel(node.failureSummary.nextAction) : null;
         const dependencies = (node.dependsOn || node.dependencies || []).map((id) => nodesById.get(id)?.title || shortId(id));
         const fullAgentName = node.agent?.name || "";
-        const agentLabel = fullAgentName.match(/^\[[^\]]+\]/)?.[0] || fullAgentName || `역할 · ${node.role || "일반"}`;
+        const agentLabel = "하위 작업";
         return `<button class="graph-node ${escapeHtml(node.status)}" data-node-id="${escapeHtml(node.id)}" aria-label="${escapeHtml(node.title)} · ${escapeHtml(statusLabel(node.status))}">
           <div class="graph-node-head"><span class="graph-node-title">${escapeHtml(node.title)}</span><span class="graph-node-status">${escapeHtml(statusLabel(node.status))}</span></div>
           <div class="graph-node-agent">담당 · ${escapeHtml(agentLabel)}</div>
           <div class="graph-node-dependencies">${dependencies.length ? `선행 작업 · ${escapeHtml(dependencies.join(" · "))}` : "선행 작업 없음 · 바로 시작 가능"}</div>
           ${active ? '<div class="graph-node-pulse"></div>' : ''}
-          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${node.resultSession?.threadId ? "선택하여 스레드 열기" : escapeHtml(verdict || `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`)}</strong></div>
+          <div class="graph-node-foot"><span>${escapeHtml(workspace)}</span><strong>${node.resultSession?.threadId ? "작업 열기" : escapeHtml(verdict || `시도 ${node.attempt || 0}/${node.maxAttempts || 1}`)}</strong></div>
         </button>`;
       };
       const dependencyFlow = columns.map((column, level) => `${level ? '<div class="dependency-connector"><strong>↓</strong><span>선행 단계 완료 후 시작</span></div>' : ""}<section class="dependency-level"><div class="dependency-level-head"><strong>단계 ${level + 1}</strong><span>${column.length > 1 ? `${column.length}개 작업 병렬 실행` : "1개 작업"}</span></div><div class="dependency-grid">${column.map(renderNode).join("")}</div></section>`).join("");
@@ -754,18 +756,8 @@
         : graph.summary.total ? Math.round(((graph.summary.finished ?? graph.summary.completed ?? 0) / graph.summary.total) * 100) : 0;
       const progress = Math.max(0, Math.min(100, computedProgress));
       const attention = graph.nodes.filter((node) => ["blocked_by_policy", "integration_blocked", "completed_with_warnings", "rejected", "validation_failed", "failed", "interrupted"].includes(node.status)).length;
-      const planeFlow = `<section class="plane-map-wrap" aria-label="Control Plane, Daemon Scheduler, Orchestrator Codex thread, Data Plane execution structure">
-        <div class="plane-map-head"><div><div class="plane-map-title">실행 구조와 실제 identity</div><div class="plane-map-caption">Daemon Scheduler는 영속 큐를 관리하는 프로세스이고, Orchestrator는 필요할 때 생성되는 실제 Codex 스레드입니다.</div></div><span class="pill">${orchestrated ? "오케스트레이터 경유" : "작업 에이전트에 바로 전달"}</span></div>
-        <div class="plane-map">
-          <div class="plane-step control"><div class="plane-number">1</div><div><div class="plane-kicker">CONTROL PLANE</div><div class="plane-name">요청 판단과 위임</div><div class="plane-help">작업 규모 산정 · 실행 경로 선택 · 전역 맥락 관리</div></div><span class="plane-state">위임 완료</span></div>
-          <div class="plane-connector"><strong>→</strong><span>영속 큐 전달</span></div>
-          <div class="plane-step scheduler"><div class="plane-number">2</div><div><div class="plane-kicker">DAEMON SCHEDULER</div><div class="plane-name">큐 · claim · fencing 관리</div><div class="plane-help">Codex 채팅이 아니라 재시작 복구와 bounded retry/rework를 관리하는 데몬 실행자입니다.</div></div><span class="plane-state">${escapeHtml(scheduler?.instanceId ? `daemon ${shortId(scheduler.instanceId)}` : "identity 미기록")}</span></div>
-          <div class="plane-connector"><strong>→</strong><span>${orchestrated ? "조정 스레드 배정" : "직접 배정"}</span></div>
-          <div class="plane-step orchestrator"><div class="plane-number">3</div><div><div class="plane-kicker">ORCHESTRATOR CODEX THREAD</div><div class="plane-name">${orchestrated ? escapeHtml(orchestrator?.name || "실행 조정 스레드") : "단순 실행: 별도 스레드 없음"}</div><div class="plane-help">${orchestrated ? "실제 Codex 스레드가 작업 분해 · 병렬 배치 · 결과 종합을 담당합니다." : "Daemon Scheduler가 Data Plane 작업을 직접 배정합니다."}</div></div>${orchestratorSession?.agentId ? threadLink(orchestratorSession.agentId, `오케스트레이터 스레드 ${isTerminalStatus(graph.run.status) ? "열기" : "보기"}`, { readOnly: !isTerminalStatus(graph.run.status) }) : '<span class="plane-state">생성되지 않음</span>'}</div>
-          <div class="plane-connector"><strong>→</strong><span>작업 배정</span></div>
-          <div class="plane-step data"><div class="plane-number">4</div><div><div class="plane-kicker">DATA PLANE</div><div class="plane-name">작업 에이전트 ${escapeHtml(graph.nodes.length)}개</div><div class="plane-help">전문화된 Codex 스레드가 실제 작업과 검증을 수행합니다.</div></div><span class="plane-state">${escapeHtml(graph.summary.active || 0)}개 진행 · ${escapeHtml(graph.summary.waiting || 0)}개 대기</span></div>
-        </div>
-      </section><div class="attention-bar ${attention ? "needs-action" : ""}"><span>${attention ? `확인이 필요한 작업이 ${attention}개 있습니다.` : graph.run.status === "completed" ? "모든 작업이 완료되었습니다." : "그래프 준비 후 사용자 확인 없이 자동으로 진행합니다."}</span>${complexity ? `<span>복잡도 ${escapeHtml(complexity.level)} · ${escapeHtml(complexity.score)}/100</span>` : `<span>${orchestrated ? "오케스트레이터 경유" : "바로 전달"}</span>`}</div>`;
+      const workThreadId = orchestratorSession?.agentId || (graph.nodes.length === 1 ? graph.nodes[0].resultSession?.threadId : null);
+      const planeFlow = `<section class="plane-map-wrap" aria-label="전체 작업과 하위 작업"><div class="plane-map-head"><div class="plane-map-title">전체 작업</div>${workThreadId ? threadLink(workThreadId, graph.run.status === "completed" ? "결과 보기" : "작업 열기", { readOnly: !isTerminalStatus(graph.run.status) }) : "<span>작업 준비 중</span>"}</div></section><div class="attention-bar ${attention ? "needs-action" : ""}"><span>${attention ? `확인이 필요한 작업이 ${attention}개 있습니다.` : graph.run.status === "completed" ? "모든 작업이 완료되었습니다." : "작업을 진행하고 있습니다."}</span><span>하위 작업 ${graph.nodes.length}개</span></div>`;
       el("count").textContent = `전체 ${graph.summary.total}개 중 ${graph.summary.finished ?? graph.summary.completed}개 종료 · ${graph.summary.completed}개 완료`;
       el("list").innerHTML = `<div class="graph-view">
         <div class="graph-summary"><div class="graph-summary-title"><strong>${escapeHtml(graph.run.name || "실행 계획")}</strong><small>${escapeHtml(statusLabel(graph.run.status))}</small></div><div class="stage-line">${stages}</div>${graph.run.objective && graph.run.objective !== graph.run.name ? `<div class="graph-objective">${escapeHtml(graph.run.objective)}</div>` : ""}<div class="graph-progress-row"><div class="graph-progress"><span style="width:${progress}%"></span></div><strong>${progress}%</strong></div></div>
@@ -835,15 +827,15 @@
 
       el("list").innerHTML = rows.map((row, index) => state.tab === "sessions" ? `
         <div class="row agent-row" data-index="${index}">
-          <div><div class="name">${escapeHtml(row.name || `Codex 스레드 ${shortId(row.threadId)}`)}</div><div class="meta">${escapeHtml(row.displayRole || row.threadId)}</div></div>
+          <div><div class="name">${escapeHtml(publicWorkName(row.name) || "작업")}</div><div class="meta">${"작업 기록"}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}${row.active ? '<span class="pill">진행 중</span>' : '<span class="pill">종료됨</span>'}</div>
-          <div><div class="meta">${escapeHtml(row.taskIds?.length ? `연결 작업 ${row.taskIds.map(shortId).join(" · ")}` : "Run 단계 스레드")}</div><span class="pill">${escapeHtml(row.turnId ? `Turn ${shortId(row.turnId)}` : "Turn 대기")}</span></div>
-          <div class="row-actions">${threadLink(row.threadId, row.active ? "진행 스레드 보기" : "스레드 열기", { readOnly: row.active })}${row.active ? '<span class="pill">명령 입력은 데몬이 관리</span>' : ''}</div>
+          <div><div class="meta">${escapeHtml(row.taskIds?.length ? `연결 작업 ${row.taskIds.map(shortId).join(" · ")}` : "작업 진행 기록")}</div><span class="pill">${escapeHtml(row.turnId ? "실행 기록 있음" : "준비 중")}</span></div>
+          <div class="row-actions">${threadLink(row.threadId, row.active ? "작업 열기" : "기록 보기", { readOnly: row.active })}${row.active ? '<span class="pill">진행 중에는 기록만 확인할 수 있습니다.</span>' : ''}</div>
         </div>` : state.tab === "progress" ? `
         <div class="row" data-index="${index}">
           <div><div class="name">${escapeHtml(row.title || row.prompt || `Task ${shortId(row.id)}`)}</div><div class="meta">${escapeHtml(row.failure?.cause || row.id)}</div></div>
           <div class="status"><span class="dot ${normalize(row.status)}"></span>${escapeHtml(statusLabel(row.status))}</div>
-          <div><div class="meta">Agent ${escapeHtml(shortId(row.agentId))} · ${escapeHtml(`${row.attempt || 0}/${row.maxAttempts || 1}`)}</div><span class="pill">${escapeHtml(row.failure?.nextAction ? failureActionLabel(row.failure.nextAction) : row.role || row.mode || "pending")}</span></div>
+          <div><div class="meta">시도 ${escapeHtml(`${row.attempt || 0}/${row.maxAttempts || 1}`)}</div><span class="pill">${escapeHtml(row.failure?.nextAction ? failureActionLabel(row.failure.nextAction) : statusLabel(row.status))}</span></div>
           <div class="row-actions">${row.resultSession?.threadId ? threadLink(row.resultSession.threadId, "스레드 열기", { readOnly: !row.resultSession.available }) : '<span class="meta">배정 전</span>'}</div>
         </div>` : state.tab === "plans" ? `
         <div class="row" data-index="${index}">
@@ -932,7 +924,7 @@
         <div class="detail-item"><span>담당 에이전트</span><strong>${escapeHtml(row.agent?.name || shortId(row.agentId))}</strong></div>
         <div class="detail-item"><span>역할</span><strong>${escapeHtml(row.role || "일반")}</strong></div>
         <div class="detail-item"><span>작업 공간</span><strong>${escapeHtml(row.workspace?.mode || row.metadata?.execution?.workspaceMode || "shared")}</strong></div>
-      </div>${resultSession?.threadId ? `<div class="dialog-actions">${threadLink(resultSession.threadId, `작업 에이전트 스레드 ${resultSession.available ? "열기" : "보기"}`, { readOnly: !resultSession.available })}</div><div class="form-help">${resultSession.available ? "이 작업을 실제로 수행한 Codex 스레드의 대화, 명령 실행과 최종 답변을 엽니다." : "실행 중인 실제 작업 스레드를 관찰용으로 엽니다. 작업 입력은 데몬이 계속 관리합니다."}</div>` : ""}</section>
+      </div>${resultSession?.threadId ? `<div class="dialog-actions">${threadLink(resultSession.threadId, `하위 작업 ${resultSession.available ? "열기" : "보기"}`, { readOnly: !resultSession.available })}</div><div class="form-help">${resultSession.available ? "이 작업을 실제로 수행한 Codex 스레드의 대화, 명령 실행과 최종 답변을 엽니다." : "실행 중인 실제 작업 스레드를 관찰용으로 엽니다. 작업 입력은 데몬이 계속 관리합니다."}</div>` : ""}</section>
       ${contract ? `<section class="detail-section"><h3>실행 계약</h3><div class="detail-grid"><div class="detail-item"><span>작업 종류</span><strong>${escapeHtml(contract.taskKind)}</strong></div><div class="detail-item"><span>권한</span><strong>${escapeHtml(contract.sandbox)}</strong></div><div class="detail-item"><span>네트워크</span><strong>${contract.networkAccess ? "허용" : "차단"}</strong></div><div class="detail-item"><span>작업공간</span><strong>${escapeHtml(contract.workspaceMode)}</strong></div><div class="detail-item"><span>통합 방식</span><strong>${escapeHtml(contract.integrationStrategy)}</strong></div><div class="detail-item"><span>계약 ID</span><strong>${escapeHtml(contract.fingerprint)}</strong></div></div></section>` : ""}
       ${integration ? `<section class="detail-section"><h3>변경 통합</h3><div class="detail-grid"><div class="detail-item"><span>상태</span><strong>${escapeHtml(integration.status)}</strong></div><div class="detail-item"><span>산출물 commit</span><strong>${escapeHtml(integration.artifact?.commit || "변경 없음")}</strong></div></div></section>` : ""}
       <section class="detail-section"><h3>요청한 작업</h3><div>${escapeHtml(row.prompt || "—")}</div></section>

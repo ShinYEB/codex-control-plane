@@ -6,6 +6,8 @@ The project follows Semantic Versioning while acknowledging that releases before
 
 ## Unreleased
 
+- Hide internal execution hierarchy in ordinary replies, work names, and progress views; use Open work / View result and subtasks instead.
+
 - Default to compact master-thread links and progress; detailed dashboard is opt-in.
 - Keep terminal worker histories navigable without reserving execution capacity forever.
 - Exclude legacy internal control sessions from worker routing and budgets; wait for active capacity with a bounded deadline.

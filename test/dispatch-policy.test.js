@@ -5,8 +5,8 @@ import { agentDisplayName, roleIcon } from "../src/agent-names.js";
 import { classifyTaskGraph } from "../src/dispatch-policy.js";
 
 test("agent titles include one role icon inside brackets", () => {
-  assert.equal(agentDisplayName("qa", "전체 테스트"), "[🤖 qa] 전체 테스트");
-  assert.equal(agentDisplayName("orchestrator", "결제 기능"), "[🤖 orchestrator] 결제 기능");
+  assert.equal(agentDisplayName("qa", "전체 테스트"), "🤖 전체 테스트");
+  assert.equal(agentDisplayName("orchestrator", "결제 기능"), "🤖 결제 기능");
   assert.equal(roleIcon("unknown-role"), "🤖");
 });
 

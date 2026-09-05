@@ -38,7 +38,7 @@ import { ThreadGraphContextPackImporter } from "./threadgraph-context-pack.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v7.html";
+const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v8.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const execFile = promisify(execFileCallback);
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -887,8 +887,8 @@ const TOOLS = [
   },
   {
     name: "get_work_status",
-    title: "Show work status and master thread",
-    description: "Default user-facing work list: name, status, progress, real master thread link, and actionable failures only. No dashboard is opened. Pin or open the returned thread using host UI capabilities when requested; never send it a prompt for navigation.",
+    title: "Show work progress",
+    description: "Default user-facing work list: name, status, progress, work link, and actionable failures only. Keep technical field names internal; show Open work or View result in the user’s language. No dashboard is opened. Pin or open the returned thread using host UI capabilities when requested; never send it a prompt for navigation.",
     inputSchema: { type: "object", properties: {
       cwd: { type: "string" }, runId: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
@@ -1291,7 +1291,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and actual master thread link only. Show detailed dashboards only on explicit request. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
+        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and work link only. Keep internal hierarchy invisible: use ordinary work names and localized Open work / View result labels, never master/slave, nodes, Orchestrator, Run IDs or role names in normal replies. Show detailed dashboards only on explicit request. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
       };
     }
     if (message.method === "ping") return {};
@@ -2399,7 +2399,7 @@ export class McpControlServer {
         resultAccess: { mode: "master_thread_navigation" },
         detailsAvailable: true,
         statusTool: "get_work_status",
-        message: "This request was already accepted. Use the master link and compact work status; detailed dashboard is optional.",
+        message: "This request was already accepted. Use the work link and compact work status; detailed dashboard is optional.",
       };
     }
     const runId = `run_${randomUUID()}`;
@@ -2454,7 +2454,7 @@ export class McpControlServer {
       detailsAvailable: true,
       master: null,
       statusTool: "get_work_status",
-      message: "Request accepted. Planning and execution continue automatically; master thread is being prepared. Use get_work_status for its link and progress. Open the detailed dashboard only when requested.",
+      message: "Request received. Planning and execution continue automatically. Use get_work_status for progress and the work link. Open the detailed dashboard only when requested.",
     };
   }
 
@@ -2805,7 +2805,7 @@ export class McpControlServer {
     const kickoffPrompt = [
       `You are the Orchestrator for Run ${run.id}.`,
       `The daemon has accepted this task graph: ${JSON.stringify(taskSummary)}`,
-      "Record that you own final synthesis for this Run and are waiting for the daemon-managed Data Plane results.",
+      "Acknowledge in the user's language that the work is underway and results will be collected here. Do not mention internal hierarchy, role names, Run IDs, master/slave, Orchestrator or Data Plane in your reply.",
       "Do not execute tasks, edit files, open the dashboard, or start follow-up work.",
     ].join("\n\n");
     const kickoff = await this.turnDispatcher.execute({
@@ -3268,7 +3268,7 @@ export class McpControlServer {
       const prompt = [
         `The delegated run is now ${run.status}. Record the final orchestration status without starting follow-up work.`,
         `Results: ${JSON.stringify(taskResults)}`,
-        "Write a normal user-facing Codex final response with: overall verdict, a task-by-task summary naming each Data Plane thread, concrete files or tests reported, failures and their causal chain, and unresolved risks. Keep full low-level transcripts in the individual Data Plane threads. Do not create, retry, or start any follow-up work.",
+        "Write a normal user-facing Codex final response with: overall verdict, a task-by-task summary, concrete files or tests reported, failures and their causes, and unresolved risks. Use ordinary work names and links labeled Open work or View result (localized to the user). Do not expose master/slave, Orchestrator, Data Plane, Run IDs or internal role names. Keep low-level transcripts in the individual work threads. Do not create, retry, or start any follow-up work.",
       ].join("\n\n");
       const finalized = await this.turnDispatcher.execute({
         subjectType: "run", subjectId: run.id, purpose: "orchestration", parentRunId: run.id,

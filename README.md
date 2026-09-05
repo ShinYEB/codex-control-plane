@@ -30,7 +30,7 @@ When this repository's runtime is deployed as the RUVORA plugin, the normal inte
 1. After the first installation or a runtime update, open a new Codex Desktop conversation.
 2. Open `/mcp` in the target project and confirm that `codex_control_plane` is connected.
 3. Describe the goal, scope, and completion criteria in natural language.
-4. The accepted Run proceeds in the background. Select it from the Master Worker list to open its real Codex thread. For complex work, open subordinate worker threads from the Slave graph inside the Master Orchestrator.
+4. Your work proceeds in the background. Use **Open work** to see progress or **View result** when ready. Complex work is split automatically; request details to explore its subtasks.
 
 | Goal | Example | Internal execution |
 |---|---|---|
@@ -60,7 +60,7 @@ Completion criteria:
 Show the agent dashboard for this project.
 ```
 
-The default experience is **work name, status, progress, and a link to the real master thread**, provided by `get_work_status`. While the master is being prepared, its link is absent rather than a placeholder. Pinning is optional and host-dependent; opening an active thread is observation, not permission to submit another turn.
+The default experience is **work name, status, progress, and Open work / View result**, provided by `get_work_status`. Keep making ordinary requests: there is no execution mode or hierarchy to learn. During preparation, the link is absent rather than a placeholder. Pinning is optional and host-dependent; opening ongoing work lets you observe its record.
 
 The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 
@@ -69,8 +69,8 @@ The detailed embedded dashboard opens only when requested. Ask `Open the web das
 - Assigned Agent threads and routing rationale
 - Validator, retry, integration, failure, and next-action state
 - Context Snapshot and execution-contract diagnostics
-- Master Workers grouped by request, with navigation to real Codex threads
-- Master Orchestrator Slave graphs, with navigation to subordinate threads
+- Work grouped by request, with links to its execution record
+- Subtask progress and dependencies, with links to each work record
 
 Opening, refreshing, or closing the navigator never starts or completes work.
 
@@ -97,7 +97,7 @@ The MCP process is a thin host-facing transport proxy. One daemon owns the Regis
 5. Claim only validated Tasks. The Router chooses thread reuse, fork, spawn, ephemeral execution, or waiting.
 6. Collect complete Worker Turn commands, tests, outputs, and workspace evidence; the Validator checks acceptance criteria.
 7. Integrate required artifacts, verify destination postconditions, and let the Completion Gate determine terminal state.
-8. Project one durable result and provide navigation to the responsible Master Worker and Slave threads.
+8. Preserve one durable result and provide links to the work and its subtasks.
 
 ## Core domain model
 
@@ -135,7 +135,7 @@ See [Architecture](./docs/ARCHITECTURE.md) and the [Execution Contract](./docs/c
 - Central state machines, strict contracts, atomic claims, leases, transient-only retries, and contract revisions
 - Managed worktrees, serialized integration, crash-safe journals, quarantine, and restart recovery
 - Canonical Project identity, Global Runs, Project Runs, and validated cross-project handoffs
-- Master Worker lists and Master Orchestrator → Slave Worker drill-down into native Codex threads
+- Work lists and subtask navigation into native Codex threads
 - SQLite-backed state and an MCP Apps work navigator with local HTTP/SSE fallback
 
 ## Run from source

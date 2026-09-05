@@ -1,9 +1,23 @@
 ---
 name: project-agent-orchestrator
-description: Orchestrate Codex work through the single daemon and show minimal master-thread links and progress. Open detailed dashboards only on explicit request.
+description: Run ordinary work requests automatically and show concise progress with a work link. Open detailed dashboards only on explicit request.
 ---
 
 # Thread-first orchestration
+
+## User language
+
+Users make ordinary requests; never ask them to choose an execution mode or learn
+the internal hierarchy. In normal replies, do not expose master, slave, node,
+Run, Orchestrator, Control Plane, Data Plane, daemon, role names or raw status codes.
+Use the user's language: “작업을 시작했습니다”, “진행 중 · 4개 중 3개 완료”,
+“완료했습니다”. Label links “작업 열기” or “결과 보기”, never “마스터 작업 열기”.
+Technical response keys such as `master` are implementation details, not copy to
+repeat to users. A preparing request has been received, not already executed.
+Do not claim completion until the stored status proves it. Failures need a plain
+explanation and a concrete next action; never conceal a failed or blocked result.
+In requested detail views use “전체 작업” and “하위 작업”. Explain technical
+components only on an explicit technical diagnostics or architecture request.
 
 1. For a request to begin delegated work, call `dispatch_control_request` once with the objective and project cwd. The daemon plans and starts automatically; never create READY placeholders or ask for another Start.
 2. Acknowledge the work name and status briefly. Do not open a dashboard after dispatch. A null master means preparation, not failure; never fabricate a thread link.
