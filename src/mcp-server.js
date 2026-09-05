@@ -522,6 +522,7 @@ const TOOLS = [
       properties: {
         objective: { type: "string", minLength: 1 },
         pin: { type: "boolean", default: true, description: "Request pinning of the representative work through the calling conversation's app tools. False opts out." },
+        taskKind: { type: "string", enum: ["analysis", "review", "test", "implementation", "integration", "release"], description: "Explicit execution intent for direct mode. Defaults to analysis (no workspace edits); never inferred from negated instructions or the work title." },
         cwd: { type: "string" },
         constraints: { type: "array", items: { type: "string" }, maxItems: 50 },
         requestedThreadIds: { type: "array", items: { type: "string" }, maxItems: 20, description: "Existing threads to index read-only before freezing planning context." },
@@ -2461,6 +2462,7 @@ export class McpControlServer {
     const controlRequest = {
       objective: args.objective,
       pin: args.pin ?? true,
+      taskKind: args.taskKind,
       cwd: args.cwd,
       constraints: args.constraints ?? [],
       requestKey: args.requestKey ?? null,
@@ -2575,11 +2577,17 @@ export class McpControlServer {
       contextResolvedAt: new Date().toISOString(),
     } });
     if (args.mode === "direct") {
+      // Direct dispatch has a deterministic one-task plan, not no planning
+      // phase. Preserve the same lifecycle as planner-backed requests.
+      this.registry.updateRun(runId, { status: "planning", metadata: {
+        dispatchPhase: "planning", planningMethod: "deterministic_direct", planningStartedAt: new Date().toISOString(),
+      } });
       tasks = [{
         key: "work",
         title: args.name ?? args.objective,
         prompt: args.objective,
-        role: args.role ?? "implementer",
+        role: args.role ?? (["analysis", "review"].includes(args.taskKind ?? "analysis") ? "reviewer" : "implementer"),
+        taskKind: args.taskKind ?? "analysis",
         capabilities: args.capabilities ?? [],
         acceptanceCriteria: args.acceptanceCriteria ?? [],
         dependsOn: [],

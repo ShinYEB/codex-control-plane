@@ -4,6 +4,9 @@ The user-facing work thread is an execution record, not a protocol console.
 
 ## Input boundary
 
+- Explicit `dispatch_control_request(mode="direct")` records a deterministic one-task planning phase before preparation; it does not invoke the AI planner or bypass the Run state machine.
+- Direct execution intent is `taskKind` (default `analysis`, no workspace edits). Callers requesting direct implementation must specify `taskKind: "implementation"`; unspecified natural-language work can use the default auto planning route. Titles and negated constraints such as “do not modify files” must not infer direct mutation or workspace-change output requirements.
+
 - The native user message contains the assigned work request. Preserve explicit user constraints; never sanitize arbitrary user text with keyword removal.
 - Planner-generated requests use the user's language and describe the goal, scope and deliverables. Acceptance criteria remain structured separately.
 - App Server `turn/start.additionalContext` carries application policy, runtime information and project constraints outside the user message. Reference memories, dependency results and review feedback are explicitly untrusted data.
