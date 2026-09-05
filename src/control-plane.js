@@ -1,3 +1,5 @@
+import { assertOutputSchema } from "./output-schema.js";
+
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 const DEFAULT_MANAGED_THREAD_CONFIG = {
   plugins: {
@@ -177,6 +179,7 @@ export class CodexControlPlane {
   }
 
   async runTask(threadId, prompt, options = {}) {
+    if (options.outputSchema !== undefined) assertOutputSchema(options.outputSchema);
     if (!prompt?.trim()) throw new TypeError("Task prompt must not be empty");
 
     let output = "";

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { assertOutputSchema } from "./output-schema.js";
 import { TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES, TERMINAL_TURN_DISPATCH_STATUSES } from "./domain-states.js";
 
 const hash = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
@@ -46,6 +47,7 @@ export class TurnDispatcher {
   }
 
   prepare(options) {
+    if (options.runOptions?.outputSchema !== undefined) assertOutputSchema(options.runOptions.outputSchema);
     if (!options.prompt?.trim()) throw new TypeError("TurnDispatch prompt must not be empty");
     const fingerprint = promptFingerprint(options.prompt);
     const existing = this.registry.listTurnDispatches({

@@ -36,7 +36,7 @@ const PLAN_SCHEMA = {
           networkAccess: { type: "boolean" },
           sideEffectPolicy: { type: "string", enum: SIDE_EFFECT_POLICIES },
           authorizationScope: { type: "string", enum: RUN_AUTHORIZATION_SCOPES },
-          executionCapabilities: { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES } },
+          executionCapabilities: { type: "array", items: { type: "string", enum: EXECUTION_CAPABILITIES } },
           outputs: { type: "array", items: { type: "string" } },
           integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         },
