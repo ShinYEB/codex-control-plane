@@ -62,6 +62,15 @@ The panel token is limited to one Run, expires after 24 hours, and cannot access
 
 ## Verification gates
 
+Command evidence merges native live completion items, terminal notification items,
+and persisted terminal reads by item identity. A null persisted output must not
+erase a captured live output. Missed-terminal recovery uses the same merge.
+Native command output deltas are retained separately as `streamedOutput`, scoped
+to thread, turn and item, capped at one million characters per item and explicitly
+marked as not guaranteed complete. They never synthesize an exit code or prove
+that no output was missed. Validation must distinguish unavailable logs from
+empty logs and must not infer test counts from exit code zero or historical prose.
+
 A diagnostic-free `rg --files` enumeration with exit code 1 is an observed
 empty file list, not a failed test or positive test-success receipt. This narrow
 classification supports literal single commands and their shell transport only;

@@ -20,7 +20,7 @@ function recoveredOutput(turn) {
   return finalTurnOutput(turn);
 }
 
-function mergeTurnItems(...groups) {
+export function mergeTurnItems(...groups) {
   const merged = [];
   const positions = new Map();
   for (const item of groups.flat()) {
@@ -28,7 +28,13 @@ function mergeTurnItems(...groups) {
     const identity = item.id ?? `${item.type ?? item.kind ?? "item"}:${JSON.stringify(item)}`;
     if (positions.has(identity)) {
       const index = positions.get(identity);
-      merged[index] = { ...merged[index], ...item };
+      const previous = merged[index];
+      merged[index] = { ...previous, ...item };
+      // Persisted reads may omit command output that was present on the live
+      // completion receipt. Null means unavailable, not an observed empty log.
+      for (const key of ["aggregatedOutput", "stdout", "stderr"]) {
+        if (item[key] == null && previous[key] != null) merged[index][key] = previous[key];
+      }
     } else {
       positions.set(identity, merged.length);
       merged.push(item);
@@ -180,6 +186,19 @@ export class CodexControlPlane {
     activeStreams.add(streamToken);
     this.activeTaskStreams.set(threadId, activeStreams);
     const observedItems = [];
+    const commandStreams = new Map();
+    const onCommandDelta = (params) => {
+      if (params?.threadId !== threadId || !params.turnId || !params.itemId || typeof params.delta !== "string") return;
+      const key = JSON.stringify([params.turnId, params.itemId]);
+      const entry = commandStreams.get(key) ?? { turnId: params.turnId, id: params.itemId, text: '', truncated: false };
+      const available = Math.max(0, 1_000_000 - entry.text.length);
+      entry.text += params.delta.slice(0, available);
+      entry.truncated ||= params.delta.length > available;
+      commandStreams.set(key, entry);
+    };
+    const streamEvidence = () => [...commandStreams.values()].filter(entry => entry.turnId === turnId)
+      .map(entry => ({ id: entry.id, type: "commandExecution", streamedOutput: entry.text,
+        streamedOutputTruncated: entry.truncated, streamedOutputCompleteness: "not_guaranteed" }));
     const onDelta = (params) => {
       if (params.threadId !== threadId || typeof params.delta !== "string") return;
       const deltaTurnId = params.turnId ?? params.turn?.id ?? null;
@@ -194,6 +213,7 @@ export class CodexControlPlane {
     };
     this.client.on("item/agentMessage/delta", onDelta);
     this.client.on("item/completed", onItemCompleted);
+    this.client.on("item/commandExecution/outputDelta", onCommandDelta);
 
     try {
       const result = await this.client.request("turn/start", {
@@ -234,12 +254,15 @@ export class CodexControlPlane {
           if (!/Timed out waiting for app-server notification/i.test(String(error?.message ?? ""))) throw error;
           const recoveredTurn = terminalTurnFromRead(await this.inspectAgent(threadId, { includeTurns: true }), turnId);
           if (recoveredTurn) {
+            const liveItems = observedItems.filter((entry) => entry.turnId === turnId
+              || (!entry.turnId && activeStreams.size === 1)).map((entry) => entry.item);
+            const executionItems = mergeTurnItems(streamEvidence(), liveItems, recoveredTurn.items ?? []);
             const recovered = {
               threadId,
               turnId,
               output: recoveredOutput(recoveredTurn) || output,
-              turn: recoveredTurn,
-              executionItems: recoveredTurn.items ?? [],
+              turn: { ...recoveredTurn, items: executionItems },
+              executionItems,
               completionMethod: "thread/read-recovery",
               recoveredFromRead: true,
               evidenceComplete: true,
@@ -259,7 +282,8 @@ export class CodexControlPlane {
         status: completion.params.turn?.status ?? notificationStatus,
         ...(completion.params.error && !completion.params.turn?.error ? { error: completion.params.error } : {}),
       };
-      const liveItems = observedItems.filter((entry) => !entry.turnId || entry.turnId === turnId).map((entry) => entry.item);
+      const liveItems = observedItems.filter((entry) => entry.turnId === turnId
+        || (!entry.turnId && activeStreams.size === 1)).map((entry) => entry.item);
       let hydratedTurn = null;
       let hydrationError = null;
       try {
@@ -270,7 +294,7 @@ export class CodexControlPlane {
       } catch (error) {
         hydrationError = error;
       }
-      const executionItems = mergeTurnItems(liveItems, hydratedTurn?.items ?? []);
+      const executionItems = mergeTurnItems(streamEvidence(), liveItems, turn.items ?? [], hydratedTurn?.items ?? []);
       const finalTurn = hydratedTurn ? {
         ...turn,
         ...hydratedTurn,
@@ -293,6 +317,7 @@ export class CodexControlPlane {
     } finally {
       this.client.off("item/agentMessage/delta", onDelta);
       this.client.off("item/completed", onItemCompleted);
+      this.client.off("item/commandExecution/outputDelta", onCommandDelta);
       activeStreams.delete(streamToken);
       if (!activeStreams.size && this.activeTaskStreams.get(threadId) === activeStreams) this.activeTaskStreams.delete(threadId);
     }

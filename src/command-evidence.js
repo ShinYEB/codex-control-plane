@@ -52,7 +52,7 @@ export function isEmptyFileSearch(item) {
   // stderr, inaccessible-path errors, unknown wrappers or content assertions.
   for (const source of [item, item?.result]) {
     if (!source) continue;
-    for (const key of ['aggregatedOutput', 'output', 'stdout', 'stderr', 'error']) {
+    for (const key of ['aggregatedOutput', 'streamedOutput', 'output', 'stdout', 'stderr', 'error']) {
       if (source[key] != null && String(source[key]).trim()) return false;
     }
   }
