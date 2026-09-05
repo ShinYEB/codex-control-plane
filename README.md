@@ -30,7 +30,11 @@ When this repository's runtime is deployed as the RUVORA plugin, the normal inte
 1. After the first installation or a runtime update, open a new Codex Desktop conversation.
 2. Open `/mcp` in the target project and confirm that `codex_control_plane` is connected.
 3. Describe the goal, scope, and completion criteria in natural language.
-4. The accepted Run proceeds in the background. Select it from the Master Worker list to open its real Codex thread. For complex work, open subordinate worker threads from the Slave graph inside the Master Orchestrator.
+4. Your work proceeds in the background. Use **Open work** to see progress or **View result** when ready. Complex work is split automatically; request details to explore its subtasks.
+
+Request acceptance is not execution: work starts automatically only after the complete graph is validated and persisted, then dependencies and workspace leases permit dispatch. No second Start confirmation is needed. Completion is recorded locally; the final answer is written in the representative work conversation, not automatically posted into the requesting conversation. For simple work this is the worker itself; for complex work it is the synthesis conversation. Opening it requires a confirmed native host navigation action. Stored notifications are not a promise of an unsolicited chat message.
+
+Ordinary reports are readable prose. Only explicitly named output interfaces require structured JSON. Diagnostic data travels separately from the user request, but its visibility depends on the host and is not guaranteed to be hidden in every diagnostic view.
 
 | Goal | Example | Internal execution |
 |---|---|---|
@@ -56,23 +60,38 @@ Completion criteria:
 
 ### Open the work navigator
 
+Say **Open the result** to open the existing work using the host's navigation
+action. Status responses do not generate unverified `codex://` hyperlinks.
+Dashboard buttons request that same host action; a sent request is not yet proof
+that navigation succeeded. Hosts without navigation support show a limitation.
+
 ```text
 Show the agent dashboard for this project.
 ```
 
-The default view is an embedded work navigator in the current Codex conversation. Ask `Open the web dashboard` for the standalone local page. It shows:
+The default experience is **work name, status, progress, and Open work / View result**, provided by `get_work_status`. Keep making ordinary requests: there is no execution mode or hierarchy to learn. During preparation, the link is absent rather than a placeholder. Pinning is optional and host-dependent; opening ongoing work lets you observe its record.
+
+Ask **“Keep a small progress panel beside this work”** to see per-task status, issues, and freshness without opening the detailed dashboard. `show_work_progress` prepares a read-only panel; the native host attaches it beside the representative task. It refreshes while visible without model turns and warns when disconnected. This is a side panel, not an insertion into the chat body. Open work links target existing local task conversations without copying identifiers or sending messages. Chat-link navigation has been user-verified; each panel host still requires click verification. Reopen the panel after a daemon restart or link expiry.
+
+The compact panel keeps the representative work/result link at the top, with short task descriptions and named dependency arrows below. Action guidance is visible; technical diagnostics stay collapsed. Refreshes preserve existing links and expanded sections. A final result may describe failure or cancellation—it is not a success badge.
+
+New delegated work requests a sidebar pin by default (`pin: false` opts out). The calling conversation uses the native app's sidebar tool and verifies its pinned list; the background worker does not pin itself. Only the representative work is pinned, never every subtask. Preparation can be awaited for up to 30 seconds; if the thread or app tool is unavailable, pinning remains pending without blocking execution. Routine status reads do not re-pin work you have unpinned.
+
+The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 
 - Global Run and Project Run progress
 - Task dependencies and current runnable state
 - Assigned Agent threads and routing rationale
 - Validator, retry, integration, failure, and next-action state
 - Context Snapshot and execution-contract diagnostics
-- Master Workers grouped by request, with navigation to real Codex threads
-- Master Orchestrator Slave graphs, with navigation to subordinate threads
+- Work grouped by request, with links to its execution record
+- Subtask progress and dependencies, with links to each work record
 
 Opening, refreshing, or closing the navigator never starts or completes work.
 
 ## Architecture
+
+Work threads show the assigned request, real execution history and a readable final answer. Runtime instructions and dependency reports travel separately from the visible request. Ordinary reports no longer require JSON; custom named output contracts remain structured for compatibility. See [Work conversation](./docs/contracts/WORK_CONVERSATION.md).
 
 ![RUVORA architecture: a user goal moves through the MCP proxy and one daemon into Codex Agent threads and project workspaces, then returns as a validated result](./docs/assets/architecture-overview.svg)
 
@@ -95,7 +114,7 @@ The MCP process is a thin host-facing transport proxy. One daemon owns the Regis
 5. Claim only validated Tasks. The Router chooses thread reuse, fork, spawn, ephemeral execution, or waiting.
 6. Collect complete Worker Turn commands, tests, outputs, and workspace evidence; the Validator checks acceptance criteria.
 7. Integrate required artifacts, verify destination postconditions, and let the Completion Gate determine terminal state.
-8. Project one durable result and provide navigation to the responsible Master Worker and Slave threads.
+8. Preserve one durable result and provide links to the work and its subtasks.
 
 ## Core domain model
 
@@ -133,7 +152,7 @@ See [Architecture](./docs/ARCHITECTURE.md) and the [Execution Contract](./docs/c
 - Central state machines, strict contracts, atomic claims, leases, transient-only retries, and contract revisions
 - Managed worktrees, serialized integration, crash-safe journals, quarantine, and restart recovery
 - Canonical Project identity, Global Runs, Project Runs, and validated cross-project handoffs
-- Master Worker lists and Master Orchestrator → Slave Worker drill-down into native Codex threads
+- Work lists and subtask navigation into native Codex threads
 - SQLite-backed state and an MCP Apps work navigator with local HTTP/SSE fallback
 
 ## Run from source

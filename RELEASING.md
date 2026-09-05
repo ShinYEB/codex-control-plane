@@ -33,6 +33,14 @@ Only a maintainer may publish a RUVORA Codex ThreadHub release. Automation produ
 
 ## Publish
 
+The versioned plugin instruction source is `plugin/skills/project-agent-orchestrator/SKILL.md`.
+When deploying the runtime into a local plugin, copy this file into the plugin's
+`skills/project-agent-orchestrator/SKILL.md` before cachebusting and reinstalling.
+Verify `get_work_status` returns compact status without an output-template UI;
+request the detailed dashboard separately. A new conversation must pick up both
+the updated tools and instructions. Older `dashboard_thread_navigation` records
+remain readable and do not require a database migration.
+
 1. Create an annotated tag matching the package version, for example `v0.15.0`.
 2. Push the tag only after the release commit is on `main`.
 3. Create a GitHub Release from that tag using the matching changelog section.

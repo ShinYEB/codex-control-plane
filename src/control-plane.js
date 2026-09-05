@@ -1,3 +1,6 @@
+import { assertOutputSchema } from "./output-schema.js";
+import { finalTurnOutput } from "./turn-output.js";
+
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 const DEFAULT_MANAGED_THREAD_CONFIG = {
   plugins: {
@@ -14,13 +17,7 @@ function terminalTurnFromRead(result, turnId) {
 }
 
 function recoveredOutput(turn) {
-  if (typeof turn?.output === "string") return turn.output;
-  const items = turn?.items ?? [];
-  return items
-    .filter((item) => ["agentMessage", "agent_message"].includes(item?.type))
-    .map((item) => item.text ?? item.content ?? "")
-    .filter((value) => typeof value === "string")
-    .join("\n");
+  return finalTurnOutput(turn);
 }
 
 function mergeTurnItems(...groups) {
@@ -83,11 +80,6 @@ export class CodexControlPlane {
     if (!name?.trim()) throw new TypeError("Agent name must not be empty");
     await this.client.request("thread/name/set", { threadId, name: name.trim() });
     return { threadId, name: name.trim() };
-  }
-
-  async pinAgent(threadId, isPinned = true) {
-    const result = await this.client.request("thread/metadata/update", { threadId, isPinned });
-    return result.thread ?? result;
   }
 
   async archiveAgent(threadId) {
@@ -177,6 +169,7 @@ export class CodexControlPlane {
   }
 
   async runTask(threadId, prompt, options = {}) {
+    if (options.outputSchema !== undefined) assertOutputSchema(options.outputSchema);
     if (!prompt?.trim()) throw new TypeError("Task prompt must not be empty");
 
     let output = "";
@@ -206,6 +199,8 @@ export class CodexControlPlane {
       const result = await this.client.request("turn/start", {
         threadId,
         input: [{ type: "text", text: prompt }],
+        ...(options.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+        ...(options.additionalContext ? { additionalContext: options.additionalContext } : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
         ...(options.model ? { model: options.model } : {}),
         ...(options.effort ? { effort: options.effort } : {}),
@@ -242,7 +237,7 @@ export class CodexControlPlane {
             const recovered = {
               threadId,
               turnId,
-              output: output || recoveredOutput(recoveredTurn),
+              output: recoveredOutput(recoveredTurn) || output,
               turn: recoveredTurn,
               executionItems: recoveredTurn.items ?? [],
               completionMethod: "thread/read-recovery",

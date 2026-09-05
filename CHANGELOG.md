@@ -1,10 +1,32 @@
 # Changelog
 
+## Unreleased — accurate work progress
+
+- Separate successful work from rejected, failed, cancelled, skipped and attention states in compact status. Preserve the legacy terminal count without calling it success.
+- Keep attention visible during ongoing work and distinguish snapshot time from the latest stored update.
+- Automatic inline progress inside an existing work conversation remains unverified; no additional model turns or execution authority are added for status display.
+
+## Unreleased — readable work conversations
+
+- Keep work requests separate from runtime policy, dependency reports and review feedback using per-turn application context.
+- Use natural final answers for ordinary reports while preserving strict named-output compatibility and all execution-evidence gates.
+- Avoid injecting unrelated historical reports; keep complex-work kickoff and result requests readable.
+- Persist context fingerprints and use submission identity rather than identical prose for uncertain-turn recovery.
+
 All notable changes to RUVORA will be documented in this file.
 
 The project follows Semantic Versioning while acknowledging that releases before 1.0 may change public interfaces. Breaking changes still require explicit migration and rollback notes.
 
 ## Unreleased
+
+- Replace unverified thread URLs with native host navigation handoffs; never report navigation success without acknowledgement.
+
+- Hide internal execution hierarchy in ordinary replies, work names, and progress views; use Open work / View result and subtasks instead.
+
+- Default to compact master-thread links and progress; detailed dashboard is opt-in.
+- Keep terminal worker histories navigable without reserving execution capacity forever.
+- Exclude legacy internal control sessions from worker routing and budgets; wait for active capacity with a bounded deadline.
+- Stop automatically pinning subordinate and internal sessions; master pinning remains host-dependent.
 
 ## 0.14.0 - 2026-09-03
 

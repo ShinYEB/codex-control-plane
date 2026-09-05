@@ -26,7 +26,7 @@ const PLAN_SCHEMA = {
           prompt: { type: "string" },
           role: { type: "string" },
           capabilities: { type: "array", items: { type: "string" } },
-          tools: { type: "array", items: { type: "string" } },
+          tools: { type: "array", items: { type: "string", enum: ["shell", "filesystem"] } },
           dependsOn: { type: "array", items: { type: "string" } },
           dependencyPolicy: { type: "string", enum: ["all_success", "all_terminal", "on_failure"] },
           workspaceMode: { type: "string", enum: ["shared", "worktree"] },
@@ -36,7 +36,7 @@ const PLAN_SCHEMA = {
           networkAccess: { type: "boolean" },
           sideEffectPolicy: { type: "string", enum: SIDE_EFFECT_POLICIES },
           authorizationScope: { type: "string", enum: RUN_AUTHORIZATION_SCOPES },
-          executionCapabilities: { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES } },
+          executionCapabilities: { type: "array", items: { type: "string", enum: EXECUTION_CAPABILITIES } },
           outputs: { type: "array", items: { type: "string" } },
           integrationStrategy: { type: "string", enum: ["none", "patch", "commit"] },
         },
@@ -73,21 +73,31 @@ const ADDITIONAL_START_PATTERNS = [
 const NEGATED_ADDITIONAL_START_PATTERN = /(?:\bnever\b|\bmust\s+not\b|\bdo(?:es)?\s+not\b|\bwithout\b|\bnot\s+(?:required|needed|allowed)\b|\bno\b.{0,40}\b(?:another|additional|separate|second)\b|(?:요구|요청|호출|확인|승인|기다리|필요)하지\s*않|하지\s*(?:않|말)|(?:추가|별도).{0,24}없이|불필요|금지)/i;
 
 function statementRequestsAdditionalStart(statement) {
+  if (/\b(?:instead of|rather than)\b/i.test(statement)) return false;
   if (NEGATED_ADDITIONAL_START_PATTERN.test(statement)) return false;
   return ADDITIONAL_START_PATTERNS.some((pattern) => pattern.test(statement));
 }
 
-function assertSingleRunStart(plan) {
-  const violations = (plan?.tasks ?? []).filter((task) => {
-    if (task.authorizationScope && task.authorizationScope !== "parent_run") return true;
+// Prose is advisory only: punctuation and negation cannot grant or revoke authority.
+function diagnoseSingleRunStart(plan) {
+  return (plan?.tasks ?? []).flatMap((task) => {
     const statements = [task.prompt, ...(task.acceptanceCriteria ?? [])]
       .filter(Boolean)
-      .flatMap((value) => String(value).split(/[.!?。\n;；,，]+/));
-    return statements.some(statementRequestsAdditionalStart);
+      .flatMap((value) => String(value).split(/[.!?。\n;；]+/));
+    return statements.filter(statementRequestsAdditionalStart).map((statement) => ({
+      code: "PLAN_START_PROSE_WARNING", taskKey: task.key, statement: statement.trim(),
+      severity: "warning", blocking: false,
+    }));
   });
+}
+
+function assertSingleRunStart(plan) {
+  // Omitted scope follows the existing execution-contract compiler default.
+  const violations = (plan?.tasks ?? []).filter((task) =>
+    task.authorizationScope !== undefined && task.authorizationScope !== "parent_run");
   if (!violations.length) return;
-  const error = new Error(`Planner requested an additional Start in tasks: ${violations.map((task) => task.key).join(", ")}`);
-  error.code = "PLAN_ADDITIONAL_START";
+  const error = new Error(`Invalid Run authorization scope in tasks: ${violations.map((task) => task.key).join(", ")}`);
+  error.code = "EXECUTION_CONTRACT_AUTHORIZATION_SCOPE";
   throw error;
 }
 
@@ -208,6 +218,8 @@ export class PlannerEngine {
       "Set authorizationScope to parent_run for every task. This structured field is the authoritative authorization contract; task prose must not contradict it.",
       "Declare taskKind, mutatesWorkspace, networkAccess, sideEffectPolicy, executionCapabilities, outputs, integrationStrategy, and dependencyPolicy explicitly. executionCapabilities separates process-execution, temporary-filesystem-write, localhost-connect, localhost-listen, external-network, browser-inspection, workspace-write, and git-integration. A test that does not modify project files may still require temporary-filesystem-write or localhost-listen and therefore a writable runtime sandbox. Browser acceptance criteria require browser-inspection and a browser-capable tool. sideEffectPolicy=none means observation or computation only; local-runtime means lifecycle changes limited to this product's local daemon/process/socket; workspace means project file changes; external means changing remote services or other external systems; destructive means difficult-to-recover deletion or overwrite. Reading local process, socket, MCP, or health state is none. Normal automatic startup of this product's local daemon is local-runtime, never external. External and destructive tasks are outside automatic Run dispatch.",
       "Use all_terminal for always-run cleanup/reporting and on_failure for fallback work. Role names describe specialization and never grant permissions.",
+      "Task prompts are visible user messages. Write concise, natural work requests in the user's language: goal, relevant scope and deliverables. Put verification requirements in acceptanceCriteria. Do not copy authorization boilerplate, internal role names, runtime instructions, past reports, JSON output instructions or daemon protocols into task prompts. Prefer outputs=[report] for ordinary readable reports; use custom named fields only when a consumer genuinely requires that structured interface.",
+      "Worker tools use canonical identifiers shell and filesystem only. Do not put API names, prose, or A2A discovery instructions into tools. The daemon supplies dependency outputs; workers do not call the Control Plane plugin. Use report or descriptive report field names for outputs. Only taskKind=test requires actual test commands, not review or synthesis.",
     ].filter(Boolean).join("\n\n");
     let materialized;
     let contractError;
@@ -255,6 +267,7 @@ export class PlannerEngine {
       feedback: feedback ?? plan.feedback,
       metadata: {
         contextMemoryIds: context.memories.map((item) => item.id),
+        startPolicyDiagnostics: diagnoseSingleRunStart(materialized),
         contextSnapshotId: validatedSnapshot.id,
         contextSnapshotFingerprint: validatedSnapshot.fingerprint,
       },
@@ -274,7 +287,7 @@ export class PlannerEngine {
     }
     if (!agent) {
       agent = await control.spawnAgent({ cwd, sandbox: template.sandbox, approvalPolicy: template.approvalPolicy, model: template.model, developerInstructions: template.developerInstructions });
-      await this.decorateAgent(control, agent, agentDisplayName(role, String(cwd ?? "workspace").split("/").pop()), true);
+      await this.decorateAgent(control, agent, agentDisplayName(role, String(cwd ?? "workspace").split("/").pop()), false);
     }
     this.registry.upsertAgent({ ...agent, status: "idle" }, { role, capabilities: template.capabilities, metadata: { tools: template.tools, controlPlane: true } });
     return { control, agent };
@@ -289,4 +302,4 @@ export class PlannerEngine {
   }
 }
 
-export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput, assertSingleRunStart };
+export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput, assertSingleRunStart, diagnoseSingleRunStart };

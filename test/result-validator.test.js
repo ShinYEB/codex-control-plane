@@ -29,6 +29,9 @@ test("validator receives the parent Run authorization and never asks for another
   let prompt;
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createTask({ id: "task_1", status: "validating", prompt: "verify" });
+  registry.createTurnDispatch({ subjectType: "task", subjectId: "task_1", parentTaskId: "task_1", purpose: "execution", revision: 1,
+    promptFingerprint: "fingerprint", submissionKey: "execution", status: "completed", deadlineAt: new Date().toISOString(),
+    evidence: { additionalContext: { threadhub_handoffs: { kind: "untrusted", value: JSON.stringify([{ taskId: "upstream", status: "rejected", reports: [{ output: "8 requested tests passed" }] }]) } } } });
   const control = {
     spawnAgent: async () => ({ id: "validator_1", cwd: "/repo", status: "idle" }),
     runTask: async (_id, value, options) => {
@@ -47,6 +50,8 @@ test("validator receives the parent Run authorization and never asks for another
   assert.equal(result.decision, "accept");
   assert.match(prompt, /\[RUN AUTHORIZATION\]/);
   assert.match(prompt, /Do not request another Start confirmation/);
+  assert.match(prompt, /"taskId":"upstream","status":"rejected"/);
+  assert.match(prompt, /8 requested tests passed/);
   assert.equal(registry.listTurnDispatches({ parentTaskId: "task_1" })[0].status, "completed");
   registry.close();
 });

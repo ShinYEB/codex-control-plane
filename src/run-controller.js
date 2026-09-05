@@ -23,6 +23,7 @@ function compactFailure(failure) {
 function compactRouting(routing) {
   if (!routing) return null;
   return {
+    waitReason: routing.waitReason ?? null, nextAction: routing.nextAction ?? null, budget: routing.budgetState ?? null,
     decision: routing.decision ?? routing.mode ?? null, reasons: routing.reasons ?? [], blockers: routing.blockers ?? [],
     requirementMatrix: routing.selectedRequirementMatrix ?? routing.assignmentRequirementMatrix ?? routing.requirementMatrix ?? null,
     provenance: routing.provenance ?? null, schedulerIdentity: routing.schedulerIdentity ?? null,
@@ -125,7 +126,7 @@ export function buildRunGraph(registry, runId, options = {}) {
         status: orchestratorAgent?.status ?? "unknown",
       } : null,
       resultAccess: {
-        mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+        mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "master_thread_navigation",
         automaticOriginAppend: false,
       },
       createdAt: run.createdAt,

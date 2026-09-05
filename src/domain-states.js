@@ -224,6 +224,7 @@ export function transitionDelivery(from, to, options = {}) {
 }
 
 export function transitionTurnDispatch(from, to, options = {}) {
+  if (from === "recovery_attention" && options.observedTerminal === true && ["completed", "failed", "interrupted"].includes(to)) return to;
   return transition(from, to, TURN_DISPATCH_TRANSITIONS, assertTurnDispatchStatus, "TurnDispatch", options);
 }
 

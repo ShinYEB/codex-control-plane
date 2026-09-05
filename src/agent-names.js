@@ -3,7 +3,10 @@ export function roleIcon() {
 }
 
 export function agentDisplayName(role, title, prompt) {
-  const label = String(role || "agent").trim().replace(/\s+/g, " ");
   const subject = String(title || prompt || "작업").trim().replace(/\s+/g, " ").slice(0, 42);
-  return `[${roleIcon(label)} ${label}] ${subject}`;
+  return `${roleIcon()} ${subject}`;
+}
+
+export function publicWorkName(name) {
+  return String(name ?? "작업").replace(/^\[🤖[^\]]*\]\s*/, "");
 }

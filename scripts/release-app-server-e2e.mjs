@@ -14,6 +14,7 @@ import { ControlRegistry } from "../src/registry.js";
 const codexPath = process.env.CODEX_BIN ?? "/Applications/ChatGPT.app/Contents/Resources/codex";
 const root = mkdtempSync(join(tmpdir(), "ruvora-app-server-e2e-"));
 const registryPath = join(root, "registry.sqlite");
+const scheduled = process.argv.includes("--scheduled");
 let server;
 let passed = false;
 
@@ -44,7 +45,7 @@ try {
   server = new McpControlServer({
     registryPath,
     sessionWriter: true,
-    schedulerIntervalMs: 60_000,
+    schedulerIntervalMs: scheduled ? 200 : 60_000,
     logger: (message) => process.stderr.write(`[ruvora-e2e] ${message}\n`),
     controlFactory: () => {
       const client = new CodexAppServerClient({ codexPath, cwd: root, turnTimeoutMs: 15 * 60_000 });
@@ -52,10 +53,11 @@ try {
     },
   });
 
-  const response = await server.handleRequest({
+  if (scheduled) server.startBackground();
+  let response = await server.handleRequest({
     method: "tools/call",
     params: {
-      name: "run_agent_task",
+      name: scheduled ? "dispatch_agent_task" : "run_agent_task",
       arguments: {
         cwd: root,
         prompt: "Fix the implementation of add in math.js so the existing test passes. Run the test and make no unrelated changes.",
@@ -72,12 +74,31 @@ try {
   });
 
   assert.notEqual(response.isError, true, response.structuredContent?.error);
-  const taskId = response.structuredContent.taskId;
+  const taskId = scheduled ? response.structuredContent.id : response.structuredContent.taskId;
+  assert.equal(typeof taskId, "string", "execution response must identify the created task");
+  if (scheduled) {
+    const deadline = Date.now() + 15 * 60_000;
+    while (Date.now() < deadline) {
+      const record = server.registry.getTask(taskId);
+      if (["completed", "failed", "cancelled", "interrupted", "recovery_attention", "blocked_by_policy"].includes(record.status)) break;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    const execution = server.registry.listTurnDispatches({ parentTaskId: taskId, purpose: "execution", limit: 1 })[0];
+    response = { structuredContent: { taskId, record: server.registry.getTask(taskId), task: execution?.evidence?.result } };
+  }
   const completed = response.structuredContent.record;
   assert.equal(completed.status, "completed");
   assert.equal(completed.metadata.validation.decision, "accept");
   assert.equal(completed.metadata.integration.status, "integrated");
   assert.equal(completed.metadata.completionVerdict.decision, "accept");
+  const workerResult = response.structuredContent.task;
+  const userMessages = (workerResult.executionItems ?? []).filter(item => item.type === "userMessage");
+  assert.ok(userMessages.length, "hydrated native user message is required for conversation UX verification");
+  const dispatch = server.registry.listTurnDispatches({ parentTaskId: taskId, purpose: "execution", limit: 1 })[0];
+  assert.equal(userMessages[0].clientId, dispatch.id, "native history must retain the client submission identity for recovery");
+  assert.equal(userMessages[0].content.filter(part => part.type === "text").map(part => part.text).join("\n"),
+    "Fix the implementation of add in math.js so the existing test passes. Run the test and make no unrelated changes.");
+  assert.doesNotMatch(workerResult.output, /^\s*(?:```json\s*)?\{\s*"outputs"/);
   assert.equal(readFileSync(join(root, "math.js"), "utf8").includes("left + right"), true);
   execFileSync(process.execPath, ["--test"], { cwd: root, stdio: "pipe" });
   await server.close();
@@ -95,6 +116,7 @@ try {
   passed = true;
   process.stdout.write(JSON.stringify({
     result: "pass",
+    executionPath: scheduled ? "scheduled" : "foreground",
     taskId,
     workerThreadId: completed.agentId,
     workerTurnId: completed.turnId,
@@ -104,6 +126,8 @@ try {
     completion: completed.metadata.completionVerdict.decision,
     attempt: completed.attempt,
     claimReleasedAfterReopen: true,
+    naturalUserMessage: true,
+    naturalFinalAnswer: true,
   }, null, 2) + "\n");
 } finally {
   await server?.close().catch(() => {});

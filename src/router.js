@@ -131,7 +131,7 @@ export class AgentRouter {
 
       if (["compacted", "superseded", "archived"].includes(lifecycle?.status)) blockers.push(`thread lifecycle is ${lifecycle.status}`);
       if (contextHealth < (request.threadBudget?.policy?.minContextHealth ?? 0)) blockers.push(`context health ${contextHealth} is below policy minimum`);
-      const eligible = matrix.eligible && !blockers.some((blocker) => blocker.startsWith("thread lifecycle") || blocker.startsWith("context health"));
+      let eligible = matrix.eligible && !blockers.some((blocker) => blocker.startsWith("thread lifecycle") || blocker.startsWith("context health"));
 
       const contextMatches = overlap(taskTokens, profileTokens);
       if (contextMatches) add(breakdown, reasons, "context", Math.min(contextMatches * 6, 36), `${contextMatches} context keyword match${contextMatches === 1 ? "" : "es"}`);
@@ -146,6 +146,7 @@ export class AgentRouter {
       else if (request.provider && agent.provider !== request.provider) {
         add(breakdown, reasons, "provider", -40, "provider mismatch");
         blockers.push("provider mismatch");
+        eligible = false;
       }
       if (request.model && agent.model === request.model) add(breakdown, reasons, "model", 8, "same model");
 
@@ -169,7 +170,15 @@ export class AgentRouter {
     const ranked = this.rank(agents, request);
     const minimumScore = request.minimumScore ?? 35;
     const eligible = ranked.filter((entry) => entry.eligible);
-    const best = eligible[0] ?? null;
+    // Prefer a usable idle candidate over a busy higher-scoring candidate when
+    // there is no capacity for the latter's fork.
+    const best = eligible.find((entry) => {
+      const budget = request.threadBudgetStateByAgent?.[entry.agent.id] ?? request.threadBudgetState;
+      return entry.score >= minimumScore && request.reuseExisting && entry.requirementMatrix.execution.writerAvailable
+        && ["idle", "available"].includes(entry.agent.status)
+        && Number(entry.agent.metadata?.reuseCount ?? 0) < (request.maxReuseCount ?? request.threadBudget?.policy?.maxReuseCount ?? 12)
+        && budget && (!budget.canCreateProject || !budget.canCreateRole || !budget.canForkLineage);
+    }) ?? eligible[0] ?? null;
     const selected = best && best.score >= minimumScore;
     const reuseCount = Number(best?.agent?.metadata?.reuseCount ?? 0);
     const maxReuseCount = request.maxReuseCount ?? request.threadBudget?.policy?.maxReuseCount ?? 12;
@@ -189,6 +198,12 @@ export class AgentRouter {
     else if (canCreate) decision = "spawn";
     else if (isEphemeralTask(request)) decision = "ephemeral";
     else decision = "wait";
+    const capacityMayRecover = (!budgetState.canCreateProject || !budgetState.canCreateRole)
+      && (budgetState.canCreateProject || budgetState.releasableProjectCount > 0)
+      && (budgetState.canCreateRole || budgetState.releasableRoleCount > 0);
+    const temporaryWait = Boolean((selected && (busy || writerConflict) && !rolloverRequired)
+      || (!selected && capacityMayRecover));
+    if (decision === "wait" && (!temporaryWait || request.threadBudget?.policy?.queueWhenBusy === false)) decision = "blocked";
     const certainty = confidence(best, eligible[1], minimumScore);
     return {
       provenance: {
@@ -213,6 +228,8 @@ export class AgentRouter {
         },
       },
       decision,
+      waitReason: decision === "wait" ? (selected ? "candidate_busy" : "active_worker_capacity") : decision === "blocked" ? "thread_capacity_unavailable" : null,
+      nextAction: decision === "blocked" ? "repair_routing" : decision === "wait" ? "wait_for_lease" : null,
       minimumScore,
       selectedAgent: selected ? best.agent : null,
       score: best?.score ?? 0,

@@ -90,7 +90,7 @@ test("task flow keeps dependency stages visible without an overflowing canvas", 
   assert.match(html, /class="dependency-connector"/);
   assert.match(html, /선행 작업 ·/);
   assert.match(html, /선행 단계 완료 후 시작/);
-  assert.match(html, /fullAgentName\.match\(\/\^\\\[\[\^\\\]\]\+\\\]\//);
+  assert.match(html, /const agentLabel = "하위 작업"/);
   assert.doesNotMatch(html, /class="graph-edges"/);
   assert.doesNotMatch(html, /style="left:\$\{position\.x\}px/);
 });
@@ -99,14 +99,14 @@ test("dashboard renders backend failure, routing, identity, and archive contract
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /실패 판정과 다음 조치/);
   assert.match(html, /Routing provenance와 충족 행렬/);
-  assert.match(html, /DAEMON SCHEDULER/);
-  assert.match(html, /ORCHESTRATOR CODEX THREAD/);
+  assert.doesNotMatch(html, /DAEMON SCHEDULER|ORCHESTRATOR CODEX THREAD/);
+  assert.match(html, /aria-label="전체 작업과 하위 작업"/);
   assert.match(html, /id="archive-scope"/);
   assert.match(html, /callTool\(action === "archive" \? "archive_run" : "unarchive_run"/);
   assert.match(html, /callTool\(action === "archive" \? "archive_agent" : "unarchive_agent"/);
   assert.doesNotMatch(html, /archive[^\n]{0,120}start_agent_run/);
   assert.match(html, /실행 준비 실패/);
-  assert.match(html, /워커 생성 0개/);
+  assert.match(html, /작업을 준비하고 있습니다/);
 });
 
 test("embedded dashboard script remains syntactically valid", async () => {
@@ -128,19 +128,16 @@ test("embedded dashboard polling is single-flight, adaptive, and visibility-awar
   assert.match(html, /pagehide[\s\S]*?lifecycleGeneration \+= 1;/);
 });
 
-test("chat navigation opens actual Orchestrator and worker threads through the Desktop navigation tool", async () => {
+test("dashboard navigation links target actual work without message or clipboard fallbacks", async () => {
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /const terminalStatuses = new Set/);
-  assert.match(html, /callTool\("open_desktop_thread"/);
-  assert.match(html, /dashboardLeaseToken: state\.dashboardLeaseToken/);
   assert.match(html, /data-thread-id=/);
-  assert.doesNotMatch(html, /sendFollowUpMessage/);
+  assert.match(html, /href="codex:\/\/threads\//);
   assert.doesNotMatch(html, /request\("ui\/message"/);
-  assert.match(html, /오케스트레이터 스레드/);
-  assert.match(html, /작업 에이전트 스레드/);
-  assert.match(html, /navigator\.clipboard\.writeText\(threadId\)/);
+  assert.match(html, /전체 작업/);
+  assert.match(html, /하위 작업/);
+  assert.doesNotMatch(html, /navigator\.clipboard/);
   assert.match(html, /readOnly: !resultSession\.available/);
-  assert.match(html, /명령 입력은 데몬이 관리/);
   assert.match(html, /state\.runThreads/);
   assert.match(html, /run-card-actors/);
   assert.match(html, /executionParticipants/);

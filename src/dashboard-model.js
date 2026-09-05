@@ -32,6 +32,7 @@ function failureSummary(failure) {
 function routingSummary(routing) {
   if (!routing) return null;
   return {
+    waitReason: routing.waitReason ?? null, nextAction: routing.nextAction ?? null, budget: routing.budgetState ?? null,
     decision: routing.decision ?? routing.mode ?? null,
     reasons: routing.reasons ?? [], blockers: routing.blockers ?? [],
     requirementMatrix: routing.selectedRequirementMatrix ?? routing.assignmentRequirementMatrix ?? routing.requirementMatrix ?? null,
@@ -155,7 +156,7 @@ function runSummary(run, taskByRunId = new Map(), agentById = new Map(), result 
     schedulerIdentity: run.metadata?.schedulerIdentity ?? null,
     orchestratorSessionIdentity: run.metadata?.orchestratorSessionIdentity ?? null,
     resultAccess: {
-      mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+      mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "master_thread_navigation",
       automaticOriginAppend: false,
     },
     executionParticipants: {

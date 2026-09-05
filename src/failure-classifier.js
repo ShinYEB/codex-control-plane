@@ -1,3 +1,5 @@
+import { isTestCommand, supersededTestFailure, commandText, commandExitCode } from "./command-evidence.js";
+
 export function classifyFailure(error, stage = "execution") {
   const message = String(error?.message ?? error ?? "Unknown failure");
   let code = error?.code ?? null;
@@ -5,7 +7,11 @@ export function classifyFailure(error, stage = "execution") {
   let type = stage === "validation" ? "validation" : "worker";
   let retryable = Boolean(error?.retryable);
 
-  if (/^(?:CONTEXT_(?:SUPERSEDE|AUTHORITY|CLAIM)|CONTEXT_SNAPSHOT_INVALID|PRODUCT_CONTRACT_)/.test(String(code ?? ""))) {
+  if (/output_schema_invalid|invalid_json_schema|invalid schema for response_format/.test(value)) {
+    type = "configuration";
+    code = "OUTPUT_SCHEMA_INVALID";
+    retryable = false;
+  } else if (/^(?:CONTEXT_(?:SUPERSEDE|AUTHORITY|CLAIM)|CONTEXT_SNAPSHOT_INVALID|PRODUCT_CONTRACT_)/.test(String(code ?? ""))) {
     type = "configuration";
     retryable = false;
   } else if (/unexpected status 404 not found.*(?:backend-api\/codex\/responses|codex\/responses)/.test(value)) {
@@ -71,26 +77,12 @@ function itemType(item) {
   return String(item?.type ?? item?.kind ?? "").replaceAll("_", "").toLowerCase();
 }
 
-function commandExitCode(item) {
-  const values = [item?.exitCode, item?.exit_code, item?.result?.exitCode, item?.result?.exit_code, item?.status?.exitCode];
-  return values.find((value) => Number.isInteger(value)) ?? null;
-}
-
-function commandText(item) {
-  const value = item?.command ?? item?.cmd ?? item?.input?.command ?? item?.result?.command;
-  return Array.isArray(value) ? value.join(" ") : String(value ?? "");
-}
-
 function commandOutput(item) {
   const values = [
     item?.aggregatedOutput, item?.output, item?.stderr, item?.stdout,
     item?.result?.aggregatedOutput, item?.result?.output, item?.result?.stderr, item?.result?.stdout,
   ];
   return values.filter((value) => typeof value === "string" && value.trim()).join("\n");
-}
-
-function isTestCommand(command) {
-  return /(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b|\bnode\s+--test\b|\b(?:pytest|vitest|jest|cargo\s+test|go\s+test|xcodebuild\s+test)\b/i.test(command);
 }
 
 function structuredFailure(output) {
@@ -118,10 +110,11 @@ export function assessTaskResult(result = {}) {
     return classifyFailure(turn.error?.message ?? turn.error ?? result.error ?? "Task explicitly reported failure", "execution");
   }
 
-  const items = [...(turn.items ?? []), ...(result.executionItems ?? [])];
+  const items = [...(turn.items ?? []), ...(result.executionItems ?? [])].filter((item,index,all) =>
+    !item.id || all.findIndex(other => other.id === item.id) === index);
   const seen = new Set();
   let successfulTestCommand = false;
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const identity = item?.id ?? item;
     if (seen.has(identity)) continue;
     seen.add(identity);
@@ -135,6 +128,7 @@ export function assessTaskResult(result = {}) {
       continue;
     }
     const diagnostic = commandOutput(item);
+    if (supersededTestFailure(item, items.slice(index + 1))) continue;
     const failure = classifyFailure(new Error(`${command || "Command"} exited with code ${exitCode ?? "unknown"}${diagnostic ? `\n${diagnostic}` : ""}`), "execution");
     if (!["configuration", "environment", "infrastructure", "coordination", "approval", "workspace"].includes(failure.type)) {
       failure.type = isTestCommand(command) ? "test" : "command";
@@ -151,7 +145,7 @@ export function assessTaskResult(result = {}) {
   const explicit = structuredFailure(result.output);
   if (explicit) return classifyFailure(explicit, "execution");
   const output = String(result.output ?? "");
-  const exitMatch = output.match(/\b(?:exit code|exit status|exited with(?: code)?)\s*[:=]?\s*([1-9]\d*)\b/i);
+  const exitMatch = successfulTestCommand ? null : output.match(/\b(?:exit code|exit status|exited with(?: code)?)\s*[:=]?\s*([1-9]\d*)\b/i);
   const failedTests = successfulTestCommand ? null
     : output.match(/(?:^|\n)\s*(?:#\s*)?(?:fail|failed|failures)\s*[:=]\s*([1-9]\d*)\s*(?:$|\n)/im)
       ?? output.match(/(?:^|\n)\s*([1-9]\d*)\s+tests?\s+failed(?:[.!]?\s*)?(?:$|\n)/im);

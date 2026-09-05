@@ -35,7 +35,8 @@ test("MCP initialize advertises tools and safety instructions", async () => {
   const listed = await server.handleRequest({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "codex-control-plane");
   assert.match(initialized.instructions, /single Codex thread writer/);
-  assert.match(initialized.instructions, /work navigator is the durable status surface/);
+  assert.match(initialized.instructions, /Default to get_work_status/);
+  assert.match(initialized.instructions, /dashboards only on explicit request/);
   assert.match(initialized.instructions, /never appends terminal results/);
   assert.deepEqual(listed.tools.map((tool) => tool.name), [
     "list_agents",
@@ -88,8 +89,10 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "get_desktop_handoff",
     "open_desktop_thread",
     "get_task",
+    "get_work_status",
     "get_dashboard_state",
     "get_dashboard_detail",
+    "show_work_progress",
     "show_agent_dashboard",
   ]);
 });
@@ -216,7 +219,7 @@ test("Global Run consumers receive only validated durable cross-project handoff 
     forkAgent: async (id) => ({ id: `${id}_fork`, status: "idle", provider: "codex", forkedFromId: id }),
     resumeAgent: async (id) => ({ id, status: "idle", provider: "codex" }), nameAgent: async () => {}, pinAgent: async () => {},
     runTask: async (_id, prompt, options = {}) => {
-      prompts.push(prompt);
+      prompts.push({ prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `global_turn_${prompts.length}` });
       return { output: prompt.includes("Produce global report") ? "GLOBAL_REPORT" : "consumed", turnId: `global_turn_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -239,10 +242,10 @@ test("Global Run consumers receive only validated durable cross-project handoff 
       dependencies: [{ id: "durable_report", producerRunId: "handoff_run_a", consumerRunId: "handoff_run_b", requiredOutputs: ["report"], acceptanceCriteria: ["report evidence is attached"] }],
     } } });
     await waitUntil(() => server.registry.getGlobalRun("handoff_global")?.status === "completed");
-    const consumerPrompt = prompts.find((prompt) => prompt.includes("Consume global report"));
-    assert.match(consumerPrompt, /A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS/);
-    assert.match(consumerPrompt, /GLOBAL_REPORT/);
-    assert.match(consumerPrompt, /durable_report/);
+    const consumer = prompts.find(({ prompt }) => prompt === "Consume global report");
+    assert.ok(consumer);
+    assert.match(consumer.context.threadhub_handoffs.value, /GLOBAL_REPORT/);
+    assert.match(consumer.context.threadhub_handoffs.value, /durable_report/);
     const handoff = server.registry.getCrossProjectHandoff("durable_report");
     assert.equal(handoff.status, "received");
     assert.ok(handoff.receiptHash);
@@ -616,11 +619,13 @@ test("run_agent_task forks an existing agent by default", async () => {
 
 test("run_agent_task injects project context and records its result", async () => {
   let deliveredPrompt = "";
+  let deliveredContext;
   const control = {
     connect: async () => {},
     spawnAgent: async () => ({ id: "agent_context", cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async (id, prompt, options) => {
       deliveredPrompt = prompt;
+      deliveredContext = options.additionalContext;
       options.onStarted?.({ turnId: "turn_context" });
       return { output: "v2 구현 완료", turnId: "turn_context", turn: { status: "completed" } };
     },
@@ -631,8 +636,9 @@ test("run_agent_task injects project context and records its result", async () =
     method: "tools/call",
     params: { name: "run_agent_task", arguments: { prompt: "API 구현", cwd: "/repo", role: "backend", routingMode: "new" } },
   });
-  assert.match(deliveredPrompt, /Authoritative project context/);
-  assert.match(deliveredPrompt, /v2 API를 사용한다/);
+  assert.equal(deliveredPrompt, "API 구현");
+  assert.match(deliveredContext.threadhub_project.value, /Authoritative project context/);
+  assert.match(deliveredContext.threadhub_project.value, /v2 API를 사용한다/);
   assert.equal(response.structuredContent.contextPack.memories[0].id, "api_decision");
   assert.equal(response.structuredContent.resultMemory.kind, "task_result");
   assert.match(server.registry.getAgent("agent_context").summary, /v2 구현 완료/);
@@ -778,6 +784,18 @@ test("a completed turn with a non-zero real test command is persisted as failed"
   await server.close();
 });
 
+test("missing test exit is persisted as attention with no retry and a released claim", async () => {
+  const server=fakeServer({connect:async()=>{},spawnAgent:async()=>({id:'missing-exit-worker',cwd:'/repo',status:'idle',provider:'codex'}),
+    runTask:async(_id,_prompt,options)=>{options.onStarted?.({turnId:'missing-exit-turn'});return {turnId:'missing-exit-turn',output:'done',evidenceComplete:true,turn:{status:'completed'},executionItems:[{type:'commandExecution',command:'node --test'}]};}});
+  try {
+    const response=await server.handleRequest({method:'tools/call',params:{name:'run_agent_task',arguments:{prompt:'run tests',cwd:'/repo',routingMode:'new',taskKind:'test',mutatesWorkspace:false}}});
+    assert.notEqual(response.isError,true,response.structuredContent?.error);
+    const task=response.structuredContent.record;
+    assert.equal(task.status,'recovery_attention');assert.equal(task.claimToken,null);
+    assert.equal(task.metadata.failure.retryable,false);assert.equal(task.metadata.failure.nextAction,'inspect_execution_evidence');
+  } finally {await server.close();}
+});
+
 test("read-only tools are marked read-only", async () => {
   const server = fakeServer({ connect: async () => {} });
   const listed = await server.handleRequest({ method: "tools/list" });
@@ -796,13 +814,13 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
   assert.match(result.contents[0].text, /작업 목록/);
   assert.match(result.contents[0].text, /data-tab="graph"/);
   assert.match(result.contents[0].text, /Codex 스레드는 플러그인을 실행할 때 자동으로 등록/);
-  assert.match(result.contents[0].text, /callTool\("open_desktop_thread"/);
+  assert.match(result.contents[0].text, /href="codex:\/\/threads\//);
   assert.match(result.contents[0].text, /graph-board/);
   assert.match(result.contents[0].text, /실행 구조/);
-  assert.match(result.contents[0].text, /CONTROL PLANE/);
-  assert.match(result.contents[0].text, /DAEMON SCHEDULER/);
-  assert.match(result.contents[0].text, /ORCHESTRATOR CODEX THREAD/);
-  assert.match(result.contents[0].text, /DATA PLANE/);
+  assert.match(result.contents[0].text, /전체 작업/);
+  assert.match(result.contents[0].text, /하위 작업/);
+  assert.doesNotMatch(result.contents[0].text, /CONTROL PLANE|DAEMON SCHEDULER|ORCHESTRATOR CODEX THREAD/);
+  assert.doesNotMatch(result.contents[0].text, /DATA PLANE/);
   assert.match(result.contents[0].text, /plane-map/);
   assert.match(result.contents[0].text, />작업함</);
   assert.doesNotMatch(result.contents[0].text, /필요할 때만/);
@@ -813,7 +831,7 @@ test("authorized dashboards can open an existing Codex Desktop task without send
   const dashboardServer = { start: async () => {}, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
   const server = fakeServer({ connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) }, {
     dashboardServer,
-    openDesktopThread: async (threadId) => opened.push(threadId),
+    openDesktopThread: async (threadId) => { opened.push(threadId); return { navigated: true }; },
   });
   const shown = await server.handleRequest({ method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo" } } });
   const threadId = "01a0534d-7717-7151-bfd7-2d9cb59e8662";
@@ -823,7 +841,12 @@ test("authorized dashboards can open an existing Codex Desktop task without send
   } } });
   assert.equal(result.structuredContent.opened, true);
   assert.deepEqual(opened, [threadId]);
-  assert.equal(result.structuredContent.url, `codex://threads/${threadId}`);
+  assert.equal(result.structuredContent.url, undefined);
+  server.openDesktopThread = async () => undefined;
+  const unconfirmed = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
+    dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken, threadId,
+  } } });
+  assert.equal(unconfirmed.structuredContent.opened, false);
 
   const rejected = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
     dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken,
@@ -863,8 +886,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.dashboardUrl, undefined);
   assert.equal(dashboardStarts, 0, "embedded presentation must not start the local web dashboard");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v7.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v7.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v10.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v10.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -1050,7 +1073,7 @@ test("prepare_agent_run atomically starts and binds a leased session per task", 
   const task = server.registry.listTasks({ runId: prepared.structuredContent.runId, limit: 10 })[0];
   assert.equal(task.agentId, "agent_prepared");
   assert.ok(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestrationLog.some((entry) => entry.type === "task_assigned" && entry.taskId === task.id));
-  assert.deepEqual(calls.map((entry) => entry[0]), ["name", "pin", "initialize"]);
+  assert.deepEqual(calls.map((entry) => entry[0]), ["name", "initialize"]);
   await server.close();
 });
 
@@ -1063,8 +1086,8 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
     nameAgent: async () => {},
     pinAgent: async () => {},
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
-    runTask: async (threadId, prompt) => {
-      turns.push({ threadId, prompt });
+    runTask: async (threadId, prompt, options) => {
+      turns.push({ threadId, prompt, context: options.additionalContext });
       return { output: "Run accepted; waiting for Data Plane results.", turnId: "turn_kickoff", turn: { id: "turn_kickoff", status: "completed" } };
     },
   };
@@ -1092,7 +1115,8 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   assert.equal(sequence, 1, "automatic start creates only the Orchestrator before workers are scheduled");
   assert.equal(turns.length, 1);
   assert.equal(turns[0].threadId, "agent_1");
-  assert.match(turns[0].prompt, /waiting for the daemon-managed Data Plane results/);
+  assert.equal(turns[0].prompt, "복합 기능");
+  assert.match(turns[0].context.threadhub_policy.value, /results will be collected here/);
   assert.equal(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestratorKickoff.turnId, "turn_kickoff");
   const kickoffDispatch = server.registry.listTurnDispatches({
     subjectType: "run", subjectId: prepared.structuredContent.runId, purpose: "orchestration", limit: 10,
@@ -1103,7 +1127,7 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   await server.close();
 });
 
-test("unsupported App Server pin metadata is probed once and then cached", async () => {
+test("daemon never probes unsupported App Server sidebar pin metadata", async () => {
   let sequence = 0;
   let pinCalls = 0;
   const control = {
@@ -1131,8 +1155,8 @@ test("unsupported App Server pin metadata is probed once and then cached", async
     } } });
     assert.equal(response.structuredContent.status, "running");
   }
-  assert.equal(pinCalls, 1);
-  assert.equal(server.registry.listEvents({ limit: 100 }).filter((event) => event.eventType === "agent.pin_unsupported").length, 1);
+  assert.equal(pinCalls, 0);
+  assert.equal(server.registry.listEvents({ limit: 100 }).filter((event) => event.eventType === "agent.pin_unsupported").length, 0);
   await server.close();
 });
 
@@ -1362,8 +1386,8 @@ test("host origin identity is provenance only and results stay in the work navig
   const run = server.registry.getRun(accepted.structuredContent.runId);
   assert.deepEqual(run.metadata.origin, { threadId: "host_thread", turnId: "host_turn", deliveryPolicy: "dashboard_navigation", source: "host" });
   assert.deepEqual(run.metadata.controlRequest.callerOriginInput, { threadId: "spoofed", turnId: "spoofed_turn" });
-  assert.equal(run.metadata.controlRequest.resultAccess, "dashboard_thread_navigation");
-  assert.deepEqual(accepted.structuredContent.resultAccess, { mode: "dashboard_thread_navigation" });
+  assert.equal(run.metadata.controlRequest.resultAccess, "master_thread_navigation");
+  assert.deepEqual(accepted.structuredContent.resultAccess, { mode: "master_thread_navigation" });
   await server.close();
 });
 
@@ -1423,6 +1447,22 @@ test("attention notifications remain visible in the dashboard without writing to
   assert.deepEqual(prompts, []);
   assert.equal(server.registry.listNotifications({ runId: "run_attention" })[0].readAt, null);
   await server.close();
+});
+
+test("daemon observes an uncertain terminal receipt without replaying or reopening its failed task", async () => {
+  const registry = new ControlRegistry({path:':memory:'});
+  registry.createTask({id:'uncertain-task',prompt:'work',status:'recovery_attention'});
+  const dispatch=registry.createTurnDispatch({subjectType:'task',subjectId:'uncertain-task',parentTaskId:'uncertain-task',purpose:'execution',revision:1,
+    promptFingerprint:'fingerprint',submissionKey:'uncertain-receipt',threadId:'thread',turnId:'turn',status:'recovery_attention'});
+  let submissions=0;
+  const server=fakeServer({connect:async()=>{},inspectAgent:async()=>({thread:{turns:[{id:'turn',status:'completed',items:[]}]}}),runTask:async()=>{submissions++;}},
+    {registry,recoverInterruptedTasks:true,schedulerConcurrency:0});
+  try {
+    server.startBackground();
+    assert.equal(await waitUntil(()=>registry.getTurnDispatch(dispatch.id).status==='completed'),true);
+    assert.equal(submissions,0);
+    assert.equal(registry.getTask('uncertain-task').status,'recovery_attention');
+  } finally {await server.close();}
 });
 
 test("daemon restart finalizes an integration_pending task from a recorded journal", async () => {
@@ -1524,7 +1564,7 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
     nameAgent: async () => {},
     pinAgent: async () => {},
     runTask: async (id, prompt, options = {}) => {
-      prompts.push({ id, prompt });
+      prompts.push({ id, prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `turn_${prompts.length}` });
       return { output: prompt.includes("첫 결과를 생성") ? "UPSTREAM_RESULT" : "done", turnId: `turn_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -1540,9 +1580,9 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
     ] } },
   });
   await waitUntil(() => server.registry.getRun(prepared.structuredContent.runId)?.status === "completed");
-  const downstream = prompts.find((entry) => entry.prompt.includes("[A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS]"));
+  const downstream = prompts.find((entry) => entry.prompt === "첫 결과를 검토");
   assert.ok(downstream);
-  assert.match(downstream.prompt, /UPSTREAM_RESULT/);
+  assert.match(downstream.context.threadhub_handoffs.value, /UPSTREAM_RESULT/);
   assert.ok(server.registry.listEvents({ limit: 100 }).some((event) => event.eventType === "task.a2a_handoff_received"));
   await server.close();
 });
@@ -1560,7 +1600,7 @@ test("validator feedback drives bounded rework after automatic Start", async () 
     pinAgent: async () => {},
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async (_id, prompt, options = {}) => {
-      prompts.push(prompt);
+      prompts.push({ prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `turn_rework_${prompts.length}` });
       return { output: `attempt ${prompts.length}`, turnId: `turn_rework_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -1587,11 +1627,10 @@ test("validator feedback drives bounded rework after automatic Start", async () 
   assert.equal(task.status, "completed");
   assert.equal(task.attempt, 2);
   assert.equal(task.metadata.failureHistory.length, 1);
-  assert.match(prompts[1], /\[VALIDATOR REWORK FEEDBACK\]/);
-  assert.match(prompts[1], /Add retry regression evidence/);
-  for (const prompt of prompts) {
-    assert.match(prompt, /\[RUN AUTHORIZATION\]/);
-    assert.match(prompt, /Do not request another Start confirmation/);
+  assert.match(prompts[1].context.threadhub_rework.value, /Add retry regression evidence/);
+  for (const { prompt, context } of prompts) {
+    assert.equal(prompt, "implement retry");
+    assert.match(context.threadhub_policy.value, /Do not request another Start confirmation/);
   }
   await server.close();
 });

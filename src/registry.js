@@ -8,7 +8,7 @@ import { assertExecutionContract, compileAndValidateExecutionContract, execution
 import { decideTaskRetry } from "./retry-policy.js";
 import { canonicalizeProjectIdentity } from "./project-identity.js";
 import { assertCanSupersede, contextContentHash, validateContextClaim } from "./context-claims.js";
-import { estimateContextHealth, threadBudgetFingerprint, transitionThreadLifecycle, validateThreadBudget } from "./thread-lifecycle.js";
+import { isControlPlaneAgent, estimateContextHealth, threadBudgetFingerprint, transitionThreadLifecycle, validateThreadBudget } from "./thread-lifecycle.js";
 import {
   compileAuthorizationManifestSet,
   compileAuthorizationManifest,
@@ -827,6 +827,15 @@ export class ControlRegistry {
   transitionTurnDispatch(id, status, changes = {}, options = {}) {
     const existing = this.getTurnDispatch(id);
     if (!existing) throw new Error(`TurnDispatch not found: ${id}`);
+    if (options.transitionOptions?.observedTerminal) {
+      const result = changes.evidence?.result;
+      if (changes.reconciliationDecision !== "terminal_recovered" || result?.completionMethod !== "thread/read-recovery"
+        || result?.evidenceComplete !== true || result.threadId !== existing.threadId
+        || !result.turnId || (existing.turnId && result.turnId !== existing.turnId)
+        || (result.turn?.status?.type ?? result.turn?.status) !== status) {
+        throw Object.assign(new Error("Recovery requires matching observed terminal evidence"), { code: "TURN_RECOVERY_EVIDENCE_REQUIRED" });
+      }
+    }
     transitionTurnDispatch(existing.status, status, options.transitionOptions ?? {});
     if (options.ownerToken && existing.ownerToken !== options.ownerToken) return null;
     if (options.cancellationGeneration !== undefined && existing.cancellationGeneration !== options.cancellationGeneration) return null;
@@ -849,7 +858,7 @@ export class ControlRegistry {
       changes.leaseExpiresAt ?? existing.leaseExpiresAt, changes.cancelRequestedAt ?? existing.cancelRequestedAt,
       changes.deadlineAt ?? existing.deadlineAt, changes.startedAt ?? existing.startedAt, terminalAt,
       changes.lastProbeAt ?? existing.lastProbeAt, changes.probeCount ?? existing.probeCount,
-      changes.reconciliationDecision ?? existing.reconciliationDecision, json(changes.failure ?? existing.failure),
+      changes.reconciliationDecision ?? existing.reconciliationDecision, json(Object.hasOwn(changes, "failure") ? changes.failure : existing.failure),
       json({ ...existing.evidence, ...(changes.evidence ?? {}) }, {}), timestamp, id, existing.version,
       options.ownerToken ?? null, options.ownerToken ?? null,
       options.cancellationGeneration ?? null, options.cancellationGeneration ?? null,
@@ -1279,14 +1288,38 @@ export class ControlRegistry {
     if (!project && options.cwd) {
       try { project = this.resolveProject(options.cwd, { create: false }); } catch { project = null; }
     }
-    const lifecycles = this.listThreadLifecycles({ ...(project?.id ? { projectId: project.id } : {}), limit: 1000 })
+    const lifecycles = this.listThreadLifecycles({ ...(project?.id ? { projectId: project.id } : {}), limit: 1000000 })
       .filter((item) => !["compacted", "superseded", "archived"].includes(item.status));
     const agents = new Map(lifecycles.map((item) => [item.threadId, this.getAgent(item.threadId)]));
-    const durable = lifecycles.filter((item) => item.threadType !== "ephemeral_worker" && !agents.get(item.threadId)?.archivedAt);
+    // Historical task threads remain navigable/reusable, but are not reserved
+    // worker slots. Only release proven idle, terminal-only task histories.
+    const history = new Map(this.db.prepare(`SELECT agent_id, status FROM tasks WHERE agent_id IS NOT NULL`).all()
+      .reduce((entries, row) => {
+        const item = entries.get(row.agent_id) ?? { active: false };
+        item.active ||= !TERMINAL_TASK_STATUSES.has(row.status);
+        entries.set(row.agent_id, item);
+        return entries;
+      }, new Map()));
+    const durable = lifecycles.filter((item) => {
+      const agent = agents.get(item.threadId);
+      if (isControlPlaneAgent(agent)) return false;
+      const past = history.get(item.threadId);
+      const lease = this.getAgentLease(item.threadId);
+      const leased = lease && ["active", "leased"].includes(lease.status)
+        && (!lease.expiresAt || Date.parse(lease.expiresAt) > Date.now());
+      if (past && !past.active && ["idle", "available"].includes(agent?.status)
+        && !agent?.metadata?.currentTaskId && !leased) return false;
+      return item.threadType !== "ephemeral_worker" && agent && !agent.archivedAt
+        && !agent.metadata?.controlPlane && !["control", "orchestrator"].includes(agent.metadata?.executionPlane)
+        && (!agent.metadata?.autoRegistered || agent.metadata?.executionPlane === "data");
+    });
     const roleCount = durable.filter((item) => (item.role ?? "") === (options.role ?? "")).length;
+    const runningWorkers = durable.filter(item => history.get(item.threadId)?.active);
     const lineageForks = options.sourceThreadId ? this.listThreadLineage({ parentThreadId: options.sourceThreadId, limit: 1000 }).filter((item) => item.relationship === "fork").length : 0;
     return {
       budget, projectCount: durable.length, roleCount, lineageForks,
+      releasableProjectCount: runningWorkers.length,
+      releasableRoleCount: runningWorkers.filter(item => (item.role ?? "") === (options.role ?? "")).length,
       canCreateProject: durable.length < budget.policy.maxProjectThreads,
       canCreateRole: roleCount < budget.policy.maxRoleThreads,
       canForkLineage: lineageForks < budget.policy.maxLineageForks,
@@ -3814,7 +3847,7 @@ export class ControlRegistry {
           JOIN tasks dependency ON dependency.id = d.depends_on_task_id
           WHERE d.task_id = t.id AND (
             (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') = 'all_success' AND dependency.status NOT IN ('completed', 'completed_with_warnings'))
-            OR (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN ('completed', 'completed_with_warnings', 'rejected', 'validation_failed', 'failed', 'canceled', 'interrupted', 'skipped'))
+            OR (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN (${[...TERMINAL_TASK_STATUSES].map((status) => `'${status}'`).join(',')}))
           )
         )
       ORDER BY t.created_at
@@ -3924,7 +3957,7 @@ export class ControlRegistry {
           JOIN tasks dependency ON dependency.id = d.depends_on_task_id
           WHERE d.task_id = tasks.id AND (
             (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') = 'all_success' AND dependency.status NOT IN ('completed', 'completed_with_warnings'))
-            OR (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN ('completed', 'completed_with_warnings', 'rejected', 'validation_failed', 'failed', 'canceled', 'interrupted', 'skipped', 'blocked_by_policy', 'integration_blocked'))
+            OR (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN (${[...TERMINAL_TASK_STATUSES].map((status) => `'${status}'`).join(',')}))
           )
         )
       RETURNING *
@@ -4202,13 +4235,22 @@ export class ControlRegistry {
 
   waitClaimForLease(taskId, workerId, claimToken, delayMs = 2_000) {
     const timestamp = now();
+    const task = this.getTask(taskId);
+    const waitingSince = task?.metadata?.waitingSince ?? timestamp;
+    if (Date.now() - Date.parse(waitingSince) >= (task?.metadata?.execution?.timeoutMs ?? 30 * 60_000)) {
+      return this.finishFailureClaim(taskId, workerId, claimToken, {
+        type: "configuration", category: "configuration", code: "ROUTING_WAIT_EXPIRED",
+        cause: "Worker acquisition deadline expired", retryable: false, nextAction: "repair_routing",
+      }, { terminalStatus: "recovery_attention" });
+    }
     const row = this.db.prepare(`
       UPDATE tasks
-      SET status = 'waiting_for_lease', worker_id = NULL, heartbeat_at = NULL,
+      SET status = 'waiting_for_lease', worker_id = NULL, heartbeat_at = NULL, claim_token = NULL,
+          metadata_json = json_set(metadata_json, '$.waitingSince', ?),
           attempt = MAX(attempt - 1, 0), next_retry_at = ?, updated_at = ?, version = version + 1
       WHERE id = ? AND worker_id = ? AND claim_token = ? AND status = 'running'
       RETURNING *
-    `).get(new Date(Date.now() + delayMs).toISOString(), timestamp, taskId, workerId, claimToken);
+    `).get(waitingSince, new Date(Date.now() + delayMs).toISOString(), timestamp, taskId, workerId, claimToken);
     return row ? this.getTask(taskId) : null;
   }
 

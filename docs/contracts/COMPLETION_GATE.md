@@ -33,6 +33,9 @@ Completion Evaluator는 최소 다음 입력을 같은 Task·contract revision�
 - 계약이나 acceptance criteria가 요구하는 검증 명령이 실행되지 않았으면 `evidence_missing`이다.
 - Agent 문구에 포함된 테스트 통과 주장은 command evidence가 아니다.
 - 선택적 진단 명령 실패를 허용하려면 계획 단계에서 optional로 구조화해야 한다.
+- 테스트 성공은 인식 가능한 직접 실행과 종료 코드 0이 함께 있어야 한다. 실행 파일의 절대 경로와 지원되는 Node 옵션은 허용하지만, 임의 Python/JavaScript 래퍼의 자식 성공을 추측하지 않는다. 자식 명령이 별도 native receipt로 관찰되지 않으면 `attention`, `inspect_execution_evidence`, 자동 재시도 불가로 판정한다.
+- 같은 Turn 안에서 명령 문자열과 명시적 작업 디렉터리가 동일한 테스트를 나중에 성공적으로 재검증하면 앞선 실패를 대체할 수 있다. 다른 테스트·작업 디렉터리·일반 부작용 명령은 대체하지 않으며 원본 명령 기록은 보존한다.
+- 명시적인 진행 안내(`commentary`)는 최종 보고서의 대체값이 아니다. phase가 없는 구형 호스트 응답만 마지막 메시지 호환 처리를 허용한다.
 
 ### 3. Output materialization
 

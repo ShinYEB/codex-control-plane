@@ -3,6 +3,11 @@ import { createHash } from "node:crypto";
 export const THREAD_LIFECYCLE_STATUSES = Object.freeze(["candidate", "active", "idle", "compacted", "superseded", "archived"]);
 export const THREAD_TYPES = Object.freeze(["durable_specialist", "run_orchestrator", "ephemeral_worker"]);
 export const THREAD_BUDGET_VERSION = 1;
+export function isControlPlaneAgent(agent) {
+  return Boolean(agent?.metadata?.controlPlane || agent?.metadata?.orchestrationPlane
+    || ["control", "orchestrator"].includes(agent?.metadata?.executionPlane)
+    || (agent?.metadata?.controlPlaneManaged && ["planner", "validator", "synthesizer", "orchestrator"].includes(agent.role)));
+}
 export const DEFAULT_THREAD_BUDGET = Object.freeze({
   version: THREAD_BUDGET_VERSION,
   maxProjectThreads: 8,
