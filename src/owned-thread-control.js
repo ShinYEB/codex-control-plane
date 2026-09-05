@@ -9,9 +9,19 @@ export class OwnedThreadControl extends CodexControlPlane {
     this.sessionFactory = sessionFactory;
     this.sessions = new Map();
     this.acquisitions = new Map();
+    this.pendingAcquisitions = new Set();
+    this.closing = false;
   }
 
-  async acquire(method, args) {
+  acquire(method, args) {
+    if (this.closing) return Promise.reject(Object.assign(new Error("Thread control is closing"), { code: "THREAD_CONTROL_CLOSING" }));
+    const pending = this.acquireSession(method, args);
+    this.pendingAcquisitions.add(pending);
+    pending.then(() => this.pendingAcquisitions.delete(pending), () => this.pendingAcquisitions.delete(pending));
+    return pending;
+  }
+
+  async acquireSession(method, args) {
     const session = this.sessionFactory();
     const forward = (message) => this.client.emit("notification", message);
     session.client.on?.("notification", forward);
@@ -54,9 +64,14 @@ export class OwnedThreadControl extends CodexControlPlane {
 
   async releaseSession(threadId, session) {
     if (this.sessions.get(threadId) !== session) return;
-    await session.client.close({ waitForExit: true });
-    session.detach();
-    this.sessions.delete(threadId);
+    if (session.releasePromise) return session.releasePromise;
+    session.releasePromise = (async () => {
+      await session.client.close({ waitForExit: true });
+      session.detach();
+      if (this.sessions.get(threadId) === session) this.sessions.delete(threadId);
+    })();
+    try { await session.releasePromise; }
+    finally { session.releasePromise = null; }
   }
 
   async runTask(threadId, prompt, options = {}) {
@@ -91,7 +106,8 @@ export class OwnedThreadControl extends CodexControlPlane {
   }
 
   async close() {
-    await Promise.allSettled([...this.acquisitions.values()]);
+    this.closing = true;
+    await Promise.allSettled([...this.pendingAcquisitions]);
     await Promise.all([...this.sessions].map(([id, session]) => this.releaseSession(id, session)));
   }
 }

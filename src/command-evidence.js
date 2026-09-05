@@ -88,6 +88,8 @@ export function isTestCommand(value, depth = 0) {
   if (/[;|&\n`]/.test(text) || text.includes('$(')) return false;
   const tokens = text.match(/"[^"\n]*"|'[^'\n]*'|[^\s]+/g)?.map(t => t.replace(/^(['"])(.*)\1$/, '$2')) ?? [];
   const exe = (tokens.shift() ?? '').split(/[\\/]/).at(-1);
+  // Informational invocations can exit zero without executing any test.
+  if (tokens.some(token => ['--help', '-h', '--version', '-v', '--listTests', '--collect-only', '--co'].includes(token))) return false;
   if (['node','node.exe'].includes(exe)) {
     for (let i=0;i<tokens.length;i++) {
       const token=tokens[i];

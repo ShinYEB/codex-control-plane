@@ -22,6 +22,37 @@ function fixture() {
   return { control, sessions, parent };
 }
 
+test("shutdown drains pending spawn before closing and rejects new acquisition", async () => {
+  let finish;
+  let closed = 0;
+  const control = new OwnedThreadControl(new EventEmitter(), () => ({
+    client: { close: async () => { closed++; } },
+    control: { connect: async () => {}, spawnAgent: () => new Promise(resolve => { finish = resolve; }) },
+  }));
+  const spawning = control.spawnAgent();
+  await new Promise(resolve => setImmediate(resolve));
+  const shutdown = control.close();
+  await assert.rejects(control.spawnAgent(), { code: 'THREAD_CONTROL_CLOSING' });
+  finish({ id: 'late' });
+  await spawning;
+  await shutdown;
+  assert.equal(closed, 1);
+  assert.equal(control.sessions.size, 0);
+});
+
+test("concurrent terminal cleanup waits on one process exit", async () => {
+  const {control, sessions} = fixture();
+  const a = await control.spawnAgent();
+  let finish, calls = 0;
+  sessions[0].client.close = () => { calls++; return new Promise(resolve => { finish = resolve; }); };
+  const first = control.releaseSession(a.id, sessions[0]);
+  const second = control.releaseSession(a.id, sessions[0]);
+  assert.equal(calls, 1);
+  finish();
+  await Promise.all([first, second]);
+  assert.equal(control.sessions.size, 0);
+});
+
 test("terminal task releases only its own writer before returning", async () => {
   const { control, sessions } = fixture();
   const a = await control.spawnAgent();
