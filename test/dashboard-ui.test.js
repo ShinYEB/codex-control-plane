@@ -128,21 +128,16 @@ test("embedded dashboard polling is single-flight, adaptive, and visibility-awar
   assert.match(html, /pagehide[\s\S]*?lifecycleGeneration \+= 1;/);
 });
 
-test("chat navigation opens actual Orchestrator and worker threads through the Desktop navigation tool", async () => {
+test("dashboard navigation links target actual work without message or clipboard fallbacks", async () => {
   const html = await readFile(dashboardPath, "utf8");
   assert.match(html, /const terminalStatuses = new Set/);
-  assert.match(html, /callTool\("open_desktop_thread"/);
-  assert.match(html, /dashboardLeaseToken: state\.dashboardLeaseToken/);
   assert.match(html, /data-thread-id=/);
-  assert.match(html, /sendFollowUpMessage/);
-  assert.match(html, /request\("ui\/message"/);
-  assert.match(html, /result.opened === true/);
-  assert.match(html, /작업 열기를 요청했습니다/);
+  assert.match(html, /href="codex:\/\/threads\//);
+  assert.doesNotMatch(html, /request\("ui\/message"/);
   assert.match(html, /전체 작업/);
   assert.match(html, /하위 작업/);
-  assert.match(html, /navigator\.clipboard\.writeText\(threadId\)/);
+  assert.doesNotMatch(html, /navigator\.clipboard/);
   assert.match(html, /readOnly: !resultSession\.available/);
-  assert.match(html, /진행 중에는 기록만 확인할 수 있습니다/);
   assert.match(html, /state\.runThreads/);
   assert.match(html, /run-card-actors/);
   assert.match(html, /executionParticipants/);

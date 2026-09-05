@@ -71,7 +71,7 @@ Show the agent dashboard for this project.
 
 The default experience is **work name, status, progress, and Open work / View result**, provided by `get_work_status`. Keep making ordinary requests: there is no execution mode or hierarchy to learn. During preparation, the link is absent rather than a placeholder. Pinning is optional and host-dependent; opening ongoing work lets you observe its record.
 
-Ask **“Keep a small progress panel beside this work”** to see per-task status, issues, and freshness without opening the detailed dashboard. `show_work_progress` prepares a read-only panel; the native host attaches it beside the representative task. It refreshes while visible without model turns and warns when disconnected. This is a side panel, not an insertion into the chat body. Task identifiers can be copied there; opening tasks still uses native host navigation. Reopen the panel after a daemon restart or link expiry.
+Ask **“Keep a small progress panel beside this work”** to see per-task status, issues, and freshness without opening the detailed dashboard. `show_work_progress` prepares a read-only panel; the native host attaches it beside the representative task. It refreshes while visible without model turns and warns when disconnected. This is a side panel, not an insertion into the chat body. Open work links target existing local task conversations without copying identifiers or sending messages. Chat-link navigation has been user-verified; each panel host still requires click verification. Reopen the panel after a daemon restart or link expiry.
 
 The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 

@@ -20,9 +20,15 @@ test("panel refresh preserves stale evidence, pauses hidden views, and prevents 
   const refresh = elements.get("refresh").onclick;
   await refresh();
   assert.equal(calls, 1);
-  resolveFetch({ ok: true, json: async () => ({ work: { name: "<img onerror=bad>", status: "running", progress: { total: 1, succeeded: 0, active: 1 } }, tasks: [] }) });
+  const threadId = "01a07084-279e-7fa0-96a7-9937bfb80cc4";
+  resolveFetch({ ok: true, json: async () => ({ work: { name: "<img onerror=bad>", status: "running", progress: { total: 1, succeeded: 0, active: 1 } }, tasks: [{name:"테스트",status:"running",threadId}, {name:"준비",threadId:"javascript:bad"}] }) });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.get("name").textContent, "<img onerror=bad>");
+  const article = elements.get("tasks").children[0];
+  assert.equal(article.children[1].href, `codex://threads/${threadId}`);
+  assert.equal(article.children[1].textContent, "작업 열기");
+  assert.equal(article.children[1].onclick, undefined);
+  assert.equal(elements.get("tasks").children[1].children.length, 1);
   assert.equal(elements.get("connection").dataset.error, "false");
   assert.ok([...timers.values()].some(timer => timer.delay === 5000));
   document.hidden = true; visibility(); await refresh();

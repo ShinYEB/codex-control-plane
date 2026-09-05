@@ -456,7 +456,9 @@
     const failureActionLabel = (value) => ({ retry: "일시 오류 재시도", rework: "피드백 기반 재작업", repair_contract: "실행 계약 수정 필요", manual_intervention: "사용자 확인", fail: "실패 종료", none: "추가 조치 없음" })[value] ?? value ?? "조치 확인 필요";
     const terminalStatuses = new Set(["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "skipped", "interrupted", "canceled", "cancelled", "blocked_by_policy", "integration_blocked"]);
     const isTerminalStatus = (status) => terminalStatuses.has(status);
-    const threadLink = (threadId, label = "Codex 스레드 열기", { readOnly = false } = {}) => `<button type="button" class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}"${readOnly ? ' data-daemon-managed="true"' : ""} title="${readOnly ? "실행 중인 실제 Codex 스레드를 관찰용으로 엽니다. 진행 중에는 기록만 확인할 수 있습니다.합니다." : "실제 Codex 스레드를 엽니다"}">${label}</button>`;
+    const threadLink = (threadId, label = "작업 열기", { readOnly = false } = {}) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId || "")
+      ? `<a class="button button-link open-agent" data-thread-id="${escapeHtml(threadId)}" href="codex://threads/${escapeHtml(threadId)}"${readOnly ? ' data-daemon-managed="true"' : ""}>${escapeHtml(label)}</a>`
+      : `<span class="muted">작업 준비 중</span>`;
     const dispatchStage = (status) => ({ accepted: 0, draft: 0, planning: 1, preparing: 2, agents_prepared: 2, running: 3, completed: 4, failed: 4, cancelled: 4, canceled: 4 })[status] ?? 0;
     const runStage = (status) => ["accepted", "draft", "planning", "preparing", "agents_prepared"].includes(status) ? 0 : ["running"].includes(status) ? 1 : ["completed"].includes(status) ? 3 : 2;
 
@@ -477,41 +479,14 @@
       return result?.structuredContent ?? {};
     }
 
-    async function openAgentThread(threadId) {
-      try {
-        if (standalone) throw new Error("웹 대시보드에서는 Codex Desktop 직접 이동을 지원하지 않습니다.");
-        if (!state.dashboardLeaseToken) throw new Error("대시보드 소유권이 없습니다. Control Plane에서 다시 여세요.");
-        const result = await callTool("open_desktop_thread", { threadId, dashboardLeaseToken: state.dashboardLeaseToken });
-        if (result.opened === true) {
-          el("updated").textContent = "작업을 열었습니다.";
-        } else if (result.requiresHostNavigation && result.navigation?.arguments?.threadId === threadId) {
-          const prompt = `작업 ${threadId}을 앱에서 열어주세요. navigate_to_codex_page로 기존 작업 화면만 열고, 해당 작업에 메시지를 보내거나 실행·재시도하지 마세요.`;
-          const sent = openaiBridge?.sendFollowUpMessage
-            ? await openaiBridge.sendFollowUpMessage({ prompt })
-            : await Promise.race([
-              request("ui/message", { role: "user", content: [{ type: "text", text: prompt }] }),
-              new Promise((_, reject) => setTimeout(() => reject(new Error("이동 요청을 확인하지 못했습니다. 채팅에서 결과를 열어달라고 요청하세요.")), 10000)),
-            ]);
-          if (sent?.isError) throw new Error("앱이 이동 요청을 거부했습니다.");
-          el("updated").textContent = "작업 열기를 요청했습니다.";
-        } else throw new Error("앱의 이동 확인을 받지 못했습니다. 채팅에서 결과를 열어달라고 요청하세요.");
-      } catch (error) {
-        try {
-          await navigator.clipboard.writeText(threadId);
-          el("updated").textContent = `${error.message} 작업 ID를 복사했습니다 · ${shortId(threadId)}`;
-        } catch {
-          el("updated").textContent = `${error.message} · 작업 ID: ${threadId}`;
-        }
-      }
+    function bindAgentLinks() {
+      document.querySelectorAll(".open-agent").forEach(link => link.addEventListener("click", event => event.stopPropagation()));
     }
 
-    function bindAgentLinks() {
-      [...document.querySelectorAll(".open-agent")].forEach((button) => button.addEventListener("click", async (event) => {
-        event.stopPropagation();
-        button.disabled = true;
-        try { await openAgentThread(button.dataset.threadId); }
-        finally { button.disabled = false; }
-      }));
+    function openAgentThread(threadId) {
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(threadId || "")) {
+        window.location.href = `codex://threads/${threadId}`;
+      }
     }
 
     function applySnapshot(snapshot) {

@@ -9,7 +9,8 @@
   p { margin:6px 0; }
   .muted { color:light-dark(#626977,#abb1bf); font-size:12px; }
   .row { display:flex; align-items:center; justify-content:space-between; gap:12px; }
-  button { font:inherit; cursor:pointer; border:1px solid #8886; border-radius:8px; padding:5px 10px; background:transparent; color:inherit; flex-shrink:0; }
+  button, .open-work { font:inherit; cursor:pointer; border:1px solid #8886; border-radius:8px; padding:5px 10px; background:transparent; color:inherit; flex-shrink:0; }
+  .open-work { display:inline-block; text-decoration:none; margin-top:8px; }
   #connection[data-error=true], #attention { color:light-dark(#963500,#ffba82); }
   #attention:empty { display:none; }
   #attention { padding:10px; border:1px solid #a7653955; border-radius:8px; }
@@ -17,8 +18,6 @@
   article { border-top:1px solid #8884; padding:14px 0; }
   article p { white-space:pre-wrap; overflow-wrap:anywhere; }
   .state { font-size:12px; white-space:nowrap; }
-  details { font-size:12px; margin-top:8px; }
-  code { display:block; overflow-wrap:anywhere; margin:7px 0; user-select:all; }
   @media(max-width:380px) { body{padding:12px} .row{align-items:flex-start} }
 </style>
 <main>
@@ -49,11 +48,11 @@ function render(snapshot) {
     row.className='row'; title.textContent=task.name; state.className='state'; state.textContent=statusLabel(task.status);
     row.append(title,state); article.append(row);
     if(task.issue) { const issue=document.createElement('p');issue.textContent=task.issue; article.append(issue); }
-    if(task.threadId) {
-      const details=document.createElement('details'), summary=document.createElement('summary'), code=document.createElement('code'), button=document.createElement('button');
-      summary.textContent='작업 식별자';code.textContent=task.threadId;button.textContent='식별자 복사';
-      button.onclick=async()=>{ try{await navigator.clipboard.writeText(task.threadId);button.textContent='복사됨';}catch{button.textContent='위 식별자를 선택해 복사해주세요';} };
-      details.append(summary,code,button);article.append(details);
+    if(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(task.threadId || '')) {
+      const link=document.createElement('a');
+      link.className='open-work';link.textContent='작업 열기';
+      link.href=`codex://threads/${task.threadId}`;
+      article.append(link);
     }
     el('tasks').append(article);
   }

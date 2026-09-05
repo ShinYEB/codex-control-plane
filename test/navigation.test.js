@@ -16,23 +16,14 @@ test("default navigation returns host handoff, never a URL or false opened recei
   } finally { await server.close(); }
 });
 
-test("dashboard click requests host navigation without claiming completion; unknown acknowledgement fails visibly", async () => {
+test("dashboard renders safe direct task links without message or clipboard side effects", () => {
   const html = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
-  const source = html.slice(html.indexOf("    async function openAgentThread("), html.indexOf("    function bindAgentLinks("));
-  const run = new Function("standalone", "state", "callTool", "openaiBridge", "el", "shortId", "navigator", source + '; return openAgentThread("existing");');
-  const status = {};
-  const sent = [];
-  let copied = false;
-  const bridge = { sendFollowUpMessage: async request => { sent.push(request); return {}; } };
-  const clipboard = { clipboard: { writeText: async () => { copied = true; } } };
-  await run(false, { dashboardLeaseToken: "view" }, async () => ({ requiresHostNavigation: true, navigation: { arguments: { threadId: "existing" } } }), bridge, () => status, String, clipboard);
-  assert.equal(sent.length, 1);
-  assert.match(sent[0].prompt, /navigate_to_codex_page/);
-  assert.match(sent[0].prompt, /메시지를 보내거나 실행·재시도하지/);
-  assert.equal(status.textContent, "작업 열기를 요청했습니다.");
-  assert.equal(copied, false);
-  await run(false, { dashboardLeaseToken: "view" }, async () => ({}), bridge, () => status, String, clipboard);
-  assert.equal(sent.length, 1);
-  assert.equal(copied, true);
-  assert.match(status.textContent, /이동 확인을 받지 못했습니다/);
+  const source = html.slice(html.indexOf("    const threadLink ="), html.indexOf("    const dispatchStage"));
+  const render = new Function("escapeHtml", source + "; return threadLink;")(value => String(value).replaceAll("<", "&lt;").replaceAll('"', "&quot;"));
+  const id = "01a07084-279e-7fa0-96a7-9937bfb80cc4";
+  assert.match(render(id), new RegExp('href="codex://threads/' + id + '"'));
+  assert.doesNotMatch(render("javascript:alert(1)"), /href=/);
+  assert.doesNotMatch(render(null), /href=/);
+  assert.match(render(id, "<unsafe>"), /&lt;unsafe>/);
+  assert.doesNotMatch(html, /sendFollowUpMessage|navigator.clipboard/);
 });

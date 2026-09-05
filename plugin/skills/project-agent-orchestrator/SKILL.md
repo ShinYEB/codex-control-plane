@@ -7,15 +7,16 @@ description: Run ordinary work requests automatically and show concise progress 
 
 ## Native navigation
 
-Never emit `codex://threads/...` Markdown links or construct a replacement URL.
-They are not verified Desktop navigation. `master.navigation` is a host-tool
-handoff, not a hyperlink. For “결과 보기/열어줘” or an explicit work selection,
+Existing local tasks can use `codex://threads/<threadId>` links with an actual
+UUID returned by the registry or host. Chat-link navigation was user-verified;
+embedded/web surfaces still need their own click verification. Never invent an
+ID or treat link rendering as proof of opening. `master.navigation` is a host-tool
+handoff. For “결과 보기/열어줘” or an explicit work selection,
 call the available `navigate_to_codex_page` host tool with that exact threadId.
 Confirm opening only when it returns `navigated: true`. A status-only request
 does not authorize switching the current page: report status and say the result
 can be opened on request, without a fake clickable link.
-Dashboard button messages request navigation in this calling conversation only;
-never forward a prompt to the destination worker or start/retry work.
+Dashboard links must not send follow-up messages, start or retry work.
 If host navigation is unavailable, explain the limitation instead of claiming
 success. Message delivery or OS URL acceptance is not navigation confirmation.
 
@@ -28,8 +29,8 @@ read-only side panel beside the representative task, not content inserted into
 its chat body. The returned URL alone does not mean it opened; report queued
 placement honestly. Do not open the detailed dashboard instead. The panel
 refreshes without model turns; never prompt workers to update it. After daemon
-restart or link expiry, obtain a fresh panel URL. Its identifier-copy buttons
-are not native navigation; use the host navigation tool for actual selection.
+restart or link expiry, obtain a fresh panel URL. Its Open work links hide raw
+identifiers and request native navigation without sending a model message.
 
 Users make ordinary requests; never ask them to choose an execution mode or learn
 the internal hierarchy. In normal replies, do not expose master, slave, node,

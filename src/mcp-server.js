@@ -38,7 +38,7 @@ import { ThreadGraphContextPackImporter } from "./threadgraph-context-pack.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v9.html";
+const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v10.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EXECUTION_CAPABILITIES_SCHEMA = { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES }, maxItems: EXECUTION_CAPABILITIES.length };
@@ -929,7 +929,7 @@ const TOOLS = [
   {
     name: "show_work_progress",
     title: "Show compact work progress",
-    description: "Prepare a read-only, run-scoped live progress panel. Use the returned open_in_codex action to attach it beside the representative task when the user requests a work panel. This does not open UI by itself and never starts a worker or refresh turn. The browser panel supports identifier copying, not direct native task navigation.",
+    description: "Prepare a read-only, run-scoped live progress panel. Use the returned open_in_codex action to attach it beside the representative task when the user requests a work panel. This does not open UI by itself and never starts a worker or refresh turn. The panel offers task deep links without message or execution side effects; opening depends on the host, not URL creation.",
     inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
@@ -1299,7 +1299,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and work link only. Keep internal hierarchy invisible: use ordinary work names and localized Open work / View result labels, never master/slave, nodes, Orchestrator, Run IDs or role names in normal replies. Show detailed dashboards only on explicit request. Never emit codex://threads hyperlinks. When the user asks to open a result, call navigate_to_codex_page with the returned threadId; confirm only navigated=true. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
+        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and work link only. Keep internal hierarchy invisible: use ordinary work names and localized Open work / View result labels, never master/slave, nodes, Orchestrator, Run IDs or role names in normal replies. Show detailed dashboards only on explicit request. Use codex://threads/<UUID> links only for actual existing local task IDs; never treat a rendered link as confirmed navigation. When the user asks to open a result, call navigate_to_codex_page with the returned threadId; confirm only navigated=true. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
       };
     }
     if (message.method === "ping") return {};

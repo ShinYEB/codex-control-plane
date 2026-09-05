@@ -802,7 +802,7 @@ test("dashboard resource uses the MCP Apps MIME type", async () => {
   assert.match(result.contents[0].text, /작업 목록/);
   assert.match(result.contents[0].text, /data-tab="graph"/);
   assert.match(result.contents[0].text, /Codex 스레드는 플러그인을 실행할 때 자동으로 등록/);
-  assert.match(result.contents[0].text, /callTool\("open_desktop_thread"/);
+  assert.match(result.contents[0].text, /href="codex:\/\/threads\//);
   assert.match(result.contents[0].text, /graph-board/);
   assert.match(result.contents[0].text, /실행 구조/);
   assert.match(result.contents[0].text, /전체 작업/);
@@ -874,8 +874,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.dashboardUrl, undefined);
   assert.equal(dashboardStarts, 0, "embedded presentation must not start the local web dashboard");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v9.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v9.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v10.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v10.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
