@@ -46,14 +46,15 @@ export class TurnDispatcher {
     if (options.runOptions?.outputSchema !== undefined) assertOutputSchema(options.runOptions.outputSchema);
     if (!options.prompt?.trim()) throw new TypeError("TurnDispatch prompt must not be empty");
     const fingerprint = promptFingerprint(options.prompt);
+    const contextFingerprint = options.additionalContext ? hash(JSON.stringify(options.additionalContext)) : undefined;
     const existing = this.registry.listTurnDispatches({
       subjectType: options.subjectType, subjectId: options.subjectId, purpose: options.purpose, limit: 200,
     });
-    const matching = existing.find((entry) => entry.promptFingerprint === fingerprint);
+    const matching = existing.find((entry) => entry.promptFingerprint === fingerprint && entry.evidence?.contextFingerprint === contextFingerprint);
     if (matching && options.revision === undefined) return matching;
     const revision = Number(options.revision ?? (existing.reduce((maximum, entry) => Math.max(maximum, entry.revision), 0) + 1));
     const submissionKey = options.submissionKey ?? hash([
-      options.subjectType, options.subjectId, options.purpose, revision, fingerprint,
+      options.subjectType, options.subjectId, options.purpose, revision, fingerprint, ...(contextFingerprint ? [contextFingerprint] : []),
     ].join(":"));
     return this.registry.createTurnDispatch({
       id: options.id,
@@ -70,6 +71,7 @@ export class TurnDispatcher {
       submissionKey,
       deadlineAt: options.deadlineAt ?? new Date(Date.now() + (options.timeoutMs ?? this.defaultTimeoutMs)).toISOString(),
       evidence: {
+        ...(options.additionalContext ? { additionalContext: options.additionalContext, contextFingerprint: hash(JSON.stringify(options.additionalContext)) } : {}),
         promptRef: options.promptRef ?? null,
         allowTerminalParent: options.allowTerminalParent === true,
         settleAgentOnTerminal: options.settleAgentOnTerminal !== false,
@@ -123,6 +125,9 @@ export class TurnDispatcher {
     if (dispatch.promptFingerprint !== promptFingerprint(options.prompt)) {
       throw dispatchError(`TurnDispatch ${dispatch.id} prompt fingerprint does not match revision ${dispatch.revision}`, "TURN_DISPATCH_PROMPT_MISMATCH");
     }
+    if (dispatch.evidence?.contextFingerprint !== (options.additionalContext ? hash(JSON.stringify(options.additionalContext)) : undefined)) {
+      throw dispatchError(`TurnDispatch ${dispatch.id} context does not match its prepared revision`, "TURN_DISPATCH_CONTEXT_MISMATCH");
+    }
     if (TERMINAL_TURN_DISPATCH_STATUSES.has(dispatch.status)) {
       if (dispatch.status === "completed" && dispatch.evidence?.result) return dispatch.evidence.result;
       throw dispatchError(dispatch.failure?.message ?? `TurnDispatch is terminal: ${dispatch.status}`, "TURN_DISPATCH_TERMINAL", { dispatch });
@@ -170,6 +175,8 @@ export class TurnDispatcher {
       heartbeat.unref?.();
       const result = await control.runTask(dispatch.threadId, options.prompt, {
         ...(options.runOptions ?? {}),
+        ...(options.additionalContext ? { additionalContext: options.additionalContext } : {}),
+        ...(dispatch.evidence?.contextFingerprint ? { clientUserMessageId: dispatch.id } : {}),
         onStarted: (started) => {
           const current = this.#fenced(dispatch.id, token, generation);
           this.#assertParent(current);
@@ -235,7 +242,9 @@ export class TurnDispatcher {
     const turns = response?.thread?.turns ?? response?.turns ?? [];
     let turn = dispatch.turnId ? turns.find((candidate) => candidate.id === dispatch.turnId) : null;
     if (!turn && ["turn_submitting", "recovery_attention"].includes(dispatch.status) && !dispatch.turnId) {
-      turn = [...turns].reverse().find((candidate) => promptFingerprint(turnPrompt(candidate)) === dispatch.promptFingerprint) ?? null;
+      turn = [...turns].reverse().find((candidate) => dispatch.evidence?.contextFingerprint
+        ? (candidate.items ?? []).some((item) => ["userMessage", "user_message"].includes(item.type) && item.clientId === dispatch.id)
+        : promptFingerprint(turnPrompt(candidate)) === dispatch.promptFingerprint) ?? null;
     }
     const status = turnStatus(turn);
     const terminal = ["completed", "failed", "interrupted"].includes(status);

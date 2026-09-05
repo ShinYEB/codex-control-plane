@@ -207,8 +207,11 @@ test("runTask forwards an explicit workspace-write network policy", async () => 
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
-  await control.runTask("thr_network", "run integration tests", { sandboxPolicy, timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
+  const additionalContext = { policy: { kind: "application", value: "Internal execution instructions" } };
+  await control.runTask("thr_network", "run integration tests", { sandboxPolicy, additionalContext, timeoutMs: 1_000, evidenceHydrationTimeoutMs: 5 });
   assert.deepEqual(turnStartParams.sandboxPolicy, sandboxPolicy);
+  assert.deepEqual(turnStartParams.input, [{ type: "text", text: "run integration tests" }]);
+  assert.deepEqual(turnStartParams.additionalContext, additionalContext);
   await client.close();
 });
 

@@ -218,7 +218,7 @@ test("Global Run consumers receive only validated durable cross-project handoff 
     forkAgent: async (id) => ({ id: `${id}_fork`, status: "idle", provider: "codex", forkedFromId: id }),
     resumeAgent: async (id) => ({ id, status: "idle", provider: "codex" }), nameAgent: async () => {}, pinAgent: async () => {},
     runTask: async (_id, prompt, options = {}) => {
-      prompts.push(prompt);
+      prompts.push({ prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `global_turn_${prompts.length}` });
       return { output: prompt.includes("Produce global report") ? "GLOBAL_REPORT" : "consumed", turnId: `global_turn_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -241,10 +241,10 @@ test("Global Run consumers receive only validated durable cross-project handoff 
       dependencies: [{ id: "durable_report", producerRunId: "handoff_run_a", consumerRunId: "handoff_run_b", requiredOutputs: ["report"], acceptanceCriteria: ["report evidence is attached"] }],
     } } });
     await waitUntil(() => server.registry.getGlobalRun("handoff_global")?.status === "completed");
-    const consumerPrompt = prompts.find((prompt) => prompt.includes("Consume global report"));
-    assert.match(consumerPrompt, /A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS/);
-    assert.match(consumerPrompt, /GLOBAL_REPORT/);
-    assert.match(consumerPrompt, /durable_report/);
+    const consumer = prompts.find(({ prompt }) => prompt === "Consume global report");
+    assert.ok(consumer);
+    assert.match(consumer.context.threadhub_handoffs.value, /GLOBAL_REPORT/);
+    assert.match(consumer.context.threadhub_handoffs.value, /durable_report/);
     const handoff = server.registry.getCrossProjectHandoff("durable_report");
     assert.equal(handoff.status, "received");
     assert.ok(handoff.receiptHash);
@@ -618,11 +618,13 @@ test("run_agent_task forks an existing agent by default", async () => {
 
 test("run_agent_task injects project context and records its result", async () => {
   let deliveredPrompt = "";
+  let deliveredContext;
   const control = {
     connect: async () => {},
     spawnAgent: async () => ({ id: "agent_context", cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async (id, prompt, options) => {
       deliveredPrompt = prompt;
+      deliveredContext = options.additionalContext;
       options.onStarted?.({ turnId: "turn_context" });
       return { output: "v2 구현 완료", turnId: "turn_context", turn: { status: "completed" } };
     },
@@ -633,8 +635,9 @@ test("run_agent_task injects project context and records its result", async () =
     method: "tools/call",
     params: { name: "run_agent_task", arguments: { prompt: "API 구현", cwd: "/repo", role: "backend", routingMode: "new" } },
   });
-  assert.match(deliveredPrompt, /Authoritative project context/);
-  assert.match(deliveredPrompt, /v2 API를 사용한다/);
+  assert.equal(deliveredPrompt, "API 구현");
+  assert.match(deliveredContext.threadhub_project.value, /Authoritative project context/);
+  assert.match(deliveredContext.threadhub_project.value, /v2 API를 사용한다/);
   assert.equal(response.structuredContent.contextPack.memories[0].id, "api_decision");
   assert.equal(response.structuredContent.resultMemory.kind, "task_result");
   assert.match(server.registry.getAgent("agent_context").summary, /v2 구현 완료/);
@@ -1070,8 +1073,8 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
     nameAgent: async () => {},
     pinAgent: async () => {},
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
-    runTask: async (threadId, prompt) => {
-      turns.push({ threadId, prompt });
+    runTask: async (threadId, prompt, options) => {
+      turns.push({ threadId, prompt, context: options.additionalContext });
       return { output: "Run accepted; waiting for Data Plane results.", turnId: "turn_kickoff", turn: { id: "turn_kickoff", status: "completed" } };
     },
   };
@@ -1099,7 +1102,8 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   assert.equal(sequence, 1, "automatic start creates only the Orchestrator before workers are scheduled");
   assert.equal(turns.length, 1);
   assert.equal(turns[0].threadId, "agent_1");
-  assert.match(turns[0].prompt, /results will be collected here/);
+  assert.equal(turns[0].prompt, "복합 기능");
+  assert.match(turns[0].context.threadhub_policy.value, /results will be collected here/);
   assert.equal(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestratorKickoff.turnId, "turn_kickoff");
   const kickoffDispatch = server.registry.listTurnDispatches({
     subjectType: "run", subjectId: prepared.structuredContent.runId, purpose: "orchestration", limit: 10,
@@ -1531,7 +1535,7 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
     nameAgent: async () => {},
     pinAgent: async () => {},
     runTask: async (id, prompt, options = {}) => {
-      prompts.push({ id, prompt });
+      prompts.push({ id, prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `turn_${prompts.length}` });
       return { output: prompt.includes("첫 결과를 생성") ? "UPSTREAM_RESULT" : "done", turnId: `turn_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -1547,9 +1551,9 @@ test("dependent data-plane tasks receive upstream results as A2A handoff", async
     ] } },
   });
   await waitUntil(() => server.registry.getRun(prepared.structuredContent.runId)?.status === "completed");
-  const downstream = prompts.find((entry) => entry.prompt.includes("[A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS]"));
+  const downstream = prompts.find((entry) => entry.prompt === "첫 결과를 검토");
   assert.ok(downstream);
-  assert.match(downstream.prompt, /UPSTREAM_RESULT/);
+  assert.match(downstream.context.threadhub_handoffs.value, /UPSTREAM_RESULT/);
   assert.ok(server.registry.listEvents({ limit: 100 }).some((event) => event.eventType === "task.a2a_handoff_received"));
   await server.close();
 });
@@ -1567,7 +1571,7 @@ test("validator feedback drives bounded rework after automatic Start", async () 
     pinAgent: async () => {},
     resumeAgent: async (id) => ({ id, cwd: "/repo", status: "idle", provider: "codex" }),
     runTask: async (_id, prompt, options = {}) => {
-      prompts.push(prompt);
+      prompts.push({ prompt, context: options.additionalContext });
       options.onStarted?.({ turnId: `turn_rework_${prompts.length}` });
       return { output: `attempt ${prompts.length}`, turnId: `turn_rework_${prompts.length}`, turn: { status: "completed" } };
     },
@@ -1594,11 +1598,10 @@ test("validator feedback drives bounded rework after automatic Start", async () 
   assert.equal(task.status, "completed");
   assert.equal(task.attempt, 2);
   assert.equal(task.metadata.failureHistory.length, 1);
-  assert.match(prompts[1], /\[VALIDATOR REWORK FEEDBACK\]/);
-  assert.match(prompts[1], /Add retry regression evidence/);
-  for (const prompt of prompts) {
-    assert.match(prompt, /\[RUN AUTHORIZATION\]/);
-    assert.match(prompt, /Do not request another Start confirmation/);
+  assert.match(prompts[1].context.threadhub_rework.value, /Add retry regression evidence/);
+  for (const { prompt, context } of prompts) {
+    assert.equal(prompt, "implement retry");
+    assert.match(context.threadhub_policy.value, /Do not request another Start confirmation/);
   }
   await server.close();
 });

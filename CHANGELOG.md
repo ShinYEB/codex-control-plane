@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased — readable work conversations
+
+- Keep work requests separate from runtime policy, dependency reports and review feedback using per-turn application context.
+- Use natural final answers for ordinary reports while preserving strict named-output compatibility and all execution-evidence gates.
+- Avoid injecting unrelated historical reports; keep complex-work kickoff and result requests readable.
+- Persist context fingerprints and use submission identity rather than identical prose for uncertain-turn recovery.
+
 All notable changes to RUVORA will be documented in this file.
 
 The project follows Semantic Versioning while acknowledging that releases before 1.0 may change public interfaces. Breaking changes still require explicit migration and rollback notes.

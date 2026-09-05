@@ -204,6 +204,8 @@ export class CodexControlPlane {
       const result = await this.client.request("turn/start", {
         threadId,
         input: [{ type: "text", text: prompt }],
+        ...(options.clientUserMessageId ? { clientUserMessageId: options.clientUserMessageId } : {}),
+        ...(options.additionalContext ? { additionalContext: options.additionalContext } : {}),
         ...(options.cwd ? { cwd: options.cwd } : {}),
         ...(options.model ? { model: options.model } : {}),
         ...(options.effort ? { effort: options.effort } : {}),

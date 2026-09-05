@@ -102,7 +102,8 @@ export class ContextManager {
   }
 
   build(request = {}) {
-    const candidates = this.registry.listMemories({ cwd: request.cwd, limit: 300 });
+    const candidates = this.registry.listMemories({ cwd: request.cwd, limit: 300 })
+      .filter((memory) => !request.excludeTaskResults || memory.kind !== "task_result");
     const resolved = freshness(candidates);
     const queryTokens = tokens([
       request.prompt,

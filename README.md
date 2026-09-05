@@ -81,6 +81,8 @@ Opening, refreshing, or closing the navigator never starts or completes work.
 
 ## Architecture
 
+Work threads show the assigned request, real execution history and a readable final answer. Runtime instructions and dependency reports travel separately from the visible request. Ordinary reports no longer require JSON; custom named output contracts remain structured for compatibility. See [Work conversation](./docs/contracts/WORK_CONVERSATION.md).
+
 ![RUVORA architecture: a user goal moves through the MCP proxy and one daemon into Codex Agent threads and project workspaces, then returns as a validated result](./docs/assets/architecture-overview.svg)
 
 | Plane | Responsibility | Explicit non-responsibility |
