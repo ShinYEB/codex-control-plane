@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ContextManager } from "../src/context-manager.js";
-import { assertSingleRunStart, PLAN_SCHEMA, PlannerEngine } from "../src/planner-engine.js";
+import { assertSingleRunStart, diagnoseSingleRunStart, PLAN_SCHEMA, PlannerEngine } from "../src/planner-engine.js";
 import { ControlRegistry } from "../src/registry.js";
 import { RoleTemplateManager } from "../src/role-templates.js";
 
@@ -189,13 +189,13 @@ test("synthesizer prose cannot replace the durable failed Run verdict", async ()
   registry.close();
 });
 
-test("planner automatically retries a graph that asks for another Start", async () => {
+test("planner retries invalid structured authorization regardless of prose", async () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   const roles = new RoleTemplateManager(registry);
   roles.seedBuiltins();
   const prompts = [];
   const outputs = [
-    { summary: "invalid", risks: [], tasks: [{ key: "qa", title: "QA", prompt: "Wait for a separate Start before testing.", role: "e2e tester", capabilities: [], tools: ["node"], dependsOn: [], workspaceMode: "shared", authorizationScope: "parent_run", acceptanceCriteria: ["A second Start is required"] }] },
+    { summary: "invalid", risks: [], tasks: [{ key: "qa", title: "QA", prompt: "No additional Start is required.", role: "e2e tester", capabilities: [], tools: ["node"], dependsOn: [], workspaceMode: "shared", authorizationScope: "task", acceptanceCriteria: [] }] },
     { summary: "corrected", risks: [], tasks: [{ key: "qa", title: "QA", prompt: "The parent Run is already authorized; run tests immediately without another Start.", role: "e2e tester", capabilities: [], tools: ["node"], dependsOn: [], workspaceMode: "shared", authorizationScope: "parent_run", acceptanceCriteria: ["No additional Start is required"] }] },
   ];
   const planner = new PlannerEngine({
@@ -230,14 +230,57 @@ test("single-Run Start lint accepts explicit Korean prohibitions from planner ta
   assert.doesNotThrow(() => assertSingleRunStart({ tasks: [task] }));
 });
 
-test("single-Run Start lint still rejects explicit Korean additional Start gates", () => {
+test("single-Run Start prose is advisory and cannot override structured authority", () => {
   const task = {
     key: "T05",
     authorizationScope: "parent_run",
     prompt: "테스트 전에 별도 Start 승인을 받아야 한다.",
     acceptanceCriteria: [],
   };
-  assert.throws(() => assertSingleRunStart({ tasks: [task] }), (error) => error.code === "PLAN_ADDITIONAL_START");
+  assert.doesNotThrow(() => assertSingleRunStart({ tasks: [task] }));
+  assert.equal(diagnoseSingleRunStart({ tasks: [task] })[0].blocking, false);
+});
+
+test("live E2E negations do not become additional Start requests", () => {
+  for (const prompt of [
+    "Do not implement fixes, request another Start, or create follow-up tasks.",
+    "If permissions are unavailable, report it blocked instead of changing permissions or requesting another Start.",
+  ]) {
+    const plan = { tasks: [{ key: "regression", authorizationScope: "parent_run", prompt }] };
+    assert.doesNotThrow(() => assertSingleRunStart(plan));
+    assert.deepEqual(diagnoseSingleRunStart(plan), []);
+  }
+  for (const authorizationScope of [null, "", false, "task", "global"]) {
+    assert.throws(() => assertSingleRunStart({ tasks: [{ key: "invalid", authorizationScope, prompt: "Never request another Start." }] }),
+      (error) => error.code === "EXECUTION_CONTRACT_AUTHORIZATION_SCOPE");
+  }
+});
+
+test("prose warnings persist without consuming a planner rework", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const roles = new RoleTemplateManager(registry);
+  roles.seedBuiltins();
+  let calls = 0;
+  const planner = new PlannerEngine({
+    registry, contextManager: new ContextManager(registry), roleTemplates: roles,
+    getControl: async () => ({
+      spawnAgent: async () => ({ id: "planner_advisory", cwd: "/repo" }),
+      runTask: async () => {
+        calls += 1;
+        return { output: JSON.stringify({ summary: "advisory", risks: [], tasks: [{
+          key: "review", role: "reviewer", prompt: "Wait for a separate Start before testing.",
+          authorizationScope: "parent_run", acceptanceCriteria: [],
+        }] }) };
+      },
+    }), decorateAgent: async () => {},
+  });
+  try {
+    const plan = await planner.plan({ objective: "Review", cwd: "/repo" });
+    assert.equal(plan.status, "planned");
+    assert.equal(calls, 1);
+    assert.equal(plan.metadata.startPolicyDiagnostics[0].taskKey, "review");
+    assert.equal(plan.metadata.startPolicyDiagnostics[0].blocking, false);
+  } finally { registry.close(); }
 });
 
 test("planner compiles execution contracts before persisting the graph and retries invalid policy", async () => {

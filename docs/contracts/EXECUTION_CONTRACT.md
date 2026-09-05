@@ -33,6 +33,12 @@
 
 ## Default compilation
 
+### Single-Run authorization and prose diagnostics
+
+추가 Start 승인 여부는 구조화된 `authorizationScope=parent_run`과 실행 계약으로 결정한다. 명시된 다른 값이나 잘못된 타입은 `EXECUTION_CONTRACT_AUTHORIZATION_SCOPE`로 거부한다. 신규 Planner 출력은 이 필드가 필수이며, 기존 입력 경로의 필드 생략은 compiler의 `parent_run` 기본값을 따른다.
+
+자연어의 추가 Start 표현 검사는 보조 진단이다. `PLAN_START_PROSE_WARNING`은 Plan의 `metadata.startPolicyDiagnostics`에 task key와 원문을 보존하며 `blocking=false`로 기록한다. 문장의 쉼표·부정 표현·번역 차이 때문에 계획을 거부하거나 재생성하지 않는다. 이 경고는 새 승인을 만들거나 기존 권한을 확대하지 않으며, worker에는 기존 Run 승인 지침이 계속 전달된다. 실제 sandbox·side-effect·fingerprint 검증과 Completion Gate도 그대로 적용된다.
+
 명시적 `taskKind`가 없으면 title, prompt, capability, tool의 단어를 이용한 호환 추론을 사용한다. 신규 Planner 출력은 명시적으로 제공해야 한다.
 
 | 의도 | 기본 계약 |

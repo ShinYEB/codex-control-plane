@@ -73,21 +73,31 @@ const ADDITIONAL_START_PATTERNS = [
 const NEGATED_ADDITIONAL_START_PATTERN = /(?:\bnever\b|\bmust\s+not\b|\bdo(?:es)?\s+not\b|\bwithout\b|\bnot\s+(?:required|needed|allowed)\b|\bno\b.{0,40}\b(?:another|additional|separate|second)\b|(?:요구|요청|호출|확인|승인|기다리|필요)하지\s*않|하지\s*(?:않|말)|(?:추가|별도).{0,24}없이|불필요|금지)/i;
 
 function statementRequestsAdditionalStart(statement) {
+  if (/\b(?:instead of|rather than)\b/i.test(statement)) return false;
   if (NEGATED_ADDITIONAL_START_PATTERN.test(statement)) return false;
   return ADDITIONAL_START_PATTERNS.some((pattern) => pattern.test(statement));
 }
 
-function assertSingleRunStart(plan) {
-  const violations = (plan?.tasks ?? []).filter((task) => {
-    if (task.authorizationScope && task.authorizationScope !== "parent_run") return true;
+// Prose is advisory only: punctuation and negation cannot grant or revoke authority.
+function diagnoseSingleRunStart(plan) {
+  return (plan?.tasks ?? []).flatMap((task) => {
     const statements = [task.prompt, ...(task.acceptanceCriteria ?? [])]
       .filter(Boolean)
-      .flatMap((value) => String(value).split(/[.!?。\n;；,，]+/));
-    return statements.some(statementRequestsAdditionalStart);
+      .flatMap((value) => String(value).split(/[.!?。\n;；]+/));
+    return statements.filter(statementRequestsAdditionalStart).map((statement) => ({
+      code: "PLAN_START_PROSE_WARNING", taskKey: task.key, statement: statement.trim(),
+      severity: "warning", blocking: false,
+    }));
   });
+}
+
+function assertSingleRunStart(plan) {
+  // Omitted scope follows the existing execution-contract compiler default.
+  const violations = (plan?.tasks ?? []).filter((task) =>
+    task.authorizationScope !== undefined && task.authorizationScope !== "parent_run");
   if (!violations.length) return;
-  const error = new Error(`Planner requested an additional Start in tasks: ${violations.map((task) => task.key).join(", ")}`);
-  error.code = "PLAN_ADDITIONAL_START";
+  const error = new Error(`Invalid Run authorization scope in tasks: ${violations.map((task) => task.key).join(", ")}`);
+  error.code = "EXECUTION_CONTRACT_AUTHORIZATION_SCOPE";
   throw error;
 }
 
@@ -255,6 +265,7 @@ export class PlannerEngine {
       feedback: feedback ?? plan.feedback,
       metadata: {
         contextMemoryIds: context.memories.map((item) => item.id),
+        startPolicyDiagnostics: diagnoseSingleRunStart(materialized),
         contextSnapshotId: validatedSnapshot.id,
         contextSnapshotFingerprint: validatedSnapshot.fingerprint,
       },
@@ -289,4 +300,4 @@ export class PlannerEngine {
   }
 }
 
-export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput, assertSingleRunStart };
+export { PLAN_SCHEMA, SYNTHESIS_SCHEMA, parseJsonOutput, assertSingleRunStart, diagnoseSingleRunStart };
