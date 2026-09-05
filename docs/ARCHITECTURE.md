@@ -141,7 +141,7 @@ Runtime deployment는 `src`, `ui`, `scripts`, `package.json`을 staging하고 di
 
 ## Dashboard 계약
 
-Control Plane만 dashboard lease와 polling loop를 소유한다. Worker와 Orchestrator 스레드는 poll하지 않는다. dispatch는 작업 탐색기를 자동으로 열지 않는다. 기본 화면의 최상위 목록은 사용자 요청을 대표하는 Master Worker들이다. 단순 Run의 Master를 선택하면 실제 작업 스레드로 이동한다. 복잡한 Run의 Master Orchestrator를 선택하면 일반 Codex 실행 기록과 함께 하위 Slave Task DAG를 표시하며, 그래프 노드를 선택하면 실제 Slave Worker 스레드로 이동한다. Planner, Validator, Synthesizer TurnDispatch는 고급 진단에서 조회할 수 있지만 사용자 작업 목록의 동급 최상위 노드로 올리지 않는다. Daemon Scheduler는 Codex 채팅이 아니므로 탐색 대상으로 넣지 않는다. Task approval tab이나 manual Start 경로는 없다.
+작업 탐색기는 현재 Codex 채팅 안의 MCP Apps UI로 표시하는 것이 기본이다. 로컬 web server는 host가 embedded UI를 지원하지 않거나 사용자가 web 표시를 명시한 경우에만 시작한다. Host가 확인한 각 Control Plane 채팅은 독립적인 TTL view lease를 받을 수 있고, 마지막 owner 기록은 host identity가 없는 호출의 fallback일 뿐 새 채팅을 막지 않는다. Worker와 Orchestrator 스레드는 view lease를 받을 수 없으며 poll하지 않는다. dispatch는 작업 탐색기를 자동으로 열지 않는다. 기본 화면의 최상위 목록은 사용자 요청을 대표하는 Master Worker들이다. 단순 Run의 Master를 선택하면 실제 작업 스레드로 이동한다. 복잡한 Run의 Master Orchestrator를 선택하면 일반 Codex 실행 기록과 함께 하위 Slave Task DAG를 표시하며, 그래프 노드를 선택하면 실제 Slave Worker 스레드로 이동한다. Planner, Validator, Synthesizer TurnDispatch는 고급 진단에서 조회할 수 있지만 사용자 작업 목록의 동급 최상위 노드로 올리지 않는다. Daemon Scheduler는 Codex 채팅이 아니므로 탐색 대상으로 넣지 않는다. Task approval tab이나 manual Start 경로는 없다.
 
 사용자-visible notification은 `completed`, `failed`, `attention_required`, `policy_blocked` 네 종류뿐이다. running, queued, retrying, validation 같은 정상 진행은 notification을 만들지 않는다. notification은 작업 탐색기에 표시하며 policy stop은 제품·infrastructure failure와 구분한다.
 

@@ -5,7 +5,10 @@ export function classifyFailure(error, stage = "execution") {
   let type = stage === "validation" ? "validation" : "worker";
   let retryable = Boolean(error?.retryable);
 
-  if (/unexpected status 404 not found.*(?:backend-api\/codex\/responses|codex\/responses)/.test(value)) {
+  if (/^(?:CONTEXT_(?:SUPERSEDE|AUTHORITY|CLAIM)|CONTEXT_SNAPSHOT_INVALID|PRODUCT_CONTRACT_)/.test(String(code ?? ""))) {
+    type = "configuration";
+    retryable = false;
+  } else if (/unexpected status 404 not found.*(?:backend-api\/codex\/responses|codex\/responses)/.test(value)) {
     type = "infrastructure";
     code ??= "APP_SERVER_UPSTREAM_404";
     retryable = true;
@@ -56,11 +59,11 @@ export function classifyFailure(error, stage = "execution") {
     : ["coordination", "timeout", "interrupted"].includes(type) ? "coordination"
     : type === "validation" ? "validation"
     : "product";
-  const nextAction = ["infrastructure", "coordination", "timeout"].includes(type)
+  const nextAction = error?.nextAction ?? (["infrastructure", "coordination", "timeout"].includes(type)
     ? "retry"
     : ["validation", "test", "command", "worker"].includes(type)
       ? "rework"
-      : "manual_intervention";
+      : type === "configuration" ? "repair_contract" : "manual_intervention");
   return { type, category, stage, cause: message, retryable, nextAction, code, message, at: new Date().toISOString() };
 }
 

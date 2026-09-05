@@ -107,7 +107,7 @@ export function buildRunGraph(registry, runId, options = {}) {
       dispatchPath: run.metadata?.dispatchPath ?? (tasks.length === 1 ? "direct" : "orchestrated"),
       complexity: run.metadata?.complexity ?? null,
       dispatchPhase: run.metadata?.dispatchPhase ?? null,
-      failure: run.metadata?.failure ?? (run.metadata?.dispatchError ? {
+      failure: compactFailure(run.metadata?.failure) ?? (run.metadata?.dispatchError ? {
         type: "configuration",
         category: "configuration",
         stage: run.metadata?.dispatchPhase ?? "dispatch",

@@ -836,6 +836,7 @@ test("authorized dashboards can open an existing Codex Desktop task without send
 
 test("show_agent_dashboard returns agents and task state", async () => {
   const calls = [];
+  let dashboardStarts = 0;
   const control = {
     connect: async () => {},
     listAgents: async (options) => {
@@ -846,7 +847,7 @@ test("show_agent_dashboard returns agents and task state", async () => {
       ], nextCursor: null };
     },
   };
-  const dashboardServer = { start: async () => {}, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
+  const dashboardServer = { start: async () => { dashboardStarts += 1; }, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
   const server = fakeServer(control, { dashboardServer });
   const result = await server.handleRequest({
     method: "tools/call",
@@ -859,6 +860,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.deepEqual(result.structuredContent.tasks, []);
   assert.equal(result.structuredContent.cwd, "/repo");
   assert.equal(result.structuredContent.dashboardPresentation, "embedded");
+  assert.equal(result.structuredContent.dashboardUrl, undefined);
+  assert.equal(dashboardStarts, 0, "embedded presentation must not start the local web dashboard");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
   assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v7.html");
   assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v7.html");
@@ -869,6 +872,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
     params: { name: "show_agent_dashboard", arguments: { cwd: "/repo", presentation: "web" } },
   });
   assert.equal(web.structuredContent.dashboardPresentation, "web");
+  assert.equal(web.structuredContent.dashboardUrl, "http://127.0.0.1/dashboard");
+  assert.equal(dashboardStarts, 1);
   assert.equal(web.content.some((item) => item.type === "resource_link"), true);
   assert.equal(calls.length, 1, "project reconciliation is cached for five minutes");
   await server.close();
@@ -940,6 +945,50 @@ test("dashboard falls back to the registered Control Plane owner when the host o
   assert.equal(typeof shown.structuredContent.dashboardLeaseToken, "string");
   const lease = server.dashboardViewLeases.get(shown.structuredContent.dashboardLeaseToken);
   assert.equal(lease.requesterThreadId, "control_owner");
+  await server.close();
+});
+
+test("an authenticated host thread replaces a stale dashboard fallback owner", async () => {
+  const control = { connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) };
+  const server = fakeServer(control);
+  server.registry.upsertAgent({ id: "stale_owner", cwd: "/repo", status: "idle", role: "control-plane", metadata: { executionPlane: "control" } });
+  server.registry.upsertAgent({ id: "current_host", cwd: "/repo", status: "idle" });
+  server.registry.setSetting("control_plane_owner:/repo", "stale_owner");
+
+  const shown = await server.handleRequest({
+    method: "tools/call",
+    params: {
+      name: "show_agent_dashboard",
+      arguments: { cwd: "/repo" },
+      _meta: { "codex/origin": { threadId: "current_host", turnId: "current_turn", source: "host_environment" } },
+    },
+  });
+
+  assert.equal(shown.isError, undefined);
+  assert.equal(shown.structuredContent.dashboardPresentation, "embedded");
+  assert.equal(server.registry.getSetting("control_plane_owner:/repo"), "current_host");
+  assert.equal(server.registry.getAgent("current_host").role, "control-plane");
+  assert.equal(server.registry.getAgent("current_host").metadata.executionPlane, "control");
+  const lease = server.dashboardViewLeases.get(shown.structuredContent.dashboardLeaseToken);
+  assert.equal(lease.requesterThreadId, "current_host");
+  const transfer = server.registry.listEvents({ entityType: "agent", entityId: "current_host", limit: 20 })
+    .find((event) => event.eventType === "control_plane.owner_transferred");
+  assert.equal(transfer.payload.previousOwnerThreadId, "stale_owner");
+  assert.equal(transfer.payload.identitySource, "host");
+  await server.close();
+});
+
+test("legacy caller identity cannot replace an existing dashboard fallback owner", async () => {
+  const control = { connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) };
+  const server = fakeServer(control);
+  server.registry.setSetting("control_plane_owner:/repo", "control_owner");
+  const shown = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "show_agent_dashboard", arguments: { cwd: "/repo", requesterThreadId: "untrusted_caller" } },
+  });
+  assert.equal(shown.isError, true);
+  assert.equal(shown.structuredContent.code, -32003);
+  assert.equal(server.registry.getSetting("control_plane_owner:/repo"), "control_owner");
   await server.close();
 });
 
@@ -1201,6 +1250,37 @@ test("prepared run records an actual Orchestrator thread separately from the Dae
   assert.equal(graph.run.orchestrator.id, "orchestrator_identity");
   assert.notEqual(graph.run.scheduler.instanceId, graph.run.orchestrator.id);
   assert.deepEqual(prepared.structuredContent.orchestrator, { id: "orchestrator_identity", type: "codex_session" });
+  await server.close();
+});
+
+test("control dispatch persists one canonical product-contract failure before creating work", async () => {
+  const error = Object.assign(new Error("Superseded context claim was not found"), {
+    code: "CONTEXT_SUPERSEDE_TARGET_MISSING",
+  });
+  const server = fakeServer({ connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) }, {
+    contextResolver: { resolve: () => { throw error; } },
+  });
+  const accepted = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "dispatch_control_request", arguments: { objective: "verify contracts", cwd: "/repo", mode: "orchestrated" } },
+  });
+  const run = await waitUntil(() => {
+    const current = server.registry.getRun(accepted.structuredContent.runId);
+    return current.status === "failed" ? current : null;
+  });
+  assert.equal(run.metadata.failure.type, "configuration");
+  assert.equal(run.metadata.failure.category, "configuration");
+  assert.equal(run.metadata.failure.nextAction, "repair_contract");
+  assert.equal(run.metadata.failure.retryable, false);
+  assert.equal(run.metadata.failure.repairable, true);
+  assert.equal(server.registry.listTasks({ runId: run.id, limit: 100 }).length, 0);
+  assert.equal(server.registry.listAgents({ cwd: "/repo", limit: 100 }).length, 0);
+
+  const dashboard = await server.handleRequest({
+    method: "tools/call",
+    params: { name: "show_agent_dashboard", arguments: { cwd: "/repo", runId: run.id } },
+  });
+  assert.deepEqual(dashboard.structuredContent.run.failure, dashboard.structuredContent.graph.run.failure);
   await server.close();
 });
 
