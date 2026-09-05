@@ -50,6 +50,27 @@ The panel token is limited to one Run, expires after 24 hours, and cannot access
 
 ## Verification gates
 
+### Execution ownership and opening completed work
+
+Registry claim release and App Server writer release are separate operations.
+The daemon uses a persistent observer plus a dedicated App Server process per
+acquired work thread. Creation, naming, resume and execution stay on that owning
+connection, including before the first turn has a persisted rollout. A matching
+terminal turn is hydrated before its process is closed; process exit is awaited
+before returning execution completion. Other work threads are not disconnected.
+Unknown execution outcomes retain their owner for observation and interruption;
+a subsequent terminal observation can release it without replaying the task.
+
+`thread/unsubscribe` is not an immediate ownership-transfer receipt: App Server
+can retain an unsubscribed thread during its inactivity grace period. Do not
+archive/delete user work or start a dummy turn to make it openable.
+
+The public-entry E2E must keep the daemon alive while a second independent App
+Server resumes each completed work thread and reads its actual terminal answer.
+This verifies cross-process ownership handoff, not native screen rendering.
+Opening an actively executing thread remains host-dependent: a link or pin does
+not prove that the app supports concurrent read-only viewing of another writer.
+
 The compact panel includes a representative work/result link, short task descriptions and named dependency arrows. A finalized failed or cancelled Run also exposes its final result; result availability does not imply success. Action guidance is visible, while raw diagnostics are collapsed. Refreshes update existing task nodes instead of replacing focused links or open diagnostic sections. Reconnection instructions request a fresh panel in the current conversation; a read-only token cannot silently renew itself or acquire broader permissions.
 
 An uncertain dispatch can record a matching terminal receipt from `thread/read` through an evidence-checked recovery transition. The previous failure is retained in evidence. Background recovery probes are bounded to ten attention probes, at least one minute apart. They never resubmit execution or automatically reopen terminal Tasks/Runs: late execution completion is not acceptance validation or integration approval. Exhausted or unresolved observations remain explicitly attention-required.

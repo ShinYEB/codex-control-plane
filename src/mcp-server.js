@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 
 import { CodexAppServerClient } from "./app-server-client.js";
 import { CodexControlPlane } from "./control-plane.js";
+import { OwnedThreadControl } from "./owned-thread-control.js";
 import { ControlRegistry } from "./registry.js";
 import { AgentRouter, normalizeStatus, requirementMatrix } from "./router.js";
 import { DashboardServer } from "./dashboard-server.js";
@@ -976,7 +977,10 @@ export class McpControlServer {
         cwd: process.env.CODEX_CONTROL_CWD ?? process.cwd(),
         runtime,
       });
-      return { client, control: new CodexControlPlane(client) };
+      return { client, control: new OwnedThreadControl(client, () => {
+        const worker = new CodexAppServerClient({ cwd: process.env.CODEX_CONTROL_CWD ?? process.cwd(), runtime });
+        return { client: worker, control: new CodexControlPlane(worker) };
+      }) };
     });
     this.client = null;
     this.control = null;
@@ -1300,6 +1304,7 @@ export class McpControlServer {
             }
           }
         }
+        await this.control?.close?.();
         await this.client?.close?.();
         await Promise.allSettled([...this.activeTaskPromises]);
         const recovered = this.registry.recoverInterruptedTasks({ workerId: this.instanceId });
@@ -1308,6 +1313,7 @@ export class McpControlServer {
     }
     this.lines?.close();
     if (this.ownsDashboardServer) await this.dashboardServer?.close?.();
+    await this.control?.close?.();
     await this.client?.close?.();
     if (this.ownsRegistry) this.registry.close();
   }
