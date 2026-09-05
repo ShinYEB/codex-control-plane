@@ -1,4 +1,4 @@
-import { isTestCommand, supersededTestFailure, commandText, commandExitCode } from "./command-evidence.js";
+import { isTestCommand, supersededTestFailure, commandText, commandExitCode, isEmptyFileSearch } from "./command-evidence.js";
 
 export function classifyFailure(error, stage = "execution") {
   const message = String(error?.message ?? error ?? "Unknown failure");
@@ -128,6 +128,7 @@ export function assessTaskResult(result = {}) {
       continue;
     }
     const diagnostic = commandOutput(item);
+    if (isEmptyFileSearch(item)) continue;
     if (supersededTestFailure(item, items.slice(index + 1))) continue;
     const failure = classifyFailure(new Error(`${command || "Command"} exited with code ${exitCode ?? "unknown"}${diagnostic ? `\n${diagnostic}` : ""}`), "execution");
     if (!["configuration", "environment", "infrastructure", "coordination", "approval", "workspace"].includes(failure.type)) {

@@ -50,6 +50,14 @@ The panel token is limited to one Run, expires after 24 hours, and cannot access
 
 ## Verification gates
 
+A diagnostic-free `rg --files` enumeration with exit code 1 is an observed
+empty file list, not a failed test or positive test-success receipt. This narrow
+classification supports literal single commands and their shell transport only;
+content searches, compound commands, unknown options, explicit path operands,
+diagnostic output, and exit code 2 remain failures. Original command receipts
+and historical failure records are preserved. Changing the classifier does not
+automatically retry or rewrite previously failed Tasks/Runs.
+
 ### Execution ownership and opening completed work
 
 Registry claim release and App Server writer release are separate operations.

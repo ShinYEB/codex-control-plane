@@ -14,6 +14,65 @@ export function commandSucceeded(item) {
   return commandExitCode(item) === 0 && !['failed','error','running','inprogress','in_progress'].includes(String(item?.status?.type ?? item?.status ?? '').toLowerCase());
 }
 
+// Decode a single shell invocation without executing it. Reject expansion,
+// redirection and compound commands rather than guessing which child failed.
+function literalWords(text) {
+  const words = [];
+  let word = '', quote = null, started = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (quote === "'") {
+      if (c === "'") quote = null; else word += c;
+    } else if (c === '\\' && quote !== "'") {
+      if (++i === text.length) return null;
+      word += text[i]; started = true;
+    } else if (c === quote) {
+      quote = null;
+    } else if (!quote && (c === "'" || c === '"')) {
+      quote = c; started = true;
+    } else if (c === '$' || c === '`' || (!quote && /[;|&<>\n\r()]/.test(c))) {
+      return null;
+    } else if (!quote && /\s/.test(c)) {
+      if (started) words.push(word);
+      word = ''; started = false;
+    } else {
+      word += c; started = true;
+    }
+  }
+  if (quote) return null;
+  if (started) words.push(word);
+  return words;
+}
+
+export function isEmptyFileSearch(item) {
+  if (commandExitCode(item) !== 1) return false;
+  const status = String(item?.status?.type ?? item?.status ?? '').toLowerCase();
+  if (!['completed', 'failed'].includes(status)) return false;
+  // Exit 1 is benign only with no diagnostic or partial output. Never suppress
+  // stderr, inaccessible-path errors, unknown wrappers or content assertions.
+  for (const source of [item, item?.result]) {
+    if (!source) continue;
+    for (const key of ['aggregatedOutput', 'output', 'stdout', 'stderr', 'error']) {
+      if (source[key] != null && String(source[key]).trim()) return false;
+    }
+  }
+  let words = literalWords(commandText(item));
+  for (let depth = 0; depth < 2 && words?.length === 3
+    && /^(?:.*\/)?(?:zsh|bash|sh)$/.test(words[0]) && ['-lc','-cl','-c'].includes(words[1]); depth++) {
+    words = literalWords(words[2]);
+  }
+  if (!words || !['rg', '/usr/bin/rg', '/usr/local/bin/rg', '/opt/homebrew/bin/rg'].includes(words[0])) return false;
+  const args = words.slice(1);
+  if (!args.includes('--files')) return false;
+  for (let i = 0; i < args.length; i++) {
+    if (['--files', '--hidden', '--no-ignore'].includes(args[i])) continue;
+    if (['-g', '--glob', '--iglob'].includes(args[i]) && args[i + 1]) { i++; continue; }
+    if (/^--(?:glob|iglob)=.+/.test(args[i])) continue;
+    return false;
+  }
+  return true;
+}
+
 export function isTestCommand(value, depth = 0) {
   const text = typeof value === 'string' ? value : commandText(value);
   // App Server serializes direct exec calls through the user's login shell.
