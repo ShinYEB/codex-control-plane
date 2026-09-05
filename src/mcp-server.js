@@ -888,7 +888,7 @@ const TOOLS = [
   {
     name: "get_work_status",
     title: "Show work progress",
-    description: "Default user-facing work list: name, status, progress, work link, and actionable failures only. Keep technical field names internal; show Open work or View result in the user’s language. No dashboard is opened. Pin or open the returned thread using host UI capabilities when requested; never send it a prompt for navigation.",
+    description: "Default user-facing work list: name, status, progress and actionable failures. Use progress.succeeded for successful completion; finished counts terminal tasks including failures, never label it successful. Show nonzero rejected, failed, attention, cancelled and skipped counts separately. Keep needsAttention visible alongside running status. No dashboard is opened. Pin or open the returned thread using host UI capabilities when requested; never send it a prompt for navigation.",
     inputSchema: { type: "object", properties: {
       cwd: { type: "string" }, runId: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },

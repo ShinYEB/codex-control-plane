@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased — accurate work progress
+
+- Separate successful work from rejected, failed, cancelled, skipped and attention states in compact status. Preserve the legacy terminal count without calling it success.
+- Keep attention visible during ongoing work and distinguish snapshot time from the latest stored update.
+- Automatic inline progress inside an existing work conversation remains unverified; no additional model turns or execution authority are added for status display.
+
 ## Unreleased — readable work conversations
 
 - Keep work requests separate from runtime policy, dependency reports and review feedback using per-turn application context.

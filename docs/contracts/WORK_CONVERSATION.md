@@ -19,7 +19,15 @@ The user-facing work thread is an execution record, not a protocol console.
 - Complex work starts with the actual objective and a concise plan explanation. Aggregation inputs travel as reference context, and the final answer is readable prose consistent with durable status.
 - Existing conversations are not rewritten. Per-turn context does not guarantee that every host conceals context in all diagnostic views. Native UI display must be tested separately from transport shape.
 
-## Verification
+## Progress projection
+
+`get_work_status.progress.succeeded` counts only completed and completed-with-warnings tasks. `warnings` is a subset of succeeded. `finished` is retained for compatibility and counts all terminal tasks, including rejection, failure, cancellation and skips; never label it successful completion. Rejected, failed, cancelled, skipped, attention, active, waiting and unknown counts remain separate. `needsAttention` can be true while the durable Run is still running.
+
+`observedAt` records when the snapshot was read, not worker liveness. `lastUpdatedAt` is the latest stored Run/Task update, not proof that a command is making progress. Transport freshness and execution health must not be conflated.
+
+This projection does not insert or refresh content inside an existing work conversation. The currently integrated MCP UI is associated with the calling tool result; an automatic cross-conversation inline surface has not been verified. Do not describe status projection alone as a live embedded work monitor, and do not start extra model turns merely to refresh a counter. A task-side panel is a different presentation requiring an explicit product choice.
+
+## Verification gates
 
 Regression tests cover natural reports versus strict named outputs, preserved execution evidence, upstream and rework transport, context fingerprints and native request separation. The App Server release E2E asserts the actual persisted user message, a non-envelope final answer, a real code fix, passing tests, acceptance validation and integration.
 
