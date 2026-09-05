@@ -1,6 +1,6 @@
 # 결과 접근 계약
 
-결과는 원래 요청 스레드로 자동 반환하지 않는다. 작업 탐색기가 Run 상태, 실행 구조와 실제 Codex 스레드로 들어가는 durable 진입점이다.
+결과는 원래 요청 스레드로 자동 반환하지 않는다. 기본 진입점은 `get_work_status`의 작업명·상태·완료 수·실제 마스터 링크다. 상세 작업 탐색기는 명시적으로 요청한 경우만 연다. 링크가 아직 없으면 준비 중으로 표시하며 임시 스레드를 만들지 않는다. 고정은 host 기능을 통한 선택적 편의 기능이고 실행 성공 조건이 아니다.
 
 ## 상태와 결과의 정본
 
@@ -10,7 +10,7 @@ Run이 `completed`, `failed`, `cancelled`가 되면 daemon은 다음을 수행�
 2. Plan이 있으면 Synthesizer를 실행한다.
 3. Orchestrator 스레드가 있으면 그 스레드에 terminal orchestration report를 기록한다.
 4. 작업 탐색기에 표시할 canonical notification을 만든다.
-5. Run에 `resultAccess=dashboard_thread_navigation`을 기록한다.
+5. 새 Run에 `resultAccess=master_thread_navigation`을 기록한다. 기존 `dashboard_thread_navigation` 기록도 그대로 조회할 수 있다.
 
 이 과정은 origin 스레드를 resume하거나 결과 turn을 append하지 않는다. Synthesizer 또는 Orchestrator finalization 실패도 Task별 결과를 지우지 않는다.
 
@@ -27,7 +27,7 @@ Master Worker 목록
 
 - Master 목록은 진행 중, 대기, 완료, 실패 상태를 함께 보여준다.
 - 단순 Run은 작업을 직접 수행한 Master Worker가 곧 탐색 대상이다.
-- 복잡한 Run은 Master Orchestrator와 Slave dependency graph를 기본으로 펼친다.
+- 복잡한 Run도 기본 응답은 Master 링크와 진행 상태뿐이다. 상세 화면을 요청했을 때 Master Orchestrator와 Slave dependency graph를 펼친다.
 - Planner, Validator, Synthesizer `TurnDispatch`는 고급 진단 evidence이며 Master와 동급인 사용자 작업으로 표시하지 않는다.
 - 실제 Codex 스레드를 선택하면 `open_desktop_thread`로 기존 스레드를 연다. Daemon Scheduler는 프로세스 identity이므로 열 수 있는 채팅으로 표시하지 않는다.
 - 스레드 열기는 prompt 전송, retry, claim 또는 상태 전이를 만들지 않는다.

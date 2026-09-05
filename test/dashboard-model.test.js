@@ -226,7 +226,7 @@ test("work navigator DTO names Orchestrator and Data Plane threads", () => {
   }, [{ id: "participant_task", prompt: "test", status: "completed", agentId: "worker", turnId: "turn_done" }]);
   const snapshot = buildDashboardSnapshot(registry, { cwd: "/repo", runId: "participant_run", getGraph: buildRunGraph.bind(null, registry) });
   const participants = snapshot.runs[0].executionParticipants;
-  assert.deepEqual(snapshot.runs[0].resultAccess, { mode: "dashboard_thread_navigation", automaticOriginAppend: false });
+  assert.deepEqual(snapshot.runs[0].resultAccess, { mode: "master_thread_navigation", automaticOriginAppend: false });
   assert.equal(participants.orchestrator.name, "[🤖 orchestrator] 결제 개선");
   assert.deepEqual(participants.dataAgents.map(({ id, name, role }) => ({ id, name, role })), [
     { id: "worker", name: "[🤖 qa] 회귀 테스트", role: "qa" },

@@ -91,3 +91,11 @@ An earlier attempt exposed commentary contamination and executable-path validati
 errors; those failures were retained, fixed, and covered by the final-answer
 regression test. This gate does not claim that every historical production contract
 or host UI behavior has been revalidated.
+# Thread-first follow-up
+
+Default progress is `get_work_status`: name, state, finished/total, actual master
+thread link and actionable failure only. A detailed dashboard is explicit opt-in.
+Historical terminal-only worker threads do not reserve execution capacity when
+idle and unleased, with no current task owner. They remain stored and navigable.
+Active/nonterminal histories and manually registered specialists still reserve
+capacity. This is not automatic archive/delete or an increased numeric limit.

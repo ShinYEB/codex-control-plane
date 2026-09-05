@@ -198,7 +198,11 @@ export class AgentRouter {
     else if (canCreate) decision = "spawn";
     else if (isEphemeralTask(request)) decision = "ephemeral";
     else decision = "wait";
-    const temporaryWait = Boolean(selected && (busy || writerConflict) && !rolloverRequired);
+    const capacityMayRecover = (!budgetState.canCreateProject || !budgetState.canCreateRole)
+      && (budgetState.canCreateProject || budgetState.releasableProjectCount > 0)
+      && (budgetState.canCreateRole || budgetState.releasableRoleCount > 0);
+    const temporaryWait = Boolean((selected && (busy || writerConflict) && !rolloverRequired)
+      || (!selected && capacityMayRecover));
     if (decision === "wait" && (!temporaryWait || request.threadBudget?.policy?.queueWhenBusy === false)) decision = "blocked";
     const certainty = confidence(best, eligible[1], minimumScore);
     return {
@@ -224,7 +228,7 @@ export class AgentRouter {
         },
       },
       decision,
-      waitReason: decision === "wait" ? "candidate_busy" : decision === "blocked" ? "thread_capacity_unavailable" : null,
+      waitReason: decision === "wait" ? (selected ? "candidate_busy" : "active_worker_capacity") : decision === "blocked" ? "thread_capacity_unavailable" : null,
       nextAction: decision === "blocked" ? "repair_routing" : decision === "wait" ? "wait_for_lease" : null,
       minimumScore,
       selectedAgent: selected ? best.agent : null,

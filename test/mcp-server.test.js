@@ -35,7 +35,8 @@ test("MCP initialize advertises tools and safety instructions", async () => {
   const listed = await server.handleRequest({ method: "tools/list" });
   assert.equal(initialized.serverInfo.name, "codex-control-plane");
   assert.match(initialized.instructions, /single Codex thread writer/);
-  assert.match(initialized.instructions, /work navigator is the durable status surface/);
+  assert.match(initialized.instructions, /Default to get_work_status/);
+  assert.match(initialized.instructions, /dashboards only on explicit request/);
   assert.match(initialized.instructions, /never appends terminal results/);
   assert.deepEqual(listed.tools.map((tool) => tool.name), [
     "list_agents",
@@ -88,6 +89,7 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "get_desktop_handoff",
     "open_desktop_thread",
     "get_task",
+    "get_work_status",
     "get_dashboard_state",
     "get_dashboard_detail",
     "show_agent_dashboard",
@@ -1362,8 +1364,8 @@ test("host origin identity is provenance only and results stay in the work navig
   const run = server.registry.getRun(accepted.structuredContent.runId);
   assert.deepEqual(run.metadata.origin, { threadId: "host_thread", turnId: "host_turn", deliveryPolicy: "dashboard_navigation", source: "host" });
   assert.deepEqual(run.metadata.controlRequest.callerOriginInput, { threadId: "spoofed", turnId: "spoofed_turn" });
-  assert.equal(run.metadata.controlRequest.resultAccess, "dashboard_thread_navigation");
-  assert.deepEqual(accepted.structuredContent.resultAccess, { mode: "dashboard_thread_navigation" });
+  assert.equal(run.metadata.controlRequest.resultAccess, "master_thread_navigation");
+  assert.deepEqual(accepted.structuredContent.resultAccess, { mode: "master_thread_navigation" });
   await server.close();
 });
 

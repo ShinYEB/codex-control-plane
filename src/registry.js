@@ -8,7 +8,7 @@ import { assertExecutionContract, compileAndValidateExecutionContract, execution
 import { decideTaskRetry } from "./retry-policy.js";
 import { canonicalizeProjectIdentity } from "./project-identity.js";
 import { assertCanSupersede, contextContentHash, validateContextClaim } from "./context-claims.js";
-import { estimateContextHealth, threadBudgetFingerprint, transitionThreadLifecycle, validateThreadBudget } from "./thread-lifecycle.js";
+import { isControlPlaneAgent, estimateContextHealth, threadBudgetFingerprint, transitionThreadLifecycle, validateThreadBudget } from "./thread-lifecycle.js";
 import {
   compileAuthorizationManifestSet,
   compileAuthorizationManifest,
@@ -1282,16 +1282,35 @@ export class ControlRegistry {
     const lifecycles = this.listThreadLifecycles({ ...(project?.id ? { projectId: project.id } : {}), limit: 1000000 })
       .filter((item) => !["compacted", "superseded", "archived"].includes(item.status));
     const agents = new Map(lifecycles.map((item) => [item.threadId, this.getAgent(item.threadId)]));
+    // Historical task threads remain navigable/reusable, but are not reserved
+    // worker slots. Only release proven idle, terminal-only task histories.
+    const history = new Map(this.db.prepare(`SELECT agent_id, status FROM tasks WHERE agent_id IS NOT NULL`).all()
+      .reduce((entries, row) => {
+        const item = entries.get(row.agent_id) ?? { active: false };
+        item.active ||= !TERMINAL_TASK_STATUSES.has(row.status);
+        entries.set(row.agent_id, item);
+        return entries;
+      }, new Map()));
     const durable = lifecycles.filter((item) => {
       const agent = agents.get(item.threadId);
+      if (isControlPlaneAgent(agent)) return false;
+      const past = history.get(item.threadId);
+      const lease = this.getAgentLease(item.threadId);
+      const leased = lease && ["active", "leased"].includes(lease.status)
+        && (!lease.expiresAt || Date.parse(lease.expiresAt) > Date.now());
+      if (past && !past.active && ["idle", "available"].includes(agent?.status)
+        && !agent?.metadata?.currentTaskId && !leased) return false;
       return item.threadType !== "ephemeral_worker" && agent && !agent.archivedAt
         && !agent.metadata?.controlPlane && !["control", "orchestrator"].includes(agent.metadata?.executionPlane)
         && (!agent.metadata?.autoRegistered || agent.metadata?.executionPlane === "data");
     });
     const roleCount = durable.filter((item) => (item.role ?? "") === (options.role ?? "")).length;
+    const runningWorkers = durable.filter(item => history.get(item.threadId)?.active);
     const lineageForks = options.sourceThreadId ? this.listThreadLineage({ parentThreadId: options.sourceThreadId, limit: 1000 }).filter((item) => item.relationship === "fork").length : 0;
     return {
       budget, projectCount: durable.length, roleCount, lineageForks,
+      releasableProjectCount: runningWorkers.length,
+      releasableRoleCount: runningWorkers.filter(item => (item.role ?? "") === (options.role ?? "")).length,
       canCreateProject: durable.length < budget.policy.maxProjectThreads,
       canCreateRole: roleCount < budget.policy.maxRoleThreads,
       canForkLineage: lineageForks < budget.policy.maxLineageForks,

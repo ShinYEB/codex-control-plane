@@ -8,6 +8,42 @@ import { assertOutputSchema } from "../src/output-schema.js";
 import { TurnDispatcher } from "../src/turn-dispatcher.js";
 import { finalTurnOutput } from "../src/turn-output.js";
 import { McpControlServer } from "../src/mcp-server.js";
+import { workStatus } from "../src/work-status.js";
+
+test("terminal worker histories release capacity without deleting threads; active and manual workers reserve slots", () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    for (let i = 0; i < 95; i++) {
+      registry.upsertAgent({ id: `old_${i}`, cwd: process.cwd(), status: "idle" });
+      registry.createTask({ id: `done_${i}`, prompt: "old", status: "failed", agentId: `old_${i}` });
+    }
+    assert.equal(registry.getThreadBudgetState({ cwd: process.cwd() }).projectCount, 0);
+    assert.ok(registry.getAgent("old_0"));
+    registry.createTask({ id: "active", prompt: "new", status: "running", agentId: "old_0" });
+    registry.upsertAgent({ id: "manual", cwd: process.cwd(), status: "idle" });
+    assert.equal(registry.getThreadBudgetState({ cwd: process.cwd() }).projectCount, 2);
+    registry.upsertAgent({ id: "legacy_validator", role: "validator", cwd: process.cwd(), status: "idle" }, { role: "validator", metadata: { controlPlaneManaged: true } });
+    registry.upsertAgent({ id: "legacy_master", cwd: process.cwd(), status: "idle" }, { metadata: { orchestrationPlane: true } });
+    assert.equal(registry.getThreadBudgetState({ cwd: process.cwd() }).projectCount, 2);
+  } finally { registry.close(); }
+});
+
+test("default status is small, exposes only real masters and never includes diagnostic payloads", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  const server = new McpControlServer({ registry, recoverInterruptedTasks: false });
+  try {
+    const run = registry.createRun({ id: "minimal", cwd: process.cwd(), name: "Check", status: "accepted" });
+    assert.equal(workStatus(registry, run).master, null);
+    registry.upsertAgent({ id: "master", name: "Master", cwd: process.cwd(), status: "idle" });
+    registry.createTask({ id: "one", metadata: { runId: run.id }, prompt: "SECRET PROMPT", status: "completed", agentId: "master" });
+    const result = await server.handleRequest({ method: "tools/call", params: { name: "get_work_status", arguments: { runId: run.id } } });
+    const status = result.structuredContent.works[0];
+    assert.equal(status.master.threadId, "master");
+    assert.equal(status.progress.finished, 1);
+    assert.equal(JSON.stringify(result).includes("SECRET PROMPT"), false);
+    assert.equal(result._meta, undefined);
+  } finally { await server.close(); }
+});
 
 test("concurrent allocations cannot both spend the last worker slot", async () => {
   let release;
@@ -76,6 +112,9 @@ test("impossible routing is blocked; busy routing honors queueWhenBusy", () => {
   const request = { role: "reviewer", capabilities: ["review"], reuseExisting: true,
     threadBudgetState: { canCreateProject: false, canCreateRole: false, canForkLineage: false } };
   assert.equal(router.select([], request).decision, "blocked");
+  assert.equal(router.select([], { ...request, threadBudgetState: {
+    canCreateProject: false, canCreateRole: true, canForkLineage: true, releasableProjectCount: 1,
+  } }).decision, "wait");
   const agents = [{ id: "busy", role: "reviewer", capabilities: ["review"], status: "running" }];
   assert.equal(router.select(agents, request).decision, "wait");
   assert.equal(router.select(agents, { ...request, threadBudget: { policy: { queueWhenBusy: false } } }).decision, "blocked");

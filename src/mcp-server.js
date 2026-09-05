@@ -12,6 +12,8 @@ import { CodexControlPlane } from "./control-plane.js";
 import { ControlRegistry } from "./registry.js";
 import { AgentRouter, normalizeStatus, requirementMatrix } from "./router.js";
 import { DashboardServer } from "./dashboard-server.js";
+import { workStatus } from "./work-status.js";
+import { isControlPlaneAgent } from "./thread-lifecycle.js";
 import { ContextManager } from "./context-manager.js";
 import { ContextResolver } from "./context-resolver.js";
 import { ThreadKnowledgeIndexer } from "./thread-knowledge-indexer.js";
@@ -884,6 +886,16 @@ const TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
+    name: "get_work_status",
+    title: "Show work status and master thread",
+    description: "Default user-facing work list: name, status, progress, real master thread link, and actionable failures only. No dashboard is opened. Pin or open the returned thread using host UI capabilities when requested; never send it a prompt for navigation.",
+    inputSchema: { type: "object", properties: {
+      cwd: { type: "string" }, runId: { type: "string" },
+      limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
+    }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: "get_dashboard_state",
     title: "Refresh the work navigator",
     description: "Return a revisioned lightweight snapshot or delta for an authorized Control Plane work navigator.",
@@ -1279,7 +1291,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex thread writer. Dispatch returns quickly and the work navigator is the durable status surface: users select a Run, inspect its orchestration graph, and open the Orchestrator or Data Plane Codex thread that owns the work. The daemon never appends terminal results to the requesting thread. It atomically persists the graph, then automatically starts the Run without READY placeholders or a dashboard Start button.",
+        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and actual master thread link only. Show detailed dashboards only on explicit request. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
       };
     }
     if (message.method === "ping") return {};
@@ -1576,6 +1588,11 @@ export class McpControlServer {
       } else if (name === "get_task") {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
+      } else if (name === "get_work_status") {
+        const run = args.runId ? this.registry.getRun(args.runId) : null;
+        if (args.runId && (!run || (args.cwd && run.cwd !== args.cwd))) throw new Error("Run not found in project");
+        const runs = run ? [run] : this.registry.listRuns({ cwd: args.cwd, limit: Math.min(20, Math.max(1, args.limit ?? 5)) });
+        result = { works: runs.map(item => workStatus(this.registry, item)) };
       } else if (name === "show_agent_dashboard") {
         const hostRequesterThreadId = context.hostOrigin?.threadId ?? null;
         const dashboardRequesterThreadId = this.#assertDashboardRequester(
@@ -1962,7 +1979,7 @@ export class McpControlServer {
 
       if (["spawned", "ephemeral_spawned", "forked", "forked_lease_fallback"].includes(mode)) {
         const name = agentDisplayName(args.role, args.title, args.prompt);
-        await this.#decorateAgent(control, agent, name, true);
+        await this.#decorateAgent(control, agent, name, !args.runId || this.registry.getRun(args.runId)?.metadata?.dispatchPath === "direct");
         agent.name = name;
       }
 
@@ -2373,14 +2390,16 @@ export class McpControlServer {
       : null;
     if (existing) {
       return {
+        ...workStatus(this.registry, existing),
         runId: existing.id,
         status: existing.status,
         accepted: true,
         idempotent: true,
         controlPlaneStatus: "available",
-        resultAccess: { mode: "dashboard_thread_navigation" },
+        resultAccess: { mode: "master_thread_navigation" },
         detailsAvailable: true,
-        message: "This request was already accepted. Track it in the work navigator and open the owning Codex thread from its Run structure.",
+        statusTool: "get_work_status",
+        message: "This request was already accepted. Use the master link and compact work status; detailed dashboard is optional.",
       };
     }
     const runId = `run_${randomUUID()}`;
@@ -2398,7 +2417,7 @@ export class McpControlServer {
       originTurnId: context.hostOrigin?.turnId ?? args.originTurnId ?? null,
       callerOriginInput: { threadId: args.originThreadId ?? null, turnId: args.originTurnId ?? null },
       originIdentitySource: context.hostOrigin?.threadId ? "host" : args.originThreadId ? "legacy_caller_input" : "registry_owner",
-      resultAccess: "dashboard_thread_navigation",
+      resultAccess: "master_thread_navigation",
       threadId: args.threadId ?? null,
       orchestratorThreadId: args.orchestratorThreadId ?? null,
     };
@@ -2431,9 +2450,11 @@ export class McpControlServer {
       status: "accepted",
       accepted: true,
       controlPlaneStatus: "available",
-      resultAccess: { mode: "dashboard_thread_navigation" },
+      resultAccess: { mode: "master_thread_navigation" },
       detailsAvailable: true,
-      message: "Request accepted. Planning and execution continue automatically in the background. Track it in the work navigator; select a Run to see its orchestration structure and open the owning Codex thread.",
+      master: null,
+      statusTool: "get_work_status",
+      message: "Request accepted. Planning and execution continue automatically; master thread is being prepared. Use get_work_status for its link and progress. Open the detailed dashboard only when requested.",
     };
   }
 
@@ -3323,8 +3344,8 @@ export class McpControlServer {
         payload.notificationType = notificationKind;
         payload.notificationId = notification.id;
       }
-      run = this.registry.updateRun(run.id, { metadata: { controlResultFinalizedAt: new Date().toISOString(), resultAccess: "dashboard_thread_navigation", resultDeliveryQueued: false } });
-      this.registry.recordEvent("run", run.id, "run.control_result_ready", { resultAccess: "dashboard_thread_navigation", deliveryQueued: false });
+      run = this.registry.updateRun(run.id, { metadata: { controlResultFinalizedAt: new Date().toISOString(), resultAccess: "master_thread_navigation", resultDeliveryQueued: false } });
+      this.registry.recordEvent("run", run.id, "run.control_result_ready", { resultAccess: "master_thread_navigation", deliveryQueued: false });
       return { run, result, payload };
     })().finally(() => this.runFinalizations.delete(runId));
     this.runFinalizations.set(runId, flight);
@@ -3387,7 +3408,7 @@ export class McpControlServer {
 
   async #routeAgent(control, args) {
     await this.#reconcileProject(control, args.cwd);
-    const candidates = this.registry.listAgents({ cwd: args.cwd, limit: 1000000 });
+    const candidates = this.registry.listAgents({ cwd: args.cwd, limit: 1000000 }).filter(agent => !isControlPlaneAgent(agent));
     const contextPack = this.contextManager.build({
       prompt: args.prompt,
       cwd: args.cwd,

@@ -60,7 +60,9 @@ Completion criteria:
 Show the agent dashboard for this project.
 ```
 
-The default view is an embedded work navigator in the current Codex conversation. Ask `Open the web dashboard` for the standalone local page. It shows:
+The default experience is **work name, status, progress, and a link to the real master thread**, provided by `get_work_status`. While the master is being prepared, its link is absent rather than a placeholder. Pinning is optional and host-dependent; opening an active thread is observation, not permission to submit another turn.
+
+The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 
 - Global Run and Project Run progress
 - Task dependencies and current runnable state

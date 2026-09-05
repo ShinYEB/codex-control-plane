@@ -31,6 +31,10 @@ const server = new McpControlServer({ registryPath, sessionWriter: true, schedul
 let runId;
 try {
   for (let i = 0; i < 120; i++) server.registry.upsertAgent({ id: `imported_${i}`, cwd: root, status: "idle" }, { metadata: { autoRegistered: true } });
+  for (let i = 0; i < 95; i++) {
+    server.registry.upsertAgent({ id: `historical_${i}`, cwd: root, status: "idle" });
+    server.registry.createTask({ id: `historical_task_${i}`, prompt: "Past execution", status: "failed", agentId: `historical_${i}` });
+  }
   server.startBackground();
   const accepted = await server.handleRequest({ method: "tools/call", params: { name: "dispatch_control_request", arguments: {
     cwd: root, mode: "orchestrated", requestKey: `public-entry-${Date.now()}`, name: "Natural request release gate",

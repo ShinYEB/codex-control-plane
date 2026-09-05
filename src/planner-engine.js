@@ -286,7 +286,7 @@ export class PlannerEngine {
     }
     if (!agent) {
       agent = await control.spawnAgent({ cwd, sandbox: template.sandbox, approvalPolicy: template.approvalPolicy, model: template.model, developerInstructions: template.developerInstructions });
-      await this.decorateAgent(control, agent, agentDisplayName(role, String(cwd ?? "workspace").split("/").pop()), true);
+      await this.decorateAgent(control, agent, agentDisplayName(role, String(cwd ?? "workspace").split("/").pop()), false);
     }
     this.registry.upsertAgent({ ...agent, status: "idle" }, { role, capabilities: template.capabilities, metadata: { tools: template.tools, controlPlane: true } });
     return { control, agent };

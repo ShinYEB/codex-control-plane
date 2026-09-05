@@ -155,10 +155,10 @@ export class ResultValidator {
         model: template.model,
         developerInstructions: "You are a read-only acceptance validator. The parent Control Plane request already authorizes the Run, so validate immediately without requesting another Start. Verify evidence against every criterion. Never implement fixes or approve unsupported claims.",
       });
-      await this.decorateAgent(control, agent, agentDisplayName("validator", String(cwd ?? "workspace").split("/").pop()), true);
+      await this.decorateAgent(control, agent, agentDisplayName("validator", String(cwd ?? "workspace").split("/").pop()), false);
       this.registry.setSetting(key, agent.id);
     }
-    this.registry.upsertAgent({ ...agent, status: "idle" }, { role: "validator", capabilities: ["acceptance-validation", "evidence-review"], metadata: { controlPlaneManaged: true } });
+    this.registry.upsertAgent({ ...agent, status: "idle" }, { role: "validator", capabilities: ["acceptance-validation", "evidence-review"], metadata: { controlPlaneManaged: true, executionPlane: "control", controlPlane: true } });
     return { control, agent };
   }
 }

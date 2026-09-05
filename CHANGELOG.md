@@ -6,6 +6,11 @@ The project follows Semantic Versioning while acknowledging that releases before
 
 ## Unreleased
 
+- Default to compact master-thread links and progress; detailed dashboard is opt-in.
+- Keep terminal worker histories navigable without reserving execution capacity forever.
+- Exclude legacy internal control sessions from worker routing and budgets; wait for active capacity with a bounded deadline.
+- Stop automatically pinning subordinate and internal sessions; master pinning remains host-dependent.
+
 ## 0.14.0 - 2026-09-03
 
 ### Changed

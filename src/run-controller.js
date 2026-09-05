@@ -126,7 +126,7 @@ export function buildRunGraph(registry, runId, options = {}) {
         status: orchestratorAgent?.status ?? "unknown",
       } : null,
       resultAccess: {
-        mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+        mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "master_thread_navigation",
         automaticOriginAppend: false,
       },
       createdAt: run.createdAt,

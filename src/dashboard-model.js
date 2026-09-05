@@ -156,7 +156,7 @@ function runSummary(run, taskByRunId = new Map(), agentById = new Map(), result 
     schedulerIdentity: run.metadata?.schedulerIdentity ?? null,
     orchestratorSessionIdentity: run.metadata?.orchestratorSessionIdentity ?? null,
     resultAccess: {
-      mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "dashboard_thread_navigation",
+      mode: run.metadata?.resultAccess ?? run.metadata?.controlRequest?.resultAccess ?? "master_thread_navigation",
       automaticOriginAppend: false,
     },
     executionParticipants: {
