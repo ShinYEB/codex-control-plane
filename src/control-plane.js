@@ -1,4 +1,5 @@
 import { assertOutputSchema } from "./output-schema.js";
+import { finalTurnOutput } from "./turn-output.js";
 
 const TERMINAL_TURN_STATUSES = new Set(["completed", "failed", "interrupted"]);
 const DEFAULT_MANAGED_THREAD_CONFIG = {
@@ -16,13 +17,7 @@ function terminalTurnFromRead(result, turnId) {
 }
 
 function recoveredOutput(turn) {
-  if (typeof turn?.output === "string") return turn.output;
-  const items = turn?.items ?? [];
-  return items
-    .filter((item) => ["agentMessage", "agent_message"].includes(item?.type))
-    .map((item) => item.text ?? item.content ?? "")
-    .filter((value) => typeof value === "string")
-    .join("\n");
+  return finalTurnOutput(turn);
 }
 
 function mergeTurnItems(...groups) {
@@ -245,7 +240,7 @@ export class CodexControlPlane {
             const recovered = {
               threadId,
               turnId,
-              output: output || recoveredOutput(recoveredTurn),
+              output: recoveredOutput(recoveredTurn) || output,
               turn: recoveredTurn,
               executionItems: recoveredTurn.items ?? [],
               completionMethod: "thread/read-recovery",

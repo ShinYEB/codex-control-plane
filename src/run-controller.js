@@ -23,6 +23,7 @@ function compactFailure(failure) {
 function compactRouting(routing) {
   if (!routing) return null;
   return {
+    waitReason: routing.waitReason ?? null, nextAction: routing.nextAction ?? null, budget: routing.budgetState ?? null,
     decision: routing.decision ?? routing.mode ?? null, reasons: routing.reasons ?? [], blockers: routing.blockers ?? [],
     requirementMatrix: routing.selectedRequirementMatrix ?? routing.assignmentRequirementMatrix ?? routing.requirementMatrix ?? null,
     provenance: routing.provenance ?? null, schedulerIdentity: routing.schedulerIdentity ?? null,

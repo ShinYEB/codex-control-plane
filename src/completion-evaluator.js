@@ -114,8 +114,8 @@ export function evaluateTaskCompletion(options = {}) {
   if (result.evidenceComplete === true) satisfiedEvidence.push("complete-turn");
 
   const commands = commandItems(result);
-  const criteriaRequireTests = acceptanceCriteria.some((criterion) => /\b(?:test|tests|pytest|jest|vitest)\b|테스트/i.test(String(criterion)));
-  if ((contract.taskKind === "test" || criteriaRequireTests) && strictEvidence && !commands.some(isTestCommand)) {
+  // Execution intent is structured; a review mentioning tests is not a test run.
+  if (contract.taskKind === "test" && strictEvidence && !commands.some(isTestCommand)) {
     missingEvidence.push("required-test-command");
   } else if (commands.length) {
     satisfiedEvidence.push("command-ledger");
@@ -149,14 +149,22 @@ export function evaluateTaskCompletion(options = {}) {
       else if (strictEvidence || artifact || workspaceEvidence?.available === true) missingEvidence.push(`output:${declared}`);
     } else {
       const claimed = outputClaims?.[declared];
-      const materialized = options.outputEvidence?.some?.((entry) => entry?.name === declared && entry?.materialized === true)
-        || (claimed !== undefined && claimed !== null && claimed !== "");
+      const reportValue = typeof claimed === "string" ? claimed.trim().length > 0
+        : claimed && !Array.isArray(claimed) && typeof claimed === "object" && Object.keys(claimed).length > 0;
+      const externalArtifact = /(?:^|[-_.])(artifact|file|patch|commit)(?:$|[-_.])/i.test(declared);
+      const materialized = options.outputEvidence?.some?.((entry) => entry?.name === declared && entry?.materialized === true
+        && entry?.verified === true && entry?.contentHash && entry?.source)
+        || (!externalArtifact && reportValue);
       if (materialized) satisfiedEvidence.push(`output:${declared}`);
       else if (strictEvidence) missingEvidence.push(`output:${declared}`);
     }
   }
 
   if (contract.mutatesWorkspace === false && workspaceEvidence?.changed === true) {
+    if (workspaceEvidence.attribution === "shared_unattributed") {
+      return finalize(reject({ decision: "attention", category: "coordination", cause: "Shared workspace changed; writer attribution requires inspection",
+        satisfiedEvidence, conflictingEvidence: ["unattributed-workspace-mutation"], retryable: false, nextAction: "inspect_side_effects" }), contract, result, validation, artifact, postcondition);
+    }
     conflictingEvidence.push("unexpected-workspace-mutation");
   }
 

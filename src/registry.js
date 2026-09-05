@@ -1279,10 +1279,15 @@ export class ControlRegistry {
     if (!project && options.cwd) {
       try { project = this.resolveProject(options.cwd, { create: false }); } catch { project = null; }
     }
-    const lifecycles = this.listThreadLifecycles({ ...(project?.id ? { projectId: project.id } : {}), limit: 1000 })
+    const lifecycles = this.listThreadLifecycles({ ...(project?.id ? { projectId: project.id } : {}), limit: 1000000 })
       .filter((item) => !["compacted", "superseded", "archived"].includes(item.status));
     const agents = new Map(lifecycles.map((item) => [item.threadId, this.getAgent(item.threadId)]));
-    const durable = lifecycles.filter((item) => item.threadType !== "ephemeral_worker" && !agents.get(item.threadId)?.archivedAt);
+    const durable = lifecycles.filter((item) => {
+      const agent = agents.get(item.threadId);
+      return item.threadType !== "ephemeral_worker" && agent && !agent.archivedAt
+        && !agent.metadata?.controlPlane && !["control", "orchestrator"].includes(agent.metadata?.executionPlane)
+        && (!agent.metadata?.autoRegistered || agent.metadata?.executionPlane === "data");
+    });
     const roleCount = durable.filter((item) => (item.role ?? "") === (options.role ?? "")).length;
     const lineageForks = options.sourceThreadId ? this.listThreadLineage({ parentThreadId: options.sourceThreadId, limit: 1000 }).filter((item) => item.relationship === "fork").length : 0;
     return {
@@ -3814,7 +3819,7 @@ export class ControlRegistry {
           JOIN tasks dependency ON dependency.id = d.depends_on_task_id
           WHERE d.task_id = t.id AND (
             (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') = 'all_success' AND dependency.status NOT IN ('completed', 'completed_with_warnings'))
-            OR (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN ('completed', 'completed_with_warnings', 'rejected', 'validation_failed', 'failed', 'canceled', 'interrupted', 'skipped'))
+            OR (COALESCE(json_extract(t.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN (${[...TERMINAL_TASK_STATUSES].map((status) => `'${status}'`).join(',')}))
           )
         )
       ORDER BY t.created_at
@@ -3924,7 +3929,7 @@ export class ControlRegistry {
           JOIN tasks dependency ON dependency.id = d.depends_on_task_id
           WHERE d.task_id = tasks.id AND (
             (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') = 'all_success' AND dependency.status NOT IN ('completed', 'completed_with_warnings'))
-            OR (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN ('completed', 'completed_with_warnings', 'rejected', 'validation_failed', 'failed', 'canceled', 'interrupted', 'skipped', 'blocked_by_policy', 'integration_blocked'))
+            OR (COALESCE(json_extract(tasks.metadata_json, '$.dependencyPolicy'), 'all_success') IN ('all_terminal', 'on_failure') AND dependency.status NOT IN (${[...TERMINAL_TASK_STATUSES].map((status) => `'${status}'`).join(',')}))
           )
         )
       RETURNING *
@@ -4202,13 +4207,22 @@ export class ControlRegistry {
 
   waitClaimForLease(taskId, workerId, claimToken, delayMs = 2_000) {
     const timestamp = now();
+    const task = this.getTask(taskId);
+    const waitingSince = task?.metadata?.waitingSince ?? timestamp;
+    if (Date.now() - Date.parse(waitingSince) >= (task?.metadata?.execution?.timeoutMs ?? 30 * 60_000)) {
+      return this.finishFailureClaim(taskId, workerId, claimToken, {
+        type: "configuration", category: "configuration", code: "ROUTING_WAIT_EXPIRED",
+        cause: "Worker acquisition deadline expired", retryable: false, nextAction: "repair_routing",
+      }, { terminalStatus: "recovery_attention" });
+    }
     const row = this.db.prepare(`
       UPDATE tasks
-      SET status = 'waiting_for_lease', worker_id = NULL, heartbeat_at = NULL,
+      SET status = 'waiting_for_lease', worker_id = NULL, heartbeat_at = NULL, claim_token = NULL,
+          metadata_json = json_set(metadata_json, '$.waitingSince', ?),
           attempt = MAX(attempt - 1, 0), next_retry_at = ?, updated_at = ?, version = version + 1
       WHERE id = ? AND worker_id = ? AND claim_token = ? AND status = 'running'
       RETURNING *
-    `).get(new Date(Date.now() + delayMs).toISOString(), timestamp, taskId, workerId, claimToken);
+    `).get(waitingSince, new Date(Date.now() + delayMs).toISOString(), timestamp, taskId, workerId, claimToken);
     return row ? this.getTask(taskId) : null;
   }
 

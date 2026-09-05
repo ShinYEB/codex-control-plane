@@ -69,9 +69,9 @@ test("completion requires validation when acceptance criteria exist", () => {
   assert.ok(verdict.missingEvidence.includes("validation"));
 });
 
-test("a test acceptance criterion requires an actual test command, not an arbitrary command", () => {
+test("structured test intent requires an actual test command, not an arbitrary command", () => {
   const verdict = evaluateTaskCompletion({
-    contract: analysisContract,
+    contract: { ...analysisContract, taskKind: "test" },
     acceptanceCriteria: ["tests pass"],
     validation: { decision: "accept", evidence: ["claimed"] },
     result: {

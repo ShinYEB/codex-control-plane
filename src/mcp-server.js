@@ -31,6 +31,7 @@ import { assertExecutionContract, compileAndValidateExecutionContract, execution
 import { classifyRunNotification, NOTIFICATION_KINDS } from "./notification-policy.js";
 import { ACTIVE_TASK_STATUSES, LEASE_STATUSES, REPAIRABLE_TASK_STATUSES, RUN_STATUSES, TASK_STATUSES, TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
 import { TurnDispatcher } from "./turn-dispatcher.js";
+import { finalTurnOutput } from "./turn-output.js";
 import { ThreadGraphContextPackImporter } from "./threadgraph-context-pack.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
@@ -53,9 +54,7 @@ function readTurn(result, turnId) {
 }
 
 function readTurnOutput(turn) {
-  if (typeof turn?.output === "string") return turn.output;
-  return (turn?.items ?? []).filter((item) => ["agentMessage", "agent_message"].includes(item?.type))
-    .map((item) => item.text ?? item.content ?? "").filter((value) => typeof value === "string").join("\n");
+  return finalTurnOutput(turn);
 }
 
 const TOOLS = [
@@ -1108,6 +1107,21 @@ export class McpControlServer {
       let dispatch = this.registry.claimTurnDispatch(original.id, this.instanceId, 120_000, { forceRecovery: true });
       if (!dispatch) continue;
       try {
+        if (["prepared", "thread_acquiring", "thread_created"].includes(dispatch.status) && Date.parse(dispatch.deadlineAt) <= Date.now()) {
+          dispatch = this.registry.transitionTurnDispatch(dispatch.id, "recovery_attention", {
+            failure: { type: "coordination", category: "coordination", code: "TURN_DISPATCH_DEADLINE_EXPIRED",
+              cause: "Thread acquisition deadline expired; inspect before replay", retryable: false, nextAction: "reconcile_dispatch" },
+            reconciliationDecision: "deadline_expired",
+          }, { ownerToken: dispatch.ownerToken });
+          if (dispatch.parentTaskId) {
+            const task = this.registry.getTask(dispatch.parentTaskId);
+            if (task && !TERMINAL_TASK_STATUSES.has(task.status)) this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, dispatch.failure, { terminalStatus: "recovery_attention" });
+          } else if (dispatch.planId) {
+            this.registry.updatePlan(dispatch.planId, { status: "failed", metadata: { failure: dispatch.failure } });
+          }
+          attention += 1;
+          continue;
+        }
         if (["prepared", "thread_acquiring", "thread_created"].includes(dispatch.status)) {
           if (dispatch.parentTaskId) {
             dispatch = this.registry.transitionTurnDispatch(dispatch.id, "failed", {
@@ -1130,6 +1144,14 @@ export class McpControlServer {
         } else {
           const reconciled = await this.turnDispatcher.reconcile(dispatch.id, control, { ownerToken: dispatch.ownerToken });
           dispatch = reconciled.dispatch;
+        }
+        if (dispatch?.status === "recovery_attention" && dispatch.parentTaskId) {
+          const task = this.registry.getTask(dispatch.parentTaskId);
+          if (task && !TERMINAL_TASK_STATUSES.has(task.status)) {
+            this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, { ...dispatch.failure, type: "coordination", retryable: false }, { terminalStatus: "recovery_attention" });
+            this.runController.afterTask(task.id);
+          }
+          attention += 1;
         }
         if (dispatch && ["completed", "failed", "interrupted", "cancelled"].includes(dispatch.status)) recovered += 1;
       } catch (error) {
@@ -1744,11 +1766,25 @@ export class McpControlServer {
     let turnDispatchIntent;
     let lease;
     let agentLease;
+    let budgetLease = null;
+    let allocationHeartbeat;
+    let allocationLost = false;
+    let executionFenced = false;
+    const budgetLeaseKey = `thread-allocation:${createHash("sha256").update(args.cwd ?? "workspace").digest("hex")}`;
     let leaseKey = args.leaseKey ?? (executionContract.workspaceMode === "shared" && executionContract.mutatesWorkspace
       ? `shared-writer:${createHash("sha256").update(args.cwd ?? "workspace").digest("hex").slice(0, 20)}`
       : null);
     const leaseTtlMs = args.leaseTtlMs ?? 120_000;
     try {
+      budgetLease = this.registry.acquireLease({ key: budgetLeaseKey, ownerTaskId: taskId, ownerToken: claimToken, cwd: args.cwd, ttlMs: leaseTtlMs });
+      if (!budgetLease) return { waitingForLease: true, record: this.registry.waitClaimForLease(taskId, this.instanceId, claimToken, this.schedulerIntervalMs) };
+      allocationHeartbeat = setInterval(() => {
+        try {
+          if (!this.registry.renewLease(budgetLeaseKey, taskId, leaseTtlMs, claimToken)) allocationLost = true;
+          if (!this.registry.heartbeatClaim(taskId, this.instanceId, claimToken)) allocationLost = true;
+        } catch { allocationLost = true; }
+      }, 15_000);
+      allocationHeartbeat.unref?.();
       if (executionContract.workspaceMode === "shared" && args.cwd) {
         try {
           workspaceBefore = await this.worktreeManager.inspectRepository(args.cwd);
@@ -1813,7 +1849,15 @@ export class McpControlServer {
         mode = args.preparedMode ?? "prepared";
       } else if (!sourceThreadId && (args.routingMode ?? "auto") === "auto") {
         routing = await this.#routeAgent(control, { ...args, taskId, cwd: effectiveCwd, executionContract });
-        if (routing.decision === "wait") {
+        if (["wait", "blocked"].includes(routing.decision)) {
+          this.registry.updateTask(taskId, { routing, metadata: { routingWait: {
+            reason: routing.waitReason, nextAction: routing.nextAction, budget: routing.budgetState,
+          } } });
+          if (routing.decision === "blocked") {
+            throw Object.assign(new Error("No reusable worker and thread capacity unavailable; repair routing or capacity policy"), {
+              code: "EXECUTION_CONTRACT_ROUTING_CAPACITY", nextAction: "repair_routing",
+            });
+          }
           const waitingTask = this.registry.getTask(taskId);
           const waitingDecision = this.registry.recordRoutingDecision({
             taskId, runId: waitingTask?.runId ?? waitingTask?.metadata?.runId ?? null,
@@ -1832,6 +1876,14 @@ export class McpControlServer {
       }
 
       if (!turnDispatchIntent) {
+        if (!routing && !args.preparedAgentId && !(sourceThreadId && args.reuseExisting === true)) {
+          const capacity = this.registry.getThreadBudgetState({ cwd: args.cwd, role: args.role, sourceThreadId });
+          if (!capacity.canCreateProject || !capacity.canCreateRole || (sourceThreadId && !capacity.canForkLineage)) {
+            throw Object.assign(new Error("Explicit worker creation exceeds thread capacity; repair routing policy"), {
+              code: "EXECUTION_CONTRACT_ROUTING_CAPACITY", nextAction: "repair_routing",
+            });
+          }
+        }
         contextPack = routing?.contextPack ?? this.contextManager.build({
           prompt: args.prompt, cwd: effectiveCwd, role: args.role, capabilities: args.capabilities,
           tools: args.tools, branch: args.branch, touch: true,
@@ -1915,6 +1967,7 @@ export class McpControlServer {
       }
 
       const sourceProfile = sourceThreadId ? this.registry.getAgent(sourceThreadId) : null;
+      if (allocationLost) throw Object.assign(new Error("Thread allocation ownership lost; inspect created thread before retry"), { code: "EXECUTION_CONTRACT_ALLOCATION_FENCED" });
       const storedAgent = this.#storeAgent(agent, {
         role: args.role ?? sourceProfile?.role ?? roleTemplate.name,
         capabilities: args.capabilities?.length ? args.capabilities : (sourceProfile?.capabilities?.length ? sourceProfile.capabilities : roleTemplate.capabilities),
@@ -1933,6 +1986,9 @@ export class McpControlServer {
         },
       });
       const currentTask = this.registry.getTask(taskId);
+      this.registry.releaseLease(budgetLeaseKey, taskId, { ownerToken: claimToken });
+      budgetLease = null;
+      clearInterval(allocationHeartbeat);
       const run = currentTask?.metadata?.runId ? this.registry.getRun(currentTask.metadata.runId) : null;
       const schedulerIdentity = { type: "daemon_scheduler", instanceId: this.instanceId };
       const orchestratorSessionIdentity = run?.metadata?.orchestratorSessionIdentity ?? null;
@@ -2006,10 +2062,16 @@ export class McpControlServer {
       heartbeatTimer = setInterval(() => {
         try {
           const renewed = this.registry.heartbeatClaim(taskId, this.instanceId, claimToken);
-          if (renewed && leaseKey) this.registry.renewLease(leaseKey, taskId, leaseTtlMs, claimToken);
-          if (renewed && agent?.id) this.registry.renewAgentLease(agent.id, taskId, claimToken, leaseTtlMs);
-          if (!renewed) this.logger(`Task heartbeat fenced for ${taskId}`);
+          const workspaceRenewed = !leaseKey || (renewed && this.registry.renewLease(leaseKey, taskId, leaseTtlMs, claimToken));
+          const agentRenewed = !agent?.id || (renewed && this.registry.renewAgentLease(agent.id, taskId, claimToken, leaseTtlMs));
+          if (!renewed || !workspaceRenewed || !agentRenewed) {
+            executionFenced = true;
+            this.logger(`Task heartbeat fenced for ${taskId}; interrupting execution`);
+            const turnId = this.registry.getTask(taskId)?.turnId ?? (turnDispatchIntent && this.registry.getTurnDispatch(turnDispatchIntent.id)?.turnId);
+            if (turnId && agent?.id) void control.interruptTask(agent.id, turnId).catch((error) => this.logger(`Fenced task interruption failed: ${error.message}`));
+          }
         } catch (error) {
+          executionFenced = true;
           this.logger(`Task heartbeat ${taskId} failed: ${error.message}`);
         }
       }, 15_000);
@@ -2049,11 +2111,15 @@ export class McpControlServer {
           },
         },
       });
+      if (executionFenced) throw Object.assign(new Error("Execution lease ownership was lost; inspect side effects before replay"), {
+        code: "EXECUTION_CONTRACT_LEASE_LOST", nextAction: "inspect_side_effects", retryable: false,
+      });
       const status = task.turn?.status?.type ?? task.turn?.status ?? "completed";
       if (executionContract.workspaceMode === "shared" && args.cwd) {
         try {
           const workspaceAfter = await this.worktreeManager.inspectRepository(args.cwd);
           workspaceEvidence = {
+            attribution: "shared_unattributed",
             available: workspaceBefore?.available !== false,
             beforeFingerprint: workspaceBefore?.fingerprint ?? null,
             afterFingerprint: workspaceAfter.fingerprint,
@@ -2103,6 +2169,7 @@ export class McpControlServer {
             prompt: args.prompt,
             acceptanceCriteria,
             output: task.output,
+            executionItems: task.executionItems ?? task.turn?.items ?? [],
             cwd: effectiveCwd,
             model: args.validationModel,
             effort: args.validationEffort,
@@ -2196,6 +2263,9 @@ export class McpControlServer {
       }
       if (agent?.id && this.registry.getAgent(agent.id)) await this.#settleAgentAfterTask(control, agent.id, failedTask, new Date().toISOString());
       throw error;
+    } finally {
+      clearInterval(allocationHeartbeat);
+      if (budgetLease) this.registry.releaseLease(budgetLeaseKey, taskId, { ownerToken: claimToken });
     }
   }
 
@@ -2922,7 +2992,7 @@ export class McpControlServer {
     const execution = claimed.metadata?.execution ?? {};
     const taskHandoffs = (claimed.dependencies ?? [])
       .map((dependency) => this.registry.getTask(dependency.taskId))
-      .filter((dependency) => ["completed", "completed_with_warnings", "rejected", "validation_failed", "failed", "canceled", "interrupted", "skipped"].includes(dependency?.status))
+      .filter((dependency) => TERMINAL_TASK_STATUSES.has(dependency?.status))
       .map((dependency) => ({
         taskId: dependency.id,
         title: dependency.metadata?.title ?? dependency.prompt.slice(0, 80),
@@ -2946,6 +3016,7 @@ export class McpControlServer {
     const rework = claimed.metadata?.rework?.current;
     const prompt = [
       claimed.prompt,
+      `Return a final JSON object with an outputs object containing these exact named report fields: ${JSON.stringify(executionContract.outputs)}. Each report value must contain substantive evidence, not a boolean or a path-only claim. File/artifact outputs require verified materialization; do not invent receipt evidence. Upstream outputs are supplied below by the daemon; no Control Plane plugin calls are needed.`,
       handoffs.length ? "[A2A HANDOFF FROM COMPLETED UPSTREAM AGENTS]" : null,
       handoffs.length ? JSON.stringify(handoffs) : null,
       handoffs.length ? "Use these upstream results as delegated context. Verify them when necessary and continue only with your assigned task." : null,
@@ -3102,6 +3173,7 @@ export class McpControlServer {
               prompt: task.prompt,
               acceptanceCriteria: task.metadata.acceptanceCriteria,
               output,
+              executionItems: executionResult.executionItems,
               cwd: task.metadata?.effectiveCwd ?? task.cwd,
             });
             const current = this.registry.getTask(task.id);
@@ -3315,7 +3387,7 @@ export class McpControlServer {
 
   async #routeAgent(control, args) {
     await this.#reconcileProject(control, args.cwd);
-    const candidates = this.registry.listAgents({ cwd: args.cwd, limit: 100 });
+    const candidates = this.registry.listAgents({ cwd: args.cwd, limit: 1000000 });
     const contextPack = this.contextManager.build({
       prompt: args.prompt,
       cwd: args.cwd,
@@ -3332,8 +3404,10 @@ export class McpControlServer {
     const lifecycleByAgent = Object.fromEntries(candidates.map((agent) => [agent.id, this.registry.getThreadLifecycle(agent.id)]));
     const threadBudget = this.registry.getThreadBudget({ cwd: args.cwd, role: args.role });
     const threadBudgetState = this.registry.getThreadBudgetState({ cwd: args.cwd, role: args.role });
-    const threadBudgetStateByAgent = Object.fromEntries(candidates.map((agent) => [agent.id,
-      this.registry.getThreadBudgetState({ cwd: args.cwd, role: args.role, sourceThreadId: agent.id })]));
+    const threadBudgetStateByAgent = Object.fromEntries(candidates.map((agent) => {
+      const lineageForks = this.registry.listThreadLineage({ parentThreadId: agent.id, limit: 1000000 }).filter(item => item.relationship === "fork").length;
+      return [agent.id, { ...threadBudgetState, lineageForks, canForkLineage: lineageForks < threadBudget.policy.maxLineageForks }];
+    }));
     return { ...this.router.select(candidates, {
       prompt: args.prompt,
       cwd: args.cwd,

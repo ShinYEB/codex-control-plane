@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { assertOutputSchema } from "./output-schema.js";
+import { finalTurnOutput } from "./turn-output.js";
 import { TERMINAL_RUN_STATUSES, TERMINAL_TASK_STATUSES, TERMINAL_TURN_DISPATCH_STATUSES } from "./domain-states.js";
 
 const hash = (value) => createHash("sha256").update(String(value ?? "")).digest("hex");
@@ -20,12 +21,7 @@ function turnPrompt(turn) {
 }
 
 function turnOutput(turn) {
-  if (typeof turn?.output === "string") return turn.output;
-  return (turn?.items ?? [])
-    .filter((item) => ["agentMessage", "agent_message"].includes(item?.type))
-    .map((item) => item.text ?? item.content ?? "")
-    .filter((value) => typeof value === "string")
-    .join("\n");
+  return finalTurnOutput(turn);
 }
 
 function terminalState(status) {
@@ -238,7 +234,7 @@ export class TurnDispatcher {
     const response = await control.inspectAgent(dispatch.threadId, { includeTurns: true });
     const turns = response?.thread?.turns ?? response?.turns ?? [];
     let turn = dispatch.turnId ? turns.find((candidate) => candidate.id === dispatch.turnId) : null;
-    if (!turn && dispatch.status === "turn_submitting") {
+    if (!turn && ["turn_submitting", "recovery_attention"].includes(dispatch.status) && !dispatch.turnId) {
       turn = [...turns].reverse().find((candidate) => promptFingerprint(turnPrompt(candidate)) === dispatch.promptFingerprint) ?? null;
     }
     const status = turnStatus(turn);
@@ -249,6 +245,17 @@ export class TurnDispatcher {
       ...(turn?.id ? { turnId: turn.id, turnStatus: status } : {}),
     };
     if (!terminal) {
+      if (Date.parse(dispatch.deadlineAt) <= Date.now() && !TERMINAL_TURN_DISPATCH_STATUSES.has(dispatch.status)) {
+        if (turn?.id) {
+          try { await control.interruptTask(dispatch.threadId, turn.id); } catch { /* retain uncertainty */ }
+        }
+        dispatch = this.registry.transitionTurnDispatch(id, "recovery_attention", {
+          ...changes, reconciliationDecision: "deadline_expired",
+          failure: { code: "TURN_DISPATCH_DEADLINE_EXPIRED", category: "coordination", retryable: false,
+            message: "Dispatch deadline expired; inspect execution before any replay", nextAction: "reconcile_dispatch" },
+        }, { ownerToken: options.ownerToken ?? dispatch.ownerToken });
+        return { dispatch, result: null };
+      }
       if (turn?.id && dispatch.status === "turn_submitting") {
         dispatch = this.registry.transitionTurnDispatch(id, "turn_running", {
           ...changes, startedAt: turn.startedAt ? new Date(Number(turn.startedAt) * 1000).toISOString() : dispatch.startedAt,
