@@ -1073,7 +1073,7 @@ test("prepare_agent_run atomically starts and binds a leased session per task", 
   const task = server.registry.listTasks({ runId: prepared.structuredContent.runId, limit: 10 })[0];
   assert.equal(task.agentId, "agent_prepared");
   assert.ok(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestrationLog.some((entry) => entry.type === "task_assigned" && entry.taskId === task.id));
-  assert.deepEqual(calls.map((entry) => entry[0]), ["name", "pin", "initialize"]);
+  assert.deepEqual(calls.map((entry) => entry[0]), ["name", "initialize"]);
   await server.close();
 });
 
@@ -1127,7 +1127,7 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   await server.close();
 });
 
-test("unsupported App Server pin metadata is probed once and then cached", async () => {
+test("daemon never probes unsupported App Server sidebar pin metadata", async () => {
   let sequence = 0;
   let pinCalls = 0;
   const control = {
@@ -1155,8 +1155,8 @@ test("unsupported App Server pin metadata is probed once and then cached", async
     } } });
     assert.equal(response.structuredContent.status, "running");
   }
-  assert.equal(pinCalls, 1);
-  assert.equal(server.registry.listEvents({ limit: 100 }).filter((event) => event.eventType === "agent.pin_unsupported").length, 1);
+  assert.equal(pinCalls, 0);
+  assert.equal(server.registry.listEvents({ limit: 100 }).filter((event) => event.eventType === "agent.pin_unsupported").length, 0);
   await server.close();
 });
 

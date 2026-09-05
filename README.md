@@ -75,6 +75,8 @@ Ask **“Keep a small progress panel beside this work”** to see per-task statu
 
 The compact panel keeps the representative work/result link at the top, with short task descriptions and named dependency arrows below. Action guidance is visible; technical diagnostics stay collapsed. Refreshes preserve existing links and expanded sections. A final result may describe failure or cancellation—it is not a success badge.
 
+New delegated work requests a sidebar pin by default (`pin: false` opts out). The calling conversation uses the native app's sidebar tool and verifies its pinned list; the background worker does not pin itself. Only the representative work is pinned, never every subtask. Preparation can be awaited for up to 30 seconds; if the thread or app tool is unavailable, pinning remains pending without blocking execution. Routine status reads do not re-pin work you have unpinned.
+
 The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 
 - Global Run and Project Run progress

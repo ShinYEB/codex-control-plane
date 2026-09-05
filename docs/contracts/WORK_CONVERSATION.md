@@ -23,6 +23,18 @@ The user-facing work thread is an execution record, not a protocol console.
 
 ## Progress projection
 
+Sidebar pinning belongs to the native app, not App Server `thread/metadata/update`.
+New `dispatch_control_request` work persists `pin` intent (default true, false opts
+out). `get_work_status.works[].pinning` supplies a representative-only native
+`move_thread_to_sidebar_section` handoff once a valid local thread exists. The
+calling conversation checks `list_threads.pinnedThreads` before and after the
+mutation. Intent/returned arguments never confirm pinning; no worker turn is sent.
+Status reads never mutate the sidebar, and existing user-unpinned work must not be
+automatically re-pinned. A bounded `waitForThreadMs` read can await preparation for
+up to 30 seconds. If it expires, pinning stays pending until an authorized host
+interaction; the daemon cannot complete that app action after the chat turn ends.
+Missing or failed host pinning never changes execution status or triggers retry.
+
 `get_work_status.progress.succeeded` counts only completed and completed-with-warnings tasks. `warnings` is a subset of succeeded. `finished` is retained for compatibility and counts all terminal tasks, including rejection, failure, cancellation and skips; never label it successful completion. Rejected, failed, cancelled, skipped, attention, active, waiting and unknown counts remain separate. `needsAttention` can be true while the durable Run is still running.
 
 `observedAt` records when the snapshot was read, not worker liveness. `lastUpdatedAt` is the latest stored Run/Task update, not proof that a command is making progress. Transport freshness and execution health must not be conflated.

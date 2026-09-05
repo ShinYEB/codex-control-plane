@@ -11,6 +11,7 @@ import { ControlRegistry } from "./registry.js";
 import { AgentRouter, normalizeStatus, requirementMatrix } from "./router.js";
 import { DashboardServer } from "./dashboard-server.js";
 import { workStatus } from "./work-status.js";
+import { hostPinning } from "./host-pinning.js";
 import { workContext, WORK_CONVERSATION_POLICY } from "./work-conversation.js";
 import { dependencyEvidence, executionReports } from "./task-evidence.js";
 import { isControlPlaneAgent } from "./thread-lifecycle.js";
@@ -322,7 +323,7 @@ const TOOLS = [
         developerInstructions: { type: "string" },
         ephemeral: { type: "boolean", default: false },
         name: { type: "string", description: "User-facing Codex task name." },
-        pin: { type: "boolean", default: true, description: "Pin the persistent task so Desktop can surface it prominently." },
+        pin: { type: "boolean", default: true, description: "Request a host sidebar pin handoff; the daemon does not pin or confirm the UI." },
       },
       additionalProperties: false,
     },
@@ -520,6 +521,7 @@ const TOOLS = [
       type: "object",
       properties: {
         objective: { type: "string", minLength: 1 },
+        pin: { type: "boolean", default: true, description: "Request pinning of the representative work through the calling conversation's app tools. False opts out." },
         cwd: { type: "string" },
         constraints: { type: "array", items: { type: "string" }, maxItems: 50 },
         requestedThreadIds: { type: "array", items: { type: "string" }, maxItems: 20, description: "Existing threads to index read-only before freezing planning context." },
@@ -893,6 +895,7 @@ const TOOLS = [
     inputSchema: { type: "object", properties: {
       cwd: { type: "string" }, runId: { type: "string" },
       limit: { type: "integer", minimum: 1, maximum: 20, default: 5 },
+      waitForThreadMs: { type: "integer", minimum: 0, maximum: 30000, default: 0, description: "With runId, wait read-only for the representative thread. Does not start work or pin anything." },
     }, additionalProperties: false },
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
@@ -1035,7 +1038,6 @@ export class McpControlServer {
     this.projectReconciliations = new Map();
     this.dashboardViewLeaseTtlMs = options.dashboardViewLeaseTtlMs ?? 30 * 60_000;
     this.dashboardViewLeases = new Map();
-    this.pinCapability = "unknown";
     this.dashboardServer = options.dashboardServer ?? null;
     this.runtime = options.runtime ?? dataPlaneRuntime();
     this.ownsDashboardServer = !options.dashboardServer;
@@ -1431,6 +1433,7 @@ export class McpControlServer {
         if (args.name) await this.#decorateAgent(activeControl, agent, args.name, args.pin ?? true);
         if (args.name) agent.name = args.name;
         result = this.#storeAgent(agent);
+        result = { ...result, pinning: hostPinning(agent.id, !agent.ephemeral && (args.pin ?? true)) };
         this.registry.recordEvent("agent", agent.id, "agent.spawned", { cwd: agent.cwd });
       } else if (name === "fork_agent") {
         const activeControl = await getControl();
@@ -1451,6 +1454,7 @@ export class McpControlServer {
           metadata: { ...sourceProfile.metadata, forkedProfileFromId: sourceProfile.id },
         } : {});
         this.registry.recordEvent("agent", agent.id, "agent.forked", { sourceThreadId: args.threadId });
+        result = { ...result, pinning: hostPinning(agent.id, !agent.ephemeral && (args.pin ?? true)) };
       } else if (name === "run_agent_task") {
         result = await this.#runForegroundTask(args);
       } else if (name === "dispatch_agent_task") {
@@ -1616,8 +1620,14 @@ export class McpControlServer {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
       } else if (name === "get_work_status") {
-        const run = args.runId ? this.registry.getRun(args.runId) : null;
+        let run = args.runId ? this.registry.getRun(args.runId) : null;
         if (args.runId && (!run || (args.cwd && run.cwd !== args.cwd))) throw new Error("Run not found in project");
+        const deadline = Date.now() + Math.min(30000, Math.max(0, args.waitForThreadMs ?? 0));
+        while (run && !workStatus(this.registry, run).master && !["completed", "failed", "cancelled"].includes(run.status) && Date.now() < deadline && !this.closing) {
+          await new Promise(resolve => setTimeout(resolve, Math.min(200, deadline - Date.now())));
+          run = this.registry.getRun(args.runId);
+        }
+        if (args.runId && !run) throw new Error("Run disappeared while awaiting its representative thread");
         const runs = run ? [run] : this.registry.listRuns({ cwd: args.cwd, limit: Math.min(20, Math.max(1, args.limit ?? 5)) });
         result = { works: runs.map(item => workStatus(this.registry, item)) };
       } else if (name === "show_work_progress") {
@@ -2450,6 +2460,7 @@ export class McpControlServer {
     const runId = `run_${randomUUID()}`;
     const controlRequest = {
       objective: args.objective,
+      pin: args.pin ?? true,
       cwd: args.cwd,
       constraints: args.constraints ?? [],
       requestKey: args.requestKey ?? null,
@@ -2498,6 +2509,7 @@ export class McpControlServer {
       resultAccess: { mode: "master_thread_navigation" },
       detailsAvailable: true,
       master: null,
+      pinning: hostPinning(null, controlRequest.pin),
       statusTool: "get_work_status",
       message: "Request received. Planning and execution continue automatically. Use get_work_status for progress and the work link. Open the detailed dashboard only when requested.",
     };
@@ -2614,24 +2626,8 @@ export class McpControlServer {
     return { ...result, plan, estimate };
   }
 
-  async #decorateAgent(control, agent, name, pin) {
+  async #decorateAgent(control, agent, name, _pin) {
     if (control.nameAgent) await control.nameAgent(agent.id, name);
-    if (pin && !agent.ephemeral && control.pinAgent && this.pinCapability !== "unsupported") {
-      try {
-        await control.pinAgent(agent.id, true);
-        this.pinCapability = "supported";
-      } catch (error) {
-        const unsupported = /metadata update must include at least one field|unknown field.*ispinned|ispinned.*(?:unsupported|invalid)/i.test(String(error.message));
-        if (unsupported) {
-          this.pinCapability = "unsupported";
-          this.logger(`Thread pinning is not supported by this Codex build; disabling the optional pin hint: ${error.message}`);
-          this.registry.recordEvent("agent", agent.id, "agent.pin_unsupported", { error: error.message, capabilityCached: true });
-        } else {
-          this.logger(`Could not pin agent ${agent.id}: ${error.message}`);
-          this.registry.recordEvent("agent", agent.id, "agent.pin_failed", { error: error.message });
-        }
-      }
-    }
   }
 
   async #prepareAgentRun(args) {

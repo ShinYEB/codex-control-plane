@@ -24,6 +24,13 @@
 
 - Arbitrary Python/JavaScript wrappers require separately observed native child receipts. Do not infer success from their output prose.
 - Late execution completion is not Task acceptance or integration approval. Already terminal Tasks/Runs remain available for explicit review instead of silent resurrection.
-- Host sidebar pinning was reported unsupported by the tested App Server build. It does not block execution.
+- The earlier App Server metadata pin route was reported unsupported. A subsequent correction removed that route: pin intent is now handed to the calling conversation's native sidebar tool. Actual pinning of the complex E2E representative was confirmed in `list_threads.pinnedThreads`; this is not a claim that a background daemon can mutate the app sidebar by itself.
 - Task link rendering/click submission is not proof of native navigation; host-specific navigation still needs confirmation.
 - These checks do not establish long-duration service availability or exhaustive real-process crash coverage. Existing integration crash-boundary regressions remain part of the suite.
+
+## Native pin handoff follow-up
+
+- Full suite after the pin handoff change: 325 passed, zero failures/skips/cancellations.
+- Representative-only handoff, opt-out, invalid identity and bounded read-only preparation wait are covered by regressions. No App Server metadata pin calls remain.
+- Actual app sidebar verification: `🤖 Complex text toolkit E2E` was absent from the pinned list, moved using `move_thread_to_sidebar_section`, then observed in the pinned list. No worker prompt was sent.
+- The skill is validated and instructs the caller to check app state, preserve user unpinning, avoid repeated attempts, and distinguish pending intent from confirmation. An end-to-end fresh conversation following the newly installed skill remains a separate host integration check.

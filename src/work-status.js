@@ -1,5 +1,6 @@
 import { ACTIVE_TASK_STATUSES, WAITING_TASK_STATUSES, TERMINAL_TASK_STATUSES } from "./domain-states.js";
 import { publicWorkName } from "./agent-names.js";
+import { hostPinning } from "./host-pinning.js";
 
 // Deliberately excludes prompts, contracts, events and results. Navigation is
 // a read-only convenience, never a new turn or an execution authority.
@@ -35,6 +36,7 @@ export function workStatus(registry, run) {
   return {
     runId: run.id, name: run.name, status: run.status,
     progress,
+    pinning: hostPinning(master?.ephemeral ? null : master?.id, run.metadata?.controlRequest?.pin === true),
     needsAttention: Boolean(attention || run.metadata?.failure || progress.unknown),
     observedAt: new Date().toISOString(),
     lastUpdatedAt: [run.updatedAt, ...tasks.map(t => t.updatedAt)].filter(Boolean).sort().at(-1) ?? null,

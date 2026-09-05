@@ -82,11 +82,6 @@ export class CodexControlPlane {
     return { threadId, name: name.trim() };
   }
 
-  async pinAgent(threadId, isPinned = true) {
-    const result = await this.client.request("thread/metadata/update", { threadId, isPinned });
-    return result.thread ?? result;
-  }
-
   async archiveAgent(threadId) {
     const result = await this.client.request("thread/archive", { threadId });
     return result.thread ?? result;
