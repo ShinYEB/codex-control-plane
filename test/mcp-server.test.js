@@ -784,6 +784,18 @@ test("a completed turn with a non-zero real test command is persisted as failed"
   await server.close();
 });
 
+test("missing test exit is persisted as attention with no retry and a released claim", async () => {
+  const server=fakeServer({connect:async()=>{},spawnAgent:async()=>({id:'missing-exit-worker',cwd:'/repo',status:'idle',provider:'codex'}),
+    runTask:async(_id,_prompt,options)=>{options.onStarted?.({turnId:'missing-exit-turn'});return {turnId:'missing-exit-turn',output:'done',evidenceComplete:true,turn:{status:'completed'},executionItems:[{type:'commandExecution',command:'node --test'}]};}});
+  try {
+    const response=await server.handleRequest({method:'tools/call',params:{name:'run_agent_task',arguments:{prompt:'run tests',cwd:'/repo',routingMode:'new',taskKind:'test',mutatesWorkspace:false}}});
+    assert.notEqual(response.isError,true,response.structuredContent?.error);
+    const task=response.structuredContent.record;
+    assert.equal(task.status,'recovery_attention');assert.equal(task.claimToken,null);
+    assert.equal(task.metadata.failure.retryable,false);assert.equal(task.metadata.failure.nextAction,'inspect_execution_evidence');
+  } finally {await server.close();}
+});
+
 test("read-only tools are marked read-only", async () => {
   const server = fakeServer({ connect: async () => {} });
   const listed = await server.handleRequest({ method: "tools/list" });
@@ -1435,6 +1447,22 @@ test("attention notifications remain visible in the dashboard without writing to
   assert.deepEqual(prompts, []);
   assert.equal(server.registry.listNotifications({ runId: "run_attention" })[0].readAt, null);
   await server.close();
+});
+
+test("daemon observes an uncertain terminal receipt without replaying or reopening its failed task", async () => {
+  const registry = new ControlRegistry({path:':memory:'});
+  registry.createTask({id:'uncertain-task',prompt:'work',status:'recovery_attention'});
+  const dispatch=registry.createTurnDispatch({subjectType:'task',subjectId:'uncertain-task',parentTaskId:'uncertain-task',purpose:'execution',revision:1,
+    promptFingerprint:'fingerprint',submissionKey:'uncertain-receipt',threadId:'thread',turnId:'turn',status:'recovery_attention'});
+  let submissions=0;
+  const server=fakeServer({connect:async()=>{},inspectAgent:async()=>({thread:{turns:[{id:'turn',status:'completed',items:[]}]}}),runTask:async()=>{submissions++;}},
+    {registry,recoverInterruptedTasks:true,schedulerConcurrency:0});
+  try {
+    server.startBackground();
+    assert.equal(await waitUntil(()=>registry.getTurnDispatch(dispatch.id).status==='completed'),true);
+    assert.equal(submissions,0);
+    assert.equal(registry.getTask('uncertain-task').status,'recovery_attention');
+  } finally {await server.close();}
 });
 
 test("daemon restart finalizes an integration_pending task from a recorded journal", async () => {

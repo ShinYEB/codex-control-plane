@@ -35,6 +35,10 @@ The panel token is limited to one Run, expires after 24 hours, and cannot access
 
 ## Verification gates
 
+The compact panel includes a representative work/result link, short task descriptions and named dependency arrows. A finalized failed or cancelled Run also exposes its final result; result availability does not imply success. Action guidance is visible, while raw diagnostics are collapsed. Refreshes update existing task nodes instead of replacing focused links or open diagnostic sections. Reconnection instructions request a fresh panel in the current conversation; a read-only token cannot silently renew itself or acquire broader permissions.
+
+An uncertain dispatch can record a matching terminal receipt from `thread/read` through an evidence-checked recovery transition. The previous failure is retained in evidence. Background recovery probes are bounded to ten attention probes, at least one minute apart. They never resubmit execution or automatically reopen terminal Tasks/Runs: late execution completion is not acceptance validation or integration approval. Exhausted or unresolved observations remain explicitly attention-required.
+
 Re-executing an existing active dispatch observes it without resubmission or a failure transition. `TURN_DISPATCH_ACTIVE` means `observe_existing_turn`, not a retryable failure. The task remains available to stale-task reconciliation. This does not prove all restart/lease races safe; live recovery remains a release gate.
 
 Regression tests cover natural reports versus strict named outputs, preserved execution evidence, upstream and rework transport, context fingerprints and native request separation. The App Server release E2E asserts the actual persisted user message, a non-envelope final answer, a real code fix, passing tests, acceptance validation and integration.

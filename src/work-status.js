@@ -39,7 +39,7 @@ export function workStatus(registry, run) {
     observedAt: new Date().toISOString(),
     lastUpdatedAt: [run.updatedAt, ...tasks.map(t => t.updatedAt)].filter(Boolean).sort().at(-1) ?? null,
     master: master ? { threadId: master.id, name: publicWorkName(run.name || master.name),
-      label: run.status === "completed" && run.metadata?.controlResultFinalizedAt ? "결과 보기" : "작업 열기",
+      label: ["completed", "failed", "cancelled"].includes(run.status) && run.metadata?.controlResultFinalizedAt ? "최종 결과 보기" : "작업 열기",
       navigation: { kind: "host_tool", tool: "navigate_to_codex_page", arguments: { threadId: master.id } },
       access: "observe_while_running" } : null,
     ...(attention || run.metadata?.failure ? { attention: {

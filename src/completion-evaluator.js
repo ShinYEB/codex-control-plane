@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { assessTaskResult } from "./failure-classifier.js";
+import { isTestCommand, commandSucceeded } from "./command-evidence.js";
 
 function fingerprint(value) {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -33,15 +34,6 @@ function structuredOutputs(output) {
   } catch {
     return {};
   }
-}
-
-function commandText(item) {
-  const value = item?.command ?? item?.cmd ?? item?.input?.command ?? item?.result?.command;
-  return Array.isArray(value) ? value.join(" ") : String(value ?? "");
-}
-
-function isTestCommand(item) {
-  return /(?:^|\s)(?:npm|pnpm|yarn)\s+(?:run\s+)?test\b|\bnode\s+--test\b|\b(?:pytest|vitest|jest|cargo\s+test|go\s+test|xcodebuild\s+test)\b/i.test(commandText(item));
 }
 
 function reject(details = {}) {
@@ -115,8 +107,12 @@ export function evaluateTaskCompletion(options = {}) {
 
   const commands = commandItems(result);
   // Execution intent is structured; a review mentioning tests is not a test run.
-  if (contract.taskKind === "test" && strictEvidence && !commands.some(isTestCommand)) {
-    missingEvidence.push("required-test-command");
+  if (contract.taskKind === "test" && strictEvidence && !commands.some(item => isTestCommand(item) && commandSucceeded(item))) {
+    missingEvidence.push(commands.some(isTestCommand) ? "test-exit-evidence" : "required-test-command");
+    return finalize(reject({ decision: "attention", category: "coordination",
+      cause: "Test execution could not be verified from native command receipts",
+      satisfiedEvidence, missingEvidence, retryable: false, nextAction: "inspect_execution_evidence",
+    }), contract, result, validation, artifact, postcondition);
   } else if (commands.length) {
     satisfiedEvidence.push("command-ledger");
   }

@@ -1118,7 +1118,26 @@ export class McpControlServer {
 
   async #reconcileTurnDispatches() {
     const active = this.registry.listTurnDispatches({ active: true, limit: 500 });
-    if (!active.length) return { checked: 0, recovered: 0, attention: 0 };
+    // Bounded read-only probes for uncertain submissions. Recording a late
+    // receipt never reopens a terminal Task/Run or bypasses acceptance gates.
+    const uncertain = this.registry.listTurnDispatches({ status: "recovery_attention", limit: 100 })
+      .filter(d => d.threadId && (d.evidence?.attentionProbes ?? 0) < 10
+        && (!d.lastProbeAt || Date.now() - Date.parse(d.lastProbeAt) >= 60_000));
+    let lateReceipts = 0;
+    if (uncertain.length) {
+      const observer = await this.#getControl();
+      for (const d of uncertain) {
+        this.registry.transitionTurnDispatch(d.id, d.status, { lastProbeAt: new Date().toISOString(),
+          evidence: { attentionProbes: (d.evidence?.attentionProbes ?? 0) + 1 } }, { ownerToken: d.ownerToken });
+        try {
+          const observation = await this.turnDispatcher.reconcile(d.id, observer, { ownerToken: d.ownerToken });
+          if (observation.result) lateReceipts++;
+        } catch (error) {
+          this.registry.recordEvent("turn_dispatch", d.id, "turn_dispatch.attention_probe_failed", { error: error.message });
+        }
+      }
+    }
+    if (!active.length) return { checked: uncertain.length, recovered: lateReceipts, attention: uncertain.length - lateReceipts };
     const observable = active.filter((dispatch) => dispatch.threadId && ["turn_submitting", "turn_running", "cancelling"].includes(dispatch.status));
     const control = observable.length ? await this.#getControl() : null;
     let recovered = 0;
@@ -1186,7 +1205,7 @@ export class McpControlServer {
       }
     }
     if (recovered || attention) this.registry.recordEvent("system", null, "system.turn_dispatches_reconciled", { checked: active.length, recovered, attention });
-    return { checked: active.length, recovered, attention };
+    return { checked: active.length + uncertain.length, recovered: recovered + lateReceipts, attention: attention + uncertain.length - lateReceipts };
   }
 
   async #recoverIntegrations() {
@@ -2176,14 +2195,14 @@ export class McpControlServer {
         this.registry.updateTask(taskId, { metadata: { completionVerdict: executionVerdict, workspaceEvidence } });
         const outcomeFailure = completionFailure(executionVerdict);
         const persistedTask = this.registry.finishFailureClaim(taskId, this.instanceId, claimToken, outcomeFailure, {
-          terminalStatus: status === "interrupted" ? "interrupted" : "failed",
+          terminalStatus: executionVerdict.decision === "attention" ? "recovery_attention" : status === "interrupted" ? "interrupted" : "failed",
           output: task.output ?? null,
           turnId: task.turnId ?? null,
         });
         clearInterval(heartbeatTimer);
         if (!persistedTask) throw new Error(`Task failure transition was rejected by fencing: ${taskId}`);
         if (leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
-        if (managedWorktree && persistedTask.status !== "retry_waiting") await this.worktreeManager.cleanup(managedWorktree.id);
+        if (managedWorktree && !["retry_waiting", "recovery_attention"].includes(persistedTask.status)) await this.worktreeManager.cleanup(managedWorktree.id);
         this.registry.releaseAgentLease(agent.id, taskId, claimToken);
         await this.#settleAgentAfterTask(control, agent.id, persistedTask, new Date().toISOString());
         return { mode, sourceThreadId, routing, contextPack, validation: null, resultMemory: null, agent: this.registry.getAgent(agent.id), task, record: persistedTask };
@@ -3191,7 +3210,7 @@ export class McpControlServer {
           });
           if (!["accept", "accept_with_warnings"].includes(executionVerdict.decision)) {
             this.registry.updateTask(task.id, { metadata: { completionVerdict: executionVerdict } });
-            this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, completionFailure(executionVerdict), { terminalStatus: "failed", output, turnId });
+            this.registry.finishFailureClaim(task.id, task.workerId, task.claimToken, completionFailure(executionVerdict), { terminalStatus: executionVerdict.decision === "attention" ? "recovery_attention" : "failed", output, turnId });
           } else if ((task.metadata?.acceptanceCriteria ?? []).length) {
             if (!this.registry.markClaimAgentDone(task.id, task.workerId, task.claimToken, { output, turnId })) throw new Error(`Recovered Task agent_done transition was rejected: ${task.id}`);
             if (!this.registry.markClaimValidating(task.id, task.workerId, task.claimToken)) throw new Error(`Recovered Task validating transition was rejected: ${task.id}`);

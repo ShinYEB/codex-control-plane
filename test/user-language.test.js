@@ -19,7 +19,7 @@ test("public names and link labels hide hierarchy without renaming stored histor
   run.status = "completed";
   assert.equal(workStatus(registry, run).master.label, "작업 열기");
   run.metadata.controlResultFinalizedAt = "2026-09-05T00:00:00Z";
-  assert.equal(workStatus(registry, run).master.label, "결과 보기");
+  assert.equal(workStatus(registry, run).master.label, "최종 결과 보기");
   assert.equal(agent.name, "[🤖 orchestrator] 요청 처리");
 });
 

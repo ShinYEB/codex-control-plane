@@ -282,9 +282,12 @@ export class TurnDispatcher {
     const state = terminalState(status);
     dispatch = this.registry.transitionTurnDispatch(id, state, {
       ...changes, reconciliationDecision: "terminal_recovered",
-      evidence: { result, completionMethod: result.completionMethod, outputFingerprint: hash(result.output) },
-      ...(state === "completed" ? {} : { failure: { category: "coordination", code: `TURN_${status.toUpperCase()}`, message: `Turn ${status}`, retryable: status === "interrupted" } }),
-    }, { ownerToken: options.ownerToken ?? dispatch.ownerToken });
+      evidence: { result, completionMethod: result.completionMethod, outputFingerprint: hash(result.output),
+        ...(dispatch.status === "recovery_attention" ? { recoveredFailure: dispatch.failure } : {}) },
+      ...(state === "completed" ? { failure: null } : { failure: { category: "coordination", code: `TURN_${status.toUpperCase()}`, message: `Turn ${status}`, retryable: status === "interrupted" } }),
+    }, { ownerToken: options.ownerToken ?? dispatch.ownerToken, cancellationGeneration: dispatch.cancellationGeneration,
+      transitionOptions: { observedTerminal: dispatch.status === "recovery_attention" } });
+    if (!dispatch) throw dispatchError("Recovery observation was fenced", "TURN_DISPATCH_FENCED");
     if (dispatch.evidence?.settleAgentOnTerminal !== false) this.#projectTerminalAgent(dispatch);
     return { dispatch, result };
   }

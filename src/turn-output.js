@@ -6,7 +6,7 @@ export function finalTurnOutput(turn) {
   if (typeof turn?.output === "string") return turn.output;
   // Older hosts may omit phase. The last completed agent message is the answer,
   // not a concatenation of progress commentary and answer.
-  const last = messages.at(-1);
+  const last = messages.filter(item => !item.phase).at(-1);
   const value = last?.text ?? last?.content;
   return typeof value === "string" ? value : "";
 }

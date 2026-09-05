@@ -9,7 +9,7 @@ import { McpControlServer } from "../src/mcp-server.js";
 test("panel refresh preserves stale evidence, pauses hidden views, and prevents overlapping requests", async () => {
   const html = readFileSync(new URL("../ui/work-progress.html", import.meta.url), "utf8");
   const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const element = () => ({ dataset: {}, children: [], append(...items) { this.children.push(...items); }, replaceChildren() { this.children = []; } });
+  const element = () => ({ dataset: {}, children: [], setAttribute(name,value) {this[name]=value;}, removeAttribute(name) {delete this[name];}, append(...items) { this.children.push(...items); }, replaceChildren() { this.children = []; } });
   const elements = new Map();
   let visibility, resolveFetch, calls = 0;
   const timers = new Map(); let nextTimer = 0;
@@ -21,14 +21,17 @@ test("panel refresh preserves stale evidence, pauses hidden views, and prevents 
   await refresh();
   assert.equal(calls, 1);
   const threadId = "01a07084-279e-7fa0-96a7-9937bfb80cc4";
-  resolveFetch({ ok: true, json: async () => ({ work: { name: "<img onerror=bad>", status: "running", progress: { total: 1, succeeded: 0, active: 1 } }, tasks: [{name:"테스트",status:"running",threadId}, {name:"준비",threadId:"javascript:bad"}] }) });
+  const snapshot = { work: { name: "<img onerror=bad>", status: "running", master:{threadId,label:'작업 열기'},progress: { total: 2, succeeded: 0, active: 1 } }, tasks: [{id:'test',name:"테스트",status:"running",threadId,dependsOn:['prepare']}, {id:'prepare',name:"준비",threadId:"javascript:bad"}] };
+  resolveFetch({ ok: true, json: async () => snapshot });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.get("name").textContent, "<img onerror=bad>");
   const article = elements.get("tasks").children[0];
-  assert.equal(article.children[1].href, `codex://threads/${threadId}`);
-  assert.equal(article.children[1].textContent, "작업 열기");
-  assert.equal(article.children[1].onclick, undefined);
-  assert.equal(elements.get("tasks").children[1].children.length, 1);
+  assert.equal(article.children[4].href, `codex://threads/${threadId}`);
+  assert.equal(article.children[4].textContent, "작업 열기");
+  assert.equal(article.children[4].onclick, undefined);
+  assert.equal(article.children[2].textContent,'준비 → 테스트');
+  assert.equal(elements.get('primary').href,`codex://threads/${threadId}`);
+  assert.equal(elements.get("tasks").children[1].children[4].hidden, true);
   assert.equal(elements.get("connection").dataset.error, "false");
   assert.ok([...timers.values()].some(timer => timer.delay === 5000));
   document.hidden = true; visibility(); await refresh();
@@ -36,6 +39,17 @@ test("panel refresh preserves stale evidence, pauses hidden views, and prevents 
   assert.equal(timers.size, 0);
   document.hidden = false; visibility();
   assert.equal(calls, 2);
+  const link=article.children[4];
+  article.children[5].open=true;
+  snapshot.tasks[0].status='recovery_attention';snapshot.tasks[0].nextAction='inspect_execution_evidence';snapshot.tasks[0].issue='INTERNAL_ERROR';
+  resolveFetch({ok:true,json:async()=>snapshot});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(elements.get('tasks').children[0],article);
+  assert.equal(article.children[4],link);
+  assert.equal(article.children[5].open,true);
+  assert.match(article.children[3].textContent,/종료 결과/);
+  assert.equal(article.children[5].children[1].textContent,'INTERNAL_ERROR');
+  void refresh();
   resolveFetch({ ok: false, status: 403 });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(elements.get("connection").dataset.error, "true");
@@ -47,7 +61,8 @@ test("progress token is scoped to one run and cannot read details or mutate work
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createRun({ id: "r", name: "현재 작업", status: "running" });
   registry.createRun({ id: "secret", name: "OTHER_PRIVATE_WORK", status: "running" });
-  registry.createTask({ id: "t", prompt: "PRIVATE_PROMPT", status: "running", metadata: { runId: "r", title: "내용 확인" } });
+  registry.createTask({ id: "parent", prompt: "PRIVATE_PROMPT", status: "completed", metadata: { runId: "r", title: "선행 검토" } });
+  registry.createTask({ id: "t", prompt: "PRIVATE_PROMPT", status: "running", dependsOn: ['parent'], metadata: { runId: "r", title: "내용 확인" } });
   let mutations = 0;
   const server = new DashboardServer({ registry, html: "DETAIL_DASHBOARD", onCancel: () => mutations++ });
   try {
@@ -61,13 +76,14 @@ test("progress token is scoped to one run and cannot read details or mutate work
     const snapshot = await fetch(api).then(r => r.json());
     assert.equal(snapshot.work.runId, "r");
     assert.equal(snapshot.tasks[0].name, "내용 확인");
+    assert.deepEqual(snapshot.tasks[0].dependsOn,['parent']);
     assert.equal(snapshot.work.progress.active, 1);
     assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE_PROMPT|OTHER_PRIVATE_WORK/);
     assert.deepEqual(registry.getTask("t"), before);
     registry.updateTask("t", { status: "rejected", error: "보고 확인 필요" });
     const after = await fetch(api).then(r => r.json());
     assert.equal(after.work.progress.rejected, 1);
-    assert.equal(after.work.progress.succeeded, 0);
+    assert.equal(after.work.progress.succeeded, 1);
     for (const [path,method] of [["/api/snapshot","GET"],["/api/details/task/t","GET"],["/api/runs/r/cancel","POST"],["/api/tasks/t/repair","POST"]]) {
       const url = new URL(path, panel);url.search=panel.search;
       assert.equal((await fetch(url,{method})).status,403);

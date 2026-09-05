@@ -30,7 +30,7 @@ test("ordinary work answers use prose without weakening named-output or executio
   const result = { output: "검토 결과입니다.", evidenceComplete: true, turn: { status: "completed" } };
   assert.equal(evaluateTaskCompletion({ result, contract: { outputs: ["report"] } }).decision, "accept");
   assert.equal(evaluateTaskCompletion({ result, contract: { outputs: ["audit_report"] } }).decision, "reject");
-  assert.equal(evaluateTaskCompletion({ result, contract: { taskKind: "test", outputs: ["report"] } }).decision, "reject");
+  assert.equal(evaluateTaskCompletion({ result, contract: { taskKind: "test", outputs: ["report"] } }).decision, "attention");
 });
 
 test("execution context excludes historical reports but retains explicitly supplied dependencies", () => {

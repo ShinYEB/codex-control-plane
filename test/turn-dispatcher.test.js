@@ -4,6 +4,24 @@ import test from "node:test";
 import { ControlRegistry } from "../src/registry.js";
 import { TurnDispatcher, promptFingerprint } from "../src/turn-dispatcher.js";
 
+test("attention dispatch can record observed completion without replay or losing failure history", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    const dispatch = registry.createTurnDispatch({subjectType:'task',subjectId:'attention',purpose:'execution',revision:1,
+      promptFingerprint:promptFingerprint('work'),submissionKey:'attention',threadId:'thread',turnId:'turn',
+      status:'recovery_attention',failure:{message:'submission uncertain'}});
+    assert.throws(()=>registry.transitionTurnDispatch(dispatch.id,'completed'),/Illegal/);
+    assert.throws(()=>registry.transitionTurnDispatch(dispatch.id,'completed',{}, {transitionOptions:{observedTerminal:true}}),{code:'TURN_RECOVERY_EVIDENCE_REQUIRED'});
+    const result = await new TurnDispatcher({registry}).reconcile(dispatch.id,{
+      inspectAgent:async()=>({thread:{turns:[{id:'turn',status:'completed',items:[{type:'agentMessage',phase:'final_answer',text:'done'}]}]}}),
+      runTask:()=>{throw new Error('Must not replay');},
+    });
+    assert.equal(result.dispatch.status,'completed'); assert.equal(result.dispatch.failure,null);
+    assert.equal(result.dispatch.evidence.recoveredFailure.message,'submission uncertain');
+    assert.equal(result.result.output,'done');
+  } finally {registry.close();}
+});
+
 test("observing an existing active Turn preserves its dispatch and never resubmits", async () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   try {

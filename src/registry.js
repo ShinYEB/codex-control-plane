@@ -827,6 +827,15 @@ export class ControlRegistry {
   transitionTurnDispatch(id, status, changes = {}, options = {}) {
     const existing = this.getTurnDispatch(id);
     if (!existing) throw new Error(`TurnDispatch not found: ${id}`);
+    if (options.transitionOptions?.observedTerminal) {
+      const result = changes.evidence?.result;
+      if (changes.reconciliationDecision !== "terminal_recovered" || result?.completionMethod !== "thread/read-recovery"
+        || result?.evidenceComplete !== true || result.threadId !== existing.threadId
+        || !result.turnId || (existing.turnId && result.turnId !== existing.turnId)
+        || (result.turn?.status?.type ?? result.turn?.status) !== status) {
+        throw Object.assign(new Error("Recovery requires matching observed terminal evidence"), { code: "TURN_RECOVERY_EVIDENCE_REQUIRED" });
+      }
+    }
     transitionTurnDispatch(existing.status, status, options.transitionOptions ?? {});
     if (options.ownerToken && existing.ownerToken !== options.ownerToken) return null;
     if (options.cancellationGeneration !== undefined && existing.cancellationGeneration !== options.cancellationGeneration) return null;
@@ -849,7 +858,7 @@ export class ControlRegistry {
       changes.leaseExpiresAt ?? existing.leaseExpiresAt, changes.cancelRequestedAt ?? existing.cancelRequestedAt,
       changes.deadlineAt ?? existing.deadlineAt, changes.startedAt ?? existing.startedAt, terminalAt,
       changes.lastProbeAt ?? existing.lastProbeAt, changes.probeCount ?? existing.probeCount,
-      changes.reconciliationDecision ?? existing.reconciliationDecision, json(changes.failure ?? existing.failure),
+      changes.reconciliationDecision ?? existing.reconciliationDecision, json(Object.hasOwn(changes, "failure") ? changes.failure : existing.failure),
       json({ ...existing.evidence, ...(changes.evidence ?? {}) }, {}), timestamp, id, existing.version,
       options.ownerToken ?? null, options.ownerToken ?? null,
       options.cancellationGeneration ?? null, options.cancellationGeneration ?? null,
