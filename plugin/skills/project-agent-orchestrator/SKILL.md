@@ -1,9 +1,34 @@
 ---
 name: project-agent-orchestrator
-description: Run ordinary work requests automatically and show concise progress with a work link. Open detailed dashboards only on explicit request.
+description: Start delegated Codex work, always show its representative task link, and show a compact progress dashboard for orchestrated work. Keep detailed diagnostics opt-in; do not use to modify this plugin.
 ---
 
 # Thread-first orchestration
+
+## Present every new work conversation
+
+After dispatch, use `get_work_status` to obtain the actual representative task.
+Always include its `presentation.workUrl` as a Markdown “작업 열기” link in
+the reply, alongside the work name and concise progress. If that field is absent,
+use `codex://threads/<master.threadId>` only with the returned valid UUID.
+Never make the user ask for the link again on subsequent status replies.
+
+For `presentation.kind=orchestrated`, call `show_work_progress` and execute its
+returned `open_in_codex` host action once for the new representative task. This
+compact read-only dashboard is the default for newly orchestrated work, not the
+detailed diagnostic dashboard. It shows task descriptions, progress, dependency
+structure and task links. For older runtimes, a recorded orchestrator identity
+or multiple planned tasks can establish orchestration; never infer it from the
+work title or from a still-zero task count during planning.
+
+Opening the compact panel beside the representative task is authorized by this
+workflow; switching away from the requesting conversation is not. Report a
+queued panel as queued until the user opens that task. Respect “link only”,
+“no dashboard”, and user-closed panels. Do not reopen it on routine status reads.
+If no representative exists after the bounded wait below, state that the link,
+pin and panel are pending. At the next user interaction, complete any previously
+pending initial presentation once the task exists. Never promise an automatic
+post-turn UI update: this skill cannot run after the responding turn ends.
 
 ## Native navigation
 
@@ -14,8 +39,8 @@ ID or treat link rendering as proof of opening. `master.navigation` is a host-to
 handoff. For “결과 보기/열어줘” or an explicit work selection,
 call the available `navigate_to_codex_page` host tool with that exact threadId.
 Confirm opening only when it returns `navigated: true`. A status-only request
-does not authorize switching the current page: report status and say the result
-can be opened on request, without a fake clickable link.
+does not authorize switching the current page: report status with the real task
+link, without claiming that displaying the link opened the task.
 Dashboard links must not send follow-up messages, start or retry work.
 If host navigation is unavailable, explain the limitation instead of claiming
 success. Message delivery or OS URL acceptance is not navigation confirmation.
@@ -42,7 +67,7 @@ An idempotent already-accepted response is not a new request to re-pin that work
 
 ## User language
 
-When the user requests a compact task-side progress panel (or has opted into it),
+For newly orchestrated work, or when the user requests a compact progress panel,
 call `show_work_progress` for the known work, then invoke the available native
 `open_in_codex` tool with the returned hostAction arguments unchanged. This is a
 read-only side panel beside the representative task, not content inserted into
@@ -65,7 +90,7 @@ In requested detail views use “전체 작업” and “하위 작업”. Expla
 components only on an explicit technical diagnostics or architecture request.
 
 1. For a request to begin delegated work, call `dispatch_control_request` once with the objective and project cwd. The daemon plans and starts automatically; never create READY placeholders or ask for another Start.
-2. Acknowledge the work name and status briefly. Do not open a dashboard after dispatch. A null master means preparation, not failure; never fabricate a thread link.
+2. Acknowledge the work name and status with its real link. For orchestrated work, present the compact progress panel using the initial-presentation workflow above. A null master means preparation, not failure; never fabricate a thread link.
 3. For progress, completion, results, or current work, use `get_work_status`. Show work name, status and `progress.succeeded` as successful completion, with nonzero rejected/failed/attention/cancelled/skipped counts separately. `finished` counts all terminal tasks, including unsuccessful ones: never label it completed or successful. Warnings are a subset of succeeded. Keep `needsAttention` visible even while other work is running. `observedAt` is a snapshot timestamp, not proof that execution is alive. Use real host navigation on request, not a fabricated link. Do not add a conversation polling loop.
 4. Simple work opens its actual worker; complex work opens its actual master Orchestrator. Use the returned real thread ID with host navigation tools when the user asks to open it. Navigation never sends a prompt, retries work, or creates a turn.
 5. Handle requested representative-task pins through the Sidebar pin handoff above. Keep work links visible even if pinning is unavailable.

@@ -31,11 +31,21 @@ export function workStatus(registry, run) {
     ?? run.metadata?.orchestratorAgentId
     ?? (tasks.length === 1 ? tasks[0].agentId : null);
   const master = masterId ? registry.getAgent(masterId) : null;
+  const orchestrated = Boolean(run.metadata?.orchestratorSessionIdentity?.agentId
+    || run.metadata?.orchestratorAgentId || tasks.length > 1);
+  const workUrl = master && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(master.id)
+    ? `codex://threads/${master.id}` : null;
   const progress = workProgress(tasks);
   const attention = tasks.find(t => ["rejected", "validation_failed", "failed", "interrupted", "approval_waiting", "recovery_attention", "blocked_by_policy", "integration_blocked"].includes(t.status));
   return {
     runId: run.id, name: run.name, status: run.status,
     progress,
+    presentation: {
+      kind: orchestrated ? "orchestrated" : tasks.length === 1 ? "single" : "preparing",
+      workUrl,
+      initialPanel: orchestrated && workUrl
+        ? { tool: "show_work_progress", arguments: { runId: run.id } } : null,
+    },
     pinning: hostPinning(master?.ephemeral ? null : master?.id, run.metadata?.controlRequest?.pin === true),
     needsAttention: Boolean(attention || run.metadata?.failure || progress.unknown),
     observedAt: new Date().toISOString(),

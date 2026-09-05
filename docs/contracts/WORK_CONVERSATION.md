@@ -26,6 +26,18 @@ The user-facing work thread is an execution record, not a protocol console.
 
 ## Progress projection
 
+Every newly available representative work is presented as a real task link in
+the requesting conversation. Status replies retain that link. `presentation`
+reports the structural kind, UUID-validated `workUrl`, and an initial compact
+panel handoff for orchestrated work. It never opens UI or records a host receipt.
+The orchestration skill opens this compact panel beside the representative task
+once on initial presentation, unless the user opts out. Single work stays link-only;
+detailed diagnostics remain opt-in. Hidden-task placement may be queued and must
+not be described as visible. Routine reads must not reopen user-closed panels.
+If the representative is not ready within the bounded wait, presentation remains
+pending until the next user interaction; a skill alone cannot emit UI after its
+responding turn has ended.
+
 Sidebar pinning belongs to the native app, not App Server `thread/metadata/update`.
 New `dispatch_control_request` work persists `pin` intent (default true, false opts
 out). `get_work_status.works[].pinning` supplies a representative-only native
@@ -44,7 +56,7 @@ Missing or failed host pinning never changes execution status or triggers retry.
 
 This projection does not insert or refresh content inside an existing work conversation. The currently integrated MCP UI is associated with the calling tool result; an automatic cross-conversation inline surface has not been verified. Do not describe status projection alone as a live embedded work monitor, and do not start extra model turns merely to refresh a counter.
 
-On request or user opt-in, `show_work_progress` prepares a compact read-only panel and returns an `open_in_codex` host action targeting the representative task's right panel. URL creation is not UI-opening confirmation; a queued host action remains queued until the task is shown. The panel refreshes every five seconds while visible, pauses when hidden, and marks stale data explicitly on connection failure. Display refresh time and stored work-update time are separate.
+For newly orchestrated work by default, or on request for single work, `show_work_progress` prepares a compact read-only panel and returns an `open_in_codex` host action targeting the representative task's right panel. URL creation is not UI-opening confirmation; a queued host action remains queued until the task is shown. The panel refreshes every five seconds while visible, pauses when hidden, and marks stale data explicitly on connection failure. Display refresh time and stored work-update time are separate.
 
 The panel token is limited to one Run, expires after 24 hours, and cannot access detailed snapshots or mutation routes. Daemon restart requires reopening with a fresh URL. No worker turn, retry, or execution is triggered by panel reads. Open work anchors use codex://threads/<UUID> for existing local tasks. They expose no raw identifier in visible text and send no worker/model message. Link rendering is not an opening receipt: chat-link navigation was user-verified, while embedded and web host behavior must be tested separately. The detailed dashboard remains explicit opt-in.
 

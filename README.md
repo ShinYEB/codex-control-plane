@@ -79,6 +79,8 @@ API callers using explicit `mode: "direct"` get a deterministic single-task plan
 
 New delegated work requests a sidebar pin by default (`pin: false` opts out). The calling conversation uses the native app's sidebar tool and verifies its pinned list; the background worker does not pin itself. Only the representative work is pinned, never every subtask. Preparation can be awaited for up to 30 seconds; if the thread or app tool is unavailable, pinning remains pending without blocking execution. Routine status reads do not re-pin work you have unpinned.
 
+New work includes a direct task link. Orchestrated work also gets a compact progress panel beside its representative conversation by default, with task descriptions, dependencies, and links. Single work stays link-only unless requested. A panel for a hidden conversation can be queued until that conversation is opened; if task creation outlasts the initial wait, presentation is completed at the next user interaction. Say “link only” to opt out.
+
 The detailed embedded dashboard opens only when requested. Ask `Open the web dashboard` for the standalone local page. The detailed view shows:
 
 - Global Run and Project Run progress
