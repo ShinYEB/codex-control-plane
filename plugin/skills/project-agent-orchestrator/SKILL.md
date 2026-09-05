@@ -5,6 +5,20 @@ description: Run ordinary work requests automatically and show concise progress 
 
 # Thread-first orchestration
 
+## Native navigation
+
+Never emit `codex://threads/...` Markdown links or construct a replacement URL.
+They are not verified Desktop navigation. `master.navigation` is a host-tool
+handoff, not a hyperlink. For “결과 보기/열어줘” or an explicit work selection,
+call the available `navigate_to_codex_page` host tool with that exact threadId.
+Confirm opening only when it returns `navigated: true`. A status-only request
+does not authorize switching the current page: report status and say the result
+can be opened on request, without a fake clickable link.
+Dashboard button messages request navigation in this calling conversation only;
+never forward a prompt to the destination worker or start/retry work.
+If host navigation is unavailable, explain the limitation instead of claiming
+success. Message delivery or OS URL acceptance is not navigation confirmation.
+
 ## User language
 
 Users make ordinary requests; never ask them to choose an execution mode or learn

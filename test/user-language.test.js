@@ -11,6 +11,10 @@ test("public names and link labels hide hierarchy without renaming stored histor
   assert.equal(agentDisplayName("slave", "파일 검사"), "🤖 파일 검사");
   assert.equal(publicWorkName(agent.name), "요청 처리");
   assert.equal(workStatus(registry, run).master.name, "요청 처리");
+  assert.equal(workStatus(registry, run).master.url, undefined);
+  assert.deepEqual(workStatus(registry, run).master.navigation, {
+    kind: "host_tool", tool: "navigate_to_codex_page", arguments: { threadId: "existing" },
+  });
   assert.equal(workStatus(registry, run).master.label, "작업 열기");
   run.status = "completed";
   assert.equal(workStatus(registry, run).master.label, "작업 열기");

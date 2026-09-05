@@ -15,7 +15,8 @@ export function workStatus(registry, run) {
     progress: { total: tasks.length, finished: tasks.filter(t => TERMINAL_TASK_STATUSES.has(t.status)).length },
     master: master ? { threadId: master.id, name: publicWorkName(run.name || master.name),
       label: run.status === "completed" && run.metadata?.controlResultFinalizedAt ? "결과 보기" : "작업 열기",
-      url: `codex://threads/${master.id}`, access: "observe_while_running" } : null,
+      navigation: { kind: "host_tool", tool: "navigate_to_codex_page", arguments: { threadId: master.id } },
+      access: "observe_while_running" } : null,
     ...(attention || run.metadata?.failure ? { attention: {
       cause: String(attention?.error ?? run.metadata?.failure?.cause ?? "Execution needs attention").slice(0, 300),
       nextAction: attention?.routing?.nextAction ?? attention?.metadata?.failure?.nextAction ?? run.metadata?.failure?.nextAction ?? "inspect_failure",

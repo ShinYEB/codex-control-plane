@@ -56,6 +56,11 @@ Completion criteria:
 
 ### Open the work navigator
 
+Say **Open the result** to open the existing work using the host's navigation
+action. Status responses do not generate unverified `codex://` hyperlinks.
+Dashboard buttons request that same host action; a sent request is not yet proof
+that navigation succeeded. Hosts without navigation support show a limitation.
+
 ```text
 Show the agent dashboard for this project.
 ```

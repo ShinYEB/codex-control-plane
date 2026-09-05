@@ -481,8 +481,20 @@
       try {
         if (standalone) throw new Error("웹 대시보드에서는 Codex Desktop 직접 이동을 지원하지 않습니다.");
         if (!state.dashboardLeaseToken) throw new Error("대시보드 소유권이 없습니다. Control Plane에서 다시 여세요.");
-        await callTool("open_desktop_thread", { threadId, dashboardLeaseToken: state.dashboardLeaseToken });
-        el("updated").textContent = `Codex Desktop에서 작업을 열었습니다 · ${shortId(threadId)}`;
+        const result = await callTool("open_desktop_thread", { threadId, dashboardLeaseToken: state.dashboardLeaseToken });
+        if (result.opened === true) {
+          el("updated").textContent = "작업을 열었습니다.";
+        } else if (result.requiresHostNavigation && result.navigation?.arguments?.threadId === threadId) {
+          const prompt = `작업 ${threadId}을 앱에서 열어주세요. navigate_to_codex_page로 기존 작업 화면만 열고, 해당 작업에 메시지를 보내거나 실행·재시도하지 마세요.`;
+          const sent = openaiBridge?.sendFollowUpMessage
+            ? await openaiBridge.sendFollowUpMessage({ prompt })
+            : await Promise.race([
+              request("ui/message", { role: "user", content: [{ type: "text", text: prompt }] }),
+              new Promise((_, reject) => setTimeout(() => reject(new Error("이동 요청을 확인하지 못했습니다. 채팅에서 결과를 열어달라고 요청하세요.")), 10000)),
+            ]);
+          if (sent?.isError) throw new Error("앱이 이동 요청을 거부했습니다.");
+          el("updated").textContent = "작업 열기를 요청했습니다.";
+        } else throw new Error("앱의 이동 확인을 받지 못했습니다. 채팅에서 결과를 열어달라고 요청하세요.");
       } catch (error) {
         try {
           await navigator.clipboard.writeText(threadId);

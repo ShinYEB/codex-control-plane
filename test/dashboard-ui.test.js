@@ -134,8 +134,10 @@ test("chat navigation opens actual Orchestrator and worker threads through the D
   assert.match(html, /callTool\("open_desktop_thread"/);
   assert.match(html, /dashboardLeaseToken: state\.dashboardLeaseToken/);
   assert.match(html, /data-thread-id=/);
-  assert.doesNotMatch(html, /sendFollowUpMessage/);
-  assert.doesNotMatch(html, /request\("ui\/message"/);
+  assert.match(html, /sendFollowUpMessage/);
+  assert.match(html, /request\("ui\/message"/);
+  assert.match(html, /result.opened === true/);
+  assert.match(html, /작업 열기를 요청했습니다/);
   assert.match(html, /전체 작업/);
   assert.match(html, /하위 작업/);
   assert.match(html, /navigator\.clipboard\.writeText\(threadId\)/);

@@ -815,7 +815,7 @@ test("authorized dashboards can open an existing Codex Desktop task without send
   const dashboardServer = { start: async () => {}, url: () => "http://127.0.0.1/dashboard", close: async () => {} };
   const server = fakeServer({ connect: async () => {}, listAgents: async () => ({ agents: [], nextCursor: null }) }, {
     dashboardServer,
-    openDesktopThread: async (threadId) => opened.push(threadId),
+    openDesktopThread: async (threadId) => { opened.push(threadId); return { navigated: true }; },
   });
   const shown = await server.handleRequest({ method: "tools/call", params: { name: "show_agent_dashboard", arguments: { cwd: "/repo" } } });
   const threadId = "01a0534d-7717-7151-bfd7-2d9cb59e8662";
@@ -825,7 +825,12 @@ test("authorized dashboards can open an existing Codex Desktop task without send
   } } });
   assert.equal(result.structuredContent.opened, true);
   assert.deepEqual(opened, [threadId]);
-  assert.equal(result.structuredContent.url, `codex://threads/${threadId}`);
+  assert.equal(result.structuredContent.url, undefined);
+  server.openDesktopThread = async () => undefined;
+  const unconfirmed = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
+    dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken, threadId,
+  } } });
+  assert.equal(unconfirmed.structuredContent.opened, false);
 
   const rejected = await server.handleRequest({ method: "tools/call", params: { name: "open_desktop_thread", arguments: {
     dashboardLeaseToken: shown.structuredContent.dashboardLeaseToken,
@@ -865,8 +870,8 @@ test("show_agent_dashboard returns agents and task state", async () => {
   assert.equal(result.structuredContent.dashboardUrl, undefined);
   assert.equal(dashboardStarts, 0, "embedded presentation must not start the local web dashboard");
   assert.equal(result.content.some((item) => item.type === "resource_link"), false);
-  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v8.html");
-  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v8.html");
+  assert.equal(result._meta.ui.resourceUri, "ui://codex-control-plane/work-navigator-v9.html");
+  assert.equal(result._meta["openai/outputTemplate"], "ui://codex-control-plane/work-navigator-v9.html");
   assert.equal(result._meta["openai/widgetAccessible"], true);
 
   const web = await server.handleRequest({
@@ -1094,7 +1099,7 @@ test("complex runs automatically provision an Orchestrator before workers", asyn
   assert.equal(sequence, 1, "automatic start creates only the Orchestrator before workers are scheduled");
   assert.equal(turns.length, 1);
   assert.equal(turns[0].threadId, "agent_1");
-  assert.match(turns[0].prompt, /waiting for the daemon-managed Data Plane results/);
+  assert.match(turns[0].prompt, /results will be collected here/);
   assert.equal(server.registry.getRun(prepared.structuredContent.runId).metadata.orchestratorKickoff.turnId, "turn_kickoff");
   const kickoffDispatch = server.registry.listTurnDispatches({
     subjectType: "run", subjectId: prepared.structuredContent.runId, purpose: "orchestration", limit: 10,

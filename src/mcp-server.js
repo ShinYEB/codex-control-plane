@@ -4,8 +4,6 @@ import { pathToFileURL } from "node:url";
 import readline from "node:readline";
 import { createHash, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { execFile as execFileCallback } from "node:child_process";
-import { promisify } from "node:util";
 
 import { CodexAppServerClient } from "./app-server-client.js";
 import { CodexControlPlane } from "./control-plane.js";
@@ -38,15 +36,16 @@ import { ThreadGraphContextPackImporter } from "./threadgraph-context-pack.js";
 
 // MCP Apps hosts cache ui:// resources by URI. Bump this whenever the embedded
 // document contract changes so Desktop cannot mount an obsolete dashboard.
-const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v8.html";
+const DASHBOARD_URI = "ui://codex-control-plane/work-navigator-v9.html";
 const DASHBOARD_HTML = readFileSync(new URL("../ui/dashboard.html", import.meta.url), "utf8");
-const execFile = promisify(execFileCallback);
 const CODEX_THREAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EXECUTION_CAPABILITIES_SCHEMA = { type: "array", uniqueItems: true, items: { type: "string", enum: EXECUTION_CAPABILITIES }, maxItems: EXECUTION_CAPABILITIES.length };
 
 async function openDesktopThread(threadId) {
-  if (process.platform !== "darwin") throw new Error("Direct Codex Desktop navigation is currently supported on macOS only");
-  await execFile("/usr/bin/open", [`codex://threads/${threadId}`]);
+  // The daemon has no Desktop navigation authority. An OS URL dispatch is not
+  // proof of navigation; return an explicit handoff to the calling host instead.
+  return { navigated: false, requiresHostNavigation: true,
+    navigation: { kind: "host_tool", tool: "navigate_to_codex_page", arguments: { threadId } } };
 }
 
 function readTurn(result, turnId) {
@@ -864,7 +863,7 @@ const TOOLS = [
   {
     name: "open_desktop_thread",
     title: "Open a Codex Desktop task",
-    description: "Open an existing Codex task directly in the Desktop app from an authorized Control Plane dashboard.",
+    description: "Request native host navigation for an existing task from an authorized dashboard. A handoff is not proof of navigation: only navigated=true may be reported as opened. Never create a thread URL or send a worker prompt.",
     inputSchema: {
       type: "object",
       properties: { threadId: { type: "string" }, dashboardLeaseToken: { type: "string" } },
@@ -1291,7 +1290,7 @@ export class McpControlServer {
           resources: { subscribe: false, listChanged: false },
         },
         serverInfo: { name: "codex-control-plane", version: "0.14.0" },
-        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and work link only. Keep internal hierarchy invisible: use ordinary work names and localized Open work / View result labels, never master/slave, nodes, Orchestrator, Run IDs or role names in normal replies. Show detailed dashboards only on explicit request. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
+        instructions: "Use this daemon as the single Codex thread writer. Dispatch automatically plans and starts work without READY placeholders or another Start. Default to get_work_status: work name, status, progress and work link only. Keep internal hierarchy invisible: use ordinary work names and localized Open work / View result labels, never master/slave, nodes, Orchestrator, Run IDs or role names in normal replies. Show detailed dashboards only on explicit request. Never emit codex://threads hyperlinks. When the user asks to open a result, call navigate_to_codex_page with the returned threadId; confirm only navigated=true. Use host navigation/pinning tools for returned real thread IDs when requested, never send a turn for navigation. The daemon never appends terminal results to the requesting thread.",
       };
     }
     if (message.method === "ping") return {};
@@ -1583,8 +1582,8 @@ export class McpControlServer {
       } else if (name === "open_desktop_thread") {
         this.#assertDashboardViewLease(args.dashboardLeaseToken);
         if (!CODEX_THREAD_ID.test(args.threadId ?? "")) throw new Error("Invalid Codex thread ID");
-        await this.openDesktopThread(args.threadId);
-        result = { opened: true, threadId: args.threadId, url: `codex://threads/${args.threadId}` };
+        const navigation = await this.openDesktopThread(args.threadId);
+        result = { ...navigation, opened: navigation?.navigated === true, threadId: args.threadId };
       } else if (name === "get_task") {
         result = this.registry.getTask(args.taskId);
         if (!result) throw new Error(`Task not found: ${args.taskId}`);
