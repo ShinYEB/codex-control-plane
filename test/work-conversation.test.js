@@ -6,6 +6,23 @@ import { ControlRegistry } from "../src/registry.js";
 import { dataPlaneRuntime } from "../src/runtime-environment.js";
 import { evaluateTaskCompletion } from "../src/completion-evaluator.js";
 import { TurnDispatcher } from "../src/turn-dispatcher.js";
+import { dependencyEvidence } from "../src/task-evidence.js";
+
+test("handoffs retain full revision reports and command provenance after an addendum", () => {
+  const original = "original finding ".repeat(1000);
+  const registry = {
+    getTask: id => ({ id, status: "completed", prompt: "review", output: "Git addendum", metadata: {} }),
+    listTurnDispatches: () => [2, 1].map(revision => ({ id: `d${revision}`, revision, status: "completed", turnId: `turn${revision}`,
+      evidence: { result: { output: revision === 1 ? original : "Git addendum", executionItems: [{ type: "commandExecution", command: "node --test requested.js", exitCode: 0 }, { type: "userMessage", text: "exclude prompt" }] } } })),
+  };
+  const [handoff] = dependencyEvidence(registry, { dependencies: [{ taskId: "review" }] });
+  assert.equal(handoff.taskId, "review");
+  assert.equal(handoff.status, "completed");
+  assert.deepEqual(handoff.reports.map(report => report.revision), [1, 2]);
+  assert.equal(handoff.reports[0].output, original);
+  assert.equal(handoff.reports[0].executionItems[0].exitCode, 0);
+  assert.doesNotMatch(JSON.stringify(handoff), /exclude prompt/);
+});
 
 test("ordinary work answers use prose without weakening named-output or execution evidence", () => {
   assert.match(resultInstructions({ outputs: ["report", "workspace-change"] }), /readable final answer, not a JSON/);
@@ -25,13 +42,21 @@ test("execution context excludes historical reports but retains explicitly suppl
     const pack = manager.build({ cwd: "/repo", prompt: "현재 파일을 검토해주세요.", excludeTaskResults: true });
     assert.equal(pack.memories.some(m => m.id === "old"), false);
     const context = workContext({ contextManager: manager, contextPack: pack, runtime: dataPlaneRuntime(),
-      contract: { outputs: ["report"] }, handoffs: [{ output: "CURRENT_DEPENDENCY" }], rework: { feedback: "Check missing evidence" } });
+      contract: { outputs: ["report"] }, handoffs: [{ taskId: "current", status: "rejected", output: "CURRENT_DEPENDENCY" }], rework: { feedback: "Check missing evidence" },
+      acceptanceCriteria: ["Record HEAD before and after"], previousReports: [{ output: "Initial finding" }] });
     assert.doesNotMatch(JSON.stringify(context), /OLD_REPORT|현재 파일을 검토해주세요/);
     assert.match(context.threadhub_project.value, /Preserve unrelated changes/);
     assert.match(context.threadhub_handoffs.value, /CURRENT_DEPENDENCY/);
     assert.equal(context.threadhub_handoffs.kind, "untrusted");
     assert.equal(context.threadhub_rework.kind, "untrusted");
     assert.match(context.threadhub_policy.value, /Do not request another Start/);
+    assert.match(context.threadhub_acceptance.value, /Record HEAD before and after/);
+    assert.match(context.threadhub_previous_reports.value, /Initial finding/);
+    assert.match(context.threadhub_review_policy.value, /complete corrected report/);
+    assert.equal(context.threadhub_dependency_receipt.kind, "application");
+    assert.deepEqual(JSON.parse(context.threadhub_dependency_receipt.value).dependencies[0], {
+      taskId: "current", status: "rejected", completedAt: null, reportRevisions: [],
+    });
   } finally { registry.close(); }
 });
 

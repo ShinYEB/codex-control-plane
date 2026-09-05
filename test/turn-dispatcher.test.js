@@ -4,6 +4,28 @@ import test from "node:test";
 import { ControlRegistry } from "../src/registry.js";
 import { TurnDispatcher, promptFingerprint } from "../src/turn-dispatcher.js";
 
+test("observing an existing active Turn preserves its dispatch and never resubmits", async () => {
+  const registry = new ControlRegistry({ path: ":memory:" });
+  try {
+    const dispatcher = new TurnDispatcher({ registry, instanceId: "observer" });
+    const options = { subjectType: "task", subjectId: "active", purpose: "execution", revision: 1, prompt: "work" };
+    let dispatch = dispatcher.beginThreadAcquisition(options);
+    await dispatcher.acquireThread(dispatch.id, async () => ({ id: "thread" }));
+    registry.transitionTurnDispatch(dispatch.id, "turn_submitting", {}, { ownerToken: dispatch.ownerToken });
+    registry.transitionTurnDispatch(dispatch.id, "turn_running", { turnId: "turn" }, { ownerToken: dispatch.ownerToken });
+    let submissions = 0;
+    await assert.rejects(dispatcher.execute({ ...options, control: {
+      inspectAgent: async () => ({ thread: { turns: [{ id: "turn", status: "inProgress" }] } }),
+      runTask: async () => { submissions++; },
+    } }), { code: "TURN_DISPATCH_ACTIVE" });
+    dispatch = registry.getTurnDispatch(dispatch.id);
+    assert.equal(dispatch.status, "turn_running");
+    assert.equal(dispatch.failure, null);
+    assert.equal(submissions, 0);
+    assert.equal(registry.listTurnDispatches({ active: true }).length, 1);
+  } finally { registry.close(); }
+});
+
 test("TurnDispatcher persists thread and Turn identity before terminal projection", async () => {
   const registry = new ControlRegistry({ path: ":memory:" });
   registry.createRun({ id: "run_dispatch", status: "running", cwd: "/repo" });

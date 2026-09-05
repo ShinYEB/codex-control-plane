@@ -169,7 +169,7 @@ export class TurnDispatcher {
       if (dispatch.status === "turn_running") {
         const reconciled = await this.reconcile(dispatch.id, control, { ownerToken: token });
         if (reconciled?.result) return reconciled.result;
-        throw dispatchError("Existing Turn is still active; command was not resubmitted", "TURN_DISPATCH_ACTIVE", { dispatch: reconciled?.dispatch ?? dispatch, retryable: true });
+        throw dispatchError("Existing Turn is still active; command was not resubmitted", "TURN_DISPATCH_ACTIVE", { dispatch: reconciled?.dispatch ?? dispatch, retryable: false, nextAction: "observe_existing_turn" });
       }
       heartbeat = setInterval(() => this.registry.heartbeatTurnDispatch(dispatch.id, this.instanceId, token, this.leaseTtlMs), 15_000);
       heartbeat.unref?.();
@@ -204,6 +204,9 @@ export class TurnDispatcher {
       options.onCompleted?.({ dispatch, result });
       return result;
     } catch (error) {
+      // An observation is not an execution failure. Keep the durable dispatch
+      // available for reconciliation and never authorize a fresh submission.
+      if (error.code === "TURN_DISPATCH_ACTIVE") throw error;
       const current = this.registry.getTurnDispatch(dispatch.id);
       if (current && !TERMINAL_TURN_DISPATCH_STATUSES.has(current.status)) {
         if (error.code === "TURN_DISPATCH_FENCED" || current.status === "cancelling") {

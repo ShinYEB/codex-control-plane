@@ -8,6 +8,8 @@ The user-facing work thread is an execution record, not a protocol console.
 - Planner-generated requests use the user's language and describe the goal, scope and deliverables. Acceptance criteria remain structured separately.
 - App Server `turn/start.additionalContext` carries application policy, runtime information and project constraints outside the user message. Reference memories, dependency results and review feedback are explicitly untrusted data.
 - Historical task-result memories and reusable-agent summaries are not injected into execution context. Current dependencies are supplied from the durable graph, not from a general memory search. This does not erase existing thread history.
+- The assigned acceptance criteria are supplied to the worker as application context, not hidden until validation. A rework turn receives its own earlier revision reports and must return a complete corrected report, not an addendum alone. Feedback cannot authorize checks forbidden by the original scope.
+- Dependency handoffs preserve task identity, durable state, completion timestamp, complete revision reports and task-scoped native command evidence. Validators receive the same upstream snapshot stored at submission. A rejected test report can contain passing commands; report acceptance and command success are separate facts. Never substitute a synthesis task's tests for its upstream test task.
 - The dispatch stores the complete additional context and its fingerprint. Changing context cannot reuse the same explicit dispatch revision. Context-bearing submissions use `clientUserMessageId` for uncertain-submission recovery; matching the same visible prose alone is insufficient.
 - Context transport errors remain execution errors. Never retry without the policy or silently append it to the user message. Compatibility was checked against the installed App Server; older versions require their own compatibility gate.
 
@@ -32,6 +34,8 @@ On request or user opt-in, `show_work_progress` prepares a compact read-only pan
 The panel token is limited to one Run, expires after 24 hours, and cannot access detailed snapshots or mutation routes. Daemon restart requires reopening with a fresh URL. No worker turn, retry, or execution is triggered by panel reads. Browser buttons copy task identifiers only; native task navigation remains a host-tool operation. The detailed dashboard remains explicit opt-in.
 
 ## Verification gates
+
+Re-executing an existing active dispatch observes it without resubmission or a failure transition. `TURN_DISPATCH_ACTIVE` means `observe_existing_turn`, not a retryable failure. The task remains available to stale-task reconciliation. This does not prove all restart/lease races safe; live recovery remains a release gate.
 
 Regression tests cover natural reports versus strict named outputs, preserved execution evidence, upstream and rework transport, context fingerprints and native request separation. The App Server release E2E asserts the actual persisted user message, a non-envelope final answer, a real code fix, passing tests, acceptance validation and integration.
 

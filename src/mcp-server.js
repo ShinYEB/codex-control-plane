@@ -12,6 +12,7 @@ import { AgentRouter, normalizeStatus, requirementMatrix } from "./router.js";
 import { DashboardServer } from "./dashboard-server.js";
 import { workStatus } from "./work-status.js";
 import { workContext, WORK_CONVERSATION_POLICY } from "./work-conversation.js";
+import { dependencyEvidence, executionReports } from "./task-evidence.js";
 import { isControlPlaneAgent } from "./thread-lifecycle.js";
 import { ContextManager } from "./context-manager.js";
 import { ContextResolver } from "./context-resolver.js";
@@ -1859,7 +1860,9 @@ export class McpControlServer {
         });
         taskPrompt = args.prompt;
         additionalContext = workContext({ contextManager: this.contextManager, contextPack, runtime: this.runtime,
-          contract: executionContract, handoffs: args.taskHandoffs, rework: args.taskRework });
+          contract: executionContract, handoffs: args.taskHandoffs, rework: args.taskRework,
+          acceptanceCriteria: this.registry.getTask(taskId)?.metadata?.acceptanceCriteria ?? args.acceptanceCriteria ?? [],
+          previousReports: args.taskRework ? executionReports(this.registry, taskId) : [] });
         const currentRunId = this.registry.getTask(taskId)?.metadata?.runId ?? null;
         turnDispatchIntent = this.turnDispatcher.beginThreadAcquisition({
           subjectType: "task", subjectId: taskId, purpose: "execution", revision: claim?.attempt ?? 1,
@@ -1925,7 +1928,9 @@ export class McpControlServer {
         });
         taskPrompt = args.prompt;
         additionalContext = workContext({ contextManager: this.contextManager, contextPack, runtime: this.runtime,
-          contract: executionContract, handoffs: args.taskHandoffs, rework: args.taskRework });
+          contract: executionContract, handoffs: args.taskHandoffs, rework: args.taskRework,
+          acceptanceCriteria: this.registry.getTask(taskId)?.metadata?.acceptanceCriteria ?? args.acceptanceCriteria ?? [],
+          previousReports: args.taskRework ? executionReports(this.registry, taskId) : [] });
         const currentRecord = this.registry.getTask(taskId);
         turnDispatchIntent = this.turnDispatcher.beginThreadAcquisition({
           subjectType: "task", subjectId: taskId, purpose: "execution", revision: currentRecord?.attempt ?? claim?.attempt ?? 1,
@@ -2277,6 +2282,10 @@ export class McpControlServer {
       return { mode, sourceThreadId, routing, contextPack, validation, integration, resultMemory, agent: this.registry.getAgent(agent.id), task, record: persistedTask };
     } catch (error) {
       clearInterval(heartbeatTimer);
+      if (error.code === "TURN_DISPATCH_ACTIVE") {
+        this.registry.recordEvent("task", taskId, "task.observation_deferred", { nextAction: "observe_existing_turn" });
+        return { pending: true, record: this.registry.getTask(taskId) };
+      }
       if (turnDispatchIntent) this.turnDispatcher.failBeforeSubmission(turnDispatchIntent.id, error);
       const ownsClaim = this.registry.isClaimOwner(taskId, this.instanceId, claimToken);
       if (ownsClaim && leaseKey) this.registry.releaseLease(leaseKey, taskId, { ownerToken: claimToken });
@@ -3028,19 +3037,7 @@ export class McpControlServer {
     }
     this.runningTaskIds.add(taskId);
     const execution = claimed.metadata?.execution ?? {};
-    const taskHandoffs = (claimed.dependencies ?? [])
-      .map((dependency) => this.registry.getTask(dependency.taskId))
-      .filter((dependency) => TERMINAL_TASK_STATUSES.has(dependency?.status))
-      .map((dependency) => ({
-        taskId: dependency.id,
-        title: dependency.metadata?.title ?? dependency.prompt.slice(0, 80),
-        agentId: dependency.agentId,
-        status: dependency.status,
-        output: dependency.output,
-        validation: dependency.metadata?.validation ?? null,
-        artifact: dependency.metadata?.integration?.artifact ?? null,
-        integration: dependency.metadata?.integration ?? null,
-      }));
+    const taskHandoffs = dependencyEvidence(this.registry, claimed);
     const globalGraph = claimed.metadata?.runId ? this.registry.getGlobalRunForProjectRun(claimed.metadata.runId) : null;
     const crossProjectHandoffs = (globalGraph?.handoffs ?? [])
       .filter((handoff) => handoff.consumerRunId === claimed.metadata.runId && handoff.status === "received")
@@ -3270,6 +3267,7 @@ export class McpControlServer {
           status: task.status,
           agent: task.agentId ? { id: task.agentId, name: agent?.name ?? null, role: agent?.role ?? task.role ?? null } : null,
           output: task.output,
+          reports: executionReports(this.registry, task.id),
           error: task.error,
           validation: task.metadata?.validation ?? null,
         };

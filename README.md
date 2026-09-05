@@ -32,6 +32,10 @@ When this repository's runtime is deployed as the RUVORA plugin, the normal inte
 3. Describe the goal, scope, and completion criteria in natural language.
 4. Your work proceeds in the background. Use **Open work** to see progress or **View result** when ready. Complex work is split automatically; request details to explore its subtasks.
 
+Request acceptance is not execution: work starts automatically only after the complete graph is validated and persisted, then dependencies and workspace leases permit dispatch. No second Start confirmation is needed. Completion is recorded locally; the final answer is written in the representative work conversation, not automatically posted into the requesting conversation. For simple work this is the worker itself; for complex work it is the synthesis conversation. Opening it requires a confirmed native host navigation action. Stored notifications are not a promise of an unsolicited chat message.
+
+Ordinary reports are readable prose. Only explicitly named output interfaces require structured JSON. Diagnostic data travels separately from the user request, but its visibility depends on the host and is not guaranteed to be hidden in every diagnostic view.
+
 | Goal | Example | Internal execution |
 |---|---|---|
 | Read-only analysis | `Analyze this project's authentication flow and prioritize the risks.` | One Project Run with a `read-only` contract |
