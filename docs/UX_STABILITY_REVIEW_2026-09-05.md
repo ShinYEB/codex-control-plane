@@ -1,5 +1,13 @@
 # UX and stability improvements — 2026-09-05
 
+## Direct request follow-up after restart
+
+The real `dispatch_control_request(mode="direct")` smoke failed before creating a Task: the direct branch skipped the required planning state. A regression reproduced `accepted -> preparing` rejection. Direct dispatch now records `planningMethod=deterministic_direct` before preparation, without invoking the AI planner or weakening state transitions.
+
+The first real direct-entry rerun also exposed keyword inference treating “do not modify files” as mutation intent. Direct mode now uses an explicit `taskKind`, defaulting to non-mutating analysis/report rather than inferring permissions from titles or negated text. Explicit implementation remains available through `taskKind: "implementation"`.
+
+Verification: full suite 326/326; `release-control-request-e2e.mjs --direct` passed through actual App Server execution, acceptance validation, one attempt, claim release, work/pin handoff and DB reopen. Run `run_9416a613-d1ae-4f93-bc2c-be407537f01e`. Previous failed Runs were not rewritten or replayed. New live app pin execution was not part of this source-level harness.
+
 ## Implemented boundaries
 
 - Test evidence is checked using a shared command interpreter: direct executables, supported Node flags and App Server's single-command shell transport. Echoed text and arbitrary script wrappers do not prove child test execution. Unknown exit codes or unavailable test receipts require inspection, not automatic replay.

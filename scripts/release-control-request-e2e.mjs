@@ -13,6 +13,7 @@ import { ControlRegistry } from "../src/registry.js";
 import { TERMINAL_RUN_STATUSES } from "../src/domain-states.js";
 
 const root = mkdtempSync(join(tmpdir(), "ruvora-natural-e2e-"));
+const direct = process.argv.includes("--direct");
 const state = mkdtempSync(join(tmpdir(), "ruvora-natural-state-"));
 const registryPath = join(state, "registry.sqlite");
 const git = (...args) => execFileSync("/usr/bin/git", args, { cwd: root, encoding: "utf8" }).trim();
@@ -37,10 +38,10 @@ try {
   }
   server.startBackground();
   const accepted = await server.handleRequest({ method: "tools/call", params: { name: "dispatch_control_request", arguments: {
-    cwd: root, mode: "orchestrated", requestKey: `public-entry-${Date.now()}`, name: "Natural request release gate",
-    objective: "Create exactly four tasks: three independent tasks read alpha from facts.txt, read beta from facts.txt, and run node --test facts.test.js. A fourth review task consumes their daemon-supplied dependency outputs and reports the sum and test verdict. Return substantive evidence in each declared report output. Keep this verification minimal.",
+    cwd: root, mode: direct ? "direct" : "orchestrated", role: direct ? "reviewer" : undefined, pin: true, requestKey: `public-entry-${Date.now()}`, name: "Natural request release gate",
+    objective: direct ? "Read facts.txt and report alpha, beta, and their sum in Korean. Do not modify files, run tests, or create additional tasks." : "Create exactly four tasks: three independent tasks read alpha from facts.txt, read beta from facts.txt, and run node --test facts.test.js. A fourth review task consumes their daemon-supplied dependency outputs and reports the sum and test verdict. Return substantive evidence in each declared report output. Keep this verification minimal.",
     constraints: ["No project edits, no installations, no external network, no additional Runs. Shared workspace; mutatesWorkspace=false. Test task uses local-runtime with process-execution and temporary-filesystem-write. Other tasks use none. Use shell and filesystem tools. Do not implement fixes, request another Start, or create follow-up tasks."],
-    acceptanceCriteria: ["All four tasks complete with actual command and upstream evidence; sum is 18 and test passes."],
+    acceptanceCriteria: [direct ? "Report alpha=7, beta=11, sum=18 from facts.txt without editing files." : "All four tasks complete with actual command and upstream evidence; sum is 18 and test passes."],
   } } });
   runId = accepted.structuredContent?.runId;
   assert.ok(runId, JSON.stringify(accepted));
@@ -55,10 +56,16 @@ try {
   const tasks = server.registry.listTasks({ runId, limit: 20 });
   console.log(JSON.stringify({ status: run.status, failure: run.metadata?.failure, tasks: tasks.map(t => ({ id: t.id, status: t.status, failure: t.metadata?.failure, verdict: t.metadata?.completionVerdict })) }));
   assert.equal(run.status, "completed");
-  assert.equal(tasks.length, 4);
+  assert.equal(tasks.length, direct ? 1 : 4);
   assert.ok(tasks.every(t => ["completed", "completed_with_warnings"].includes(t.status) && t.agentId && t.turnId));
   assert.equal(git("status", "--porcelain"), "");
-  assert.ok(tasks.some(t => t.dependencies.length === 3));
+  if (direct) {
+    assert.equal(run.metadata.planningMethod, "deterministic_direct");
+    assert.equal(tasks[0].attempt, 1);
+    assert.equal(tasks[0].claimToken, null);
+    const status = await server.handleRequest({ method: "tools/call", params: { name: "get_work_status", arguments: { runId } } });
+    assert.equal(status.structuredContent.works[0].pinning.hostAction.arguments.threadId, tasks[0].agentId);
+  } else assert.ok(tasks.some(t => t.dependencies.length === 3));
   await server.close();
   const reopened = new ControlRegistry({ path: registryPath });
   assert.equal(reopened.getRun(runId).status, "completed");

@@ -1308,6 +1308,34 @@ test("control dispatch persists one canonical product-contract failure before cr
   await server.close();
 });
 
+test("direct control request crosses planning without calling AI planner and executes exactly once", async () => {
+  let executions=0;
+  const id='01a070b9-4fce-7402-9299-bd5f88ebc539';
+  const server=fakeServer({connect:async()=>{},listAgents:async()=>({agents:[],nextCursor:null}),
+    spawnAgent:async()=>({id,cwd:'/repo',status:'idle',provider:'codex'}),nameAgent:async()=>{},
+    runTask:async(_id,_prompt,options={})=>{executions++;options.onStarted?.({turnId:'direct-turn'});return {output:'검토 완료',turnId:'direct-turn',turn:{status:'completed'}};}},
+    {planner:{plan:async()=>{throw new Error('Direct work must not invoke planner');}},schedulerConcurrency:1,schedulerIntervalMs:5});
+  try {
+    const request={objective:'읽기 전용 검토. Do not modify files or run tests. 파일 수정 금지.',cwd:'/repo',mode:'direct',pin:true,requestKey:'direct-entry'};
+    const response=await server.handleRequest({method:'tools/call',params:{name:'dispatch_control_request',arguments:request}});
+    const runId=response.structuredContent.runId;
+    assert.equal(response.structuredContent.status,'accepted');
+    const run=await waitUntil(()=>{const r=server.registry.getRun(runId);return ['completed','failed'].includes(r.status)&&r;});
+    assert.equal(run.status,'completed',run.metadata.failure?.cause);
+    assert.equal(run.metadata.planningMethod,'deterministic_direct');
+    const tasks=server.registry.listTasks({runId});
+    assert.equal(tasks.length,1);assert.equal(tasks[0].attempt,1);assert.equal(tasks[0].claimToken,null);
+    assert.equal(tasks[0].metadata.executionContract.taskKind,'analysis');
+    assert.equal(tasks[0].metadata.executionContract.mutatesWorkspace,false);
+    assert.deepEqual(tasks[0].metadata.executionContract.outputs,['report']);
+    assert.equal(executions,1);
+    const status=await server.handleRequest({method:'tools/call',params:{name:'get_work_status',arguments:{runId}}});
+    assert.equal(status.structuredContent.works[0].pinning.hostAction.arguments.threadId,id);
+    const duplicate=await server.handleRequest({method:'tools/call',params:{name:'dispatch_control_request',arguments:request}});
+    assert.equal(duplicate.structuredContent.runId,runId);assert.equal(executions,1);
+  } finally {await server.close();}
+});
+
 test("dispatch_control_request returns before planning and automatically starts after atomic preparation", async () => {
   let releasePlan;
   const planning = new Promise((resolve) => { releasePlan = resolve; });
