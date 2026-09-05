@@ -926,6 +926,13 @@ const TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
+    name: "show_work_progress",
+    title: "Show compact work progress",
+    description: "Prepare a read-only, run-scoped live progress panel. Use the returned open_in_codex action to attach it beside the representative task when the user requests a work panel. This does not open UI by itself and never starts a worker or refresh turn. The browser panel supports identifier copying, not direct native task navigation.",
+    inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: "show_agent_dashboard",
     title: "Show the Control Plane work navigator",
     description: "Render the interactive Run list, orchestration structure, and Codex thread navigation inside the current conversation. Use the local web fallback only when the host cannot render MCP Apps UI or the user explicitly requests a web page.",
@@ -1593,6 +1600,16 @@ export class McpControlServer {
         if (args.runId && (!run || (args.cwd && run.cwd !== args.cwd))) throw new Error("Run not found in project");
         const runs = run ? [run] : this.registry.listRuns({ cwd: args.cwd, limit: Math.min(20, Math.max(1, args.limit ?? 5)) });
         result = { works: runs.map(item => workStatus(this.registry, item)) };
+      } else if (name === "show_work_progress") {
+        const run = this.registry.getRun(args.runId);
+        if (!run) throw new Error("Work not found");
+        const work = workStatus(this.registry, run);
+        if (!work.master?.threadId) throw new Error("대표 작업을 준비 중입니다. 생성된 뒤 패널을 열어주세요.");
+        const dashboard = await this.#ensureDashboardServer();
+        const panelUrl = dashboard.progressUrl(run.id);
+        result = { work, panelUrl, opened: false, hostAction: {
+          tool: "open_in_codex", arguments: { threadId: work.master.threadId, placement: "right", target: { type: "browser", url: panelUrl } },
+        } };
       } else if (name === "show_agent_dashboard") {
         const hostRequesterThreadId = context.hostOrigin?.threadId ?? null;
         const dashboardRequesterThreadId = this.#assertDashboardRequester(

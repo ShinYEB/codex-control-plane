@@ -21,6 +21,16 @@ success. Message delivery or OS URL acceptance is not navigation confirmation.
 
 ## User language
 
+When the user requests a compact task-side progress panel (or has opted into it),
+call `show_work_progress` for the known work, then invoke the available native
+`open_in_codex` tool with the returned hostAction arguments unchanged. This is a
+read-only side panel beside the representative task, not content inserted into
+its chat body. The returned URL alone does not mean it opened; report queued
+placement honestly. Do not open the detailed dashboard instead. The panel
+refreshes without model turns; never prompt workers to update it. After daemon
+restart or link expiry, obtain a fresh panel URL. Its identifier-copy buttons
+are not native navigation; use the host navigation tool for actual selection.
+
 Users make ordinary requests; never ask them to choose an execution mode or learn
 the internal hierarchy. In normal replies, do not expose master, slave, node,
 Run, Orchestrator, Control Plane, Data Plane, daemon, role names or raw status codes.

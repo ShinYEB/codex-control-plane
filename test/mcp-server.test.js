@@ -92,6 +92,7 @@ test("MCP initialize advertises tools and safety instructions", async () => {
     "get_work_status",
     "get_dashboard_state",
     "get_dashboard_detail",
+    "show_work_progress",
     "show_agent_dashboard",
   ]);
 });

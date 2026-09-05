@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { workPanelSnapshot } from "./work-panel.js";
+
+const WORK_PANEL_HTML = readFileSync(new URL("../ui/work-progress.html", import.meta.url), "utf8");
 
 import { buildDashboardDelta, buildDashboardSnapshot, getDashboardDetail } from "./dashboard-model.js";
 
@@ -49,6 +53,7 @@ export class DashboardServer {
     this.startPromise = null;
     this.server = null;
     this.connections = new Set();
+    this.progressViews = new Map();
   }
 
   async start() {
@@ -103,6 +108,7 @@ export class DashboardServer {
   }
 
   async close() {
+    this.progressViews.clear();
     clearInterval(this.leaseTimer);
     this.leaseTimer = null;
     for (const response of this.connections) response.end();
@@ -117,6 +123,22 @@ export class DashboardServer {
 
   #authorized(url) {
     return url.searchParams.get("token") === this.token;
+  }
+
+  progressUrl(runId) {
+    if (!this.registry.getRun(runId)) throw new Error("Work not found");
+    const base = this.url();
+    if (!base) throw new Error("Work panel server is not running");
+    for (const [token, view] of this.progressViews) if (view.expiresAt <= Date.now()) this.progressViews.delete(token);
+    let entry = [...this.progressViews].find(([, view]) => view.runId === runId);
+    if (!entry) {
+      if (this.progressViews.size >= 1000) throw new Error("Too many work panels");
+      entry = [randomBytes(24).toString("hex"), { runId, expiresAt: Date.now() + 24 * 60 * 60_000 }];
+      this.progressViews.set(...entry);
+    }
+    const url = new URL("/progress", base);
+    url.searchParams.set("viewToken", entry[0]);
+    return url.toString();
   }
 
   #ownsLease() {
@@ -144,6 +166,21 @@ export class DashboardServer {
     if (!this.#ownsLease()) {
       sendJson(response, 503, { error: "Dashboard ownership lease was lost; reconnect to the active Control Plane daemon" });
       void this.close();
+      return;
+    }
+    // Run-bound view tokens never authorize the full dashboard or mutations.
+    if (["/progress", "/api/progress"].includes(url.pathname)) {
+      const view = this.progressViews.get(url.searchParams.get("viewToken"));
+      if (!view || view.expiresAt <= Date.now()) return sendJson(response, 403, { error: "현황 패널 연결이 만료됐습니다. 패널을 다시 열어주세요." });
+      if (request.method !== "GET") return sendJson(response, 405, { error: "Read-only work panel" });
+      const snapshot = workPanelSnapshot(this.registry, view.runId);
+      if (!snapshot) return sendJson(response, 404, { error: "작업을 찾을 수 없습니다." });
+      if (url.pathname === "/api/progress") return sendJson(response, 200, snapshot);
+      response.writeHead(200, {
+        "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "referrer-policy": "no-referrer",
+        "content-security-policy": "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'",
+      });
+      response.end(WORK_PANEL_HTML);
       return;
     }
     if (!this.#authorized(url)) {

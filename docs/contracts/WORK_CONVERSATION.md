@@ -25,7 +25,11 @@ The user-facing work thread is an execution record, not a protocol console.
 
 `observedAt` records when the snapshot was read, not worker liveness. `lastUpdatedAt` is the latest stored Run/Task update, not proof that a command is making progress. Transport freshness and execution health must not be conflated.
 
-This projection does not insert or refresh content inside an existing work conversation. The currently integrated MCP UI is associated with the calling tool result; an automatic cross-conversation inline surface has not been verified. Do not describe status projection alone as a live embedded work monitor, and do not start extra model turns merely to refresh a counter. A task-side panel is a different presentation requiring an explicit product choice.
+This projection does not insert or refresh content inside an existing work conversation. The currently integrated MCP UI is associated with the calling tool result; an automatic cross-conversation inline surface has not been verified. Do not describe status projection alone as a live embedded work monitor, and do not start extra model turns merely to refresh a counter.
+
+On request or user opt-in, `show_work_progress` prepares a compact read-only panel and returns an `open_in_codex` host action targeting the representative task's right panel. URL creation is not UI-opening confirmation; a queued host action remains queued until the task is shown. The panel refreshes every five seconds while visible, pauses when hidden, and marks stale data explicitly on connection failure. Display refresh time and stored work-update time are separate.
+
+The panel token is limited to one Run, expires after 24 hours, and cannot access detailed snapshots or mutation routes. Daemon restart requires reopening with a fresh URL. No worker turn, retry, or execution is triggered by panel reads. Browser buttons copy task identifiers only; native task navigation remains a host-tool operation. The detailed dashboard remains explicit opt-in.
 
 ## Verification gates
 
